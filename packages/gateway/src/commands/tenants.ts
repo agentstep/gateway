@@ -62,6 +62,20 @@ export function registerTenantCommands(parent: Command): void {
     });
 
   tenants
+    .command("rename <id> <name>")
+    .description("Rename a tenant. The id stays the same; name is display-only.")
+    .action(async (id: string, name: string) => {
+      const { renameTenant, ensureInitialized } = await import("@agentstep/agent-sdk");
+      await ensureInitialized();
+      const ok = renameTenant(id, name);
+      if (ok) console.log(`Renamed ${id} → "${name}".`);
+      else {
+        console.error(`Could not rename ${id} (not found).`);
+        process.exit(1);
+      }
+    });
+
+  tenants
     .command("migrate-legacy")
     .description(
       "Interactive: assign all null-tenant rows (agents/envs/vaults/sessions) to a " +

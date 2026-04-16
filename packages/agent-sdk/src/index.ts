@@ -117,6 +117,10 @@ export {
   type VerifyResult,
 } from "./webhooks/signing";
 
+// Audit log (v0.5)
+export { recordAudit, listAudit } from "./db/audit";
+export type { AuditLogEntry, AuditOutcome } from "./types";
+
 // OpenAPI
 export { buildOpenApiDocument } from "./openapi/spec";
 
