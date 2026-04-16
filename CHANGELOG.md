@@ -4,6 +4,51 @@ All notable changes to AgentStep Gateway are documented here. Dates are UTC.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project uses [SemVer](https://semver.org/).
 
+## [0.4.0] — 2026-04-16
+
+### Added
+
+- **Virtual keys** — `POST/GET/PATCH/DELETE /v1/api-keys` admin API plus
+  full management UI on `/api-keys`. Per-key scope (`{agents, environments,
+  vaults}` allow-lists with `"*"` sentinel), per-key budget ceiling,
+  per-key RPM rate limit. Legacy single-key installs keep working because
+  `["*"]` permissions hydrate as `{admin: true, scope: null}`.
+- **Per-key cost attribution** — sessions capture `api_key_id` from the
+  authenticating key. `/v1/metrics?group_by=api_key` groups costs per key;
+  legacy sessions bucket under `__unattributed__`. `/v1/api-keys/:id/activity`
+  returns recent sessions plus lifetime totals.
+- **Time-series metrics** — `?time_bucket=hour|day|week` alongside
+  `group_by=api_key` returns one series per key, top-10 keys tracked
+  individually, remainder collapses into `__other__`. New recharts
+  `LineChart` on the ApiKeys page.
+- **Session fallback** — `agents.fallback_json` defines an array of
+  `{agent_id, environment_id}` tuples tried on session-creation failure.
+  Max 3 hops, cycle-detected. Triggers on env-not-ready, Anthropic
+  upstream 5xx/429, and anything classifiable as retryable; does not
+  fire on config/billing/scope errors.
+- **Upstream-key pool** — per-provider credential pool with LRU selection
+  and 3-strike auto-disable. Admin API at `/v1/upstream-keys`. Anthropic
+  only in v0.4; OpenAI/Gemini follow in 0.5.
+- `tenant_id TEXT` column reserved on `api_keys` (no reads in v0.4 —
+  forward-compat hook for v0.5 full tenant isolation).
+
+### Changed
+
+- `AuthContext` now carries the full `{admin, scope}` permissions object,
+  plus `budgetUsd`, `rateLimitRpm`, `spentUsd`, `tenantId`. Handlers that
+  ignored auth before are source-compatible.
+- `bumpSessionStats` is now transactional: session counters and the
+  owning key's `spent_usd` update in a single DB transaction, preventing
+  crash-induced under-reporting.
+- Three scattered `resolveAnthropicKey` call sites (SSE tee, session
+  creation, proxy forward) consolidated into a single helper at
+  `providers/upstream-keys.ts`.
+
+### Tests
+
+518 → 560 passing. New test files: `test/api-keys-handlers.test.ts`
+(29 tests) and `test/upstream-keys.test.ts` (13 tests).
+
 ## [0.3.8] — 2026-04-16
 
 ### Fixed / Changed
