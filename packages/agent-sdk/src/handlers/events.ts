@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { routeWrap, jsonOk } from "../http";
+import { getDb } from "../db/client";
 import { getSession, getSessionRow, setOutcomeCriteria } from "../db/sessions";
 import { listEvents, rowToManagedEvent } from "../db/events";
 import { appendEvent } from "../sessions/bus";
@@ -14,6 +15,16 @@ import { forwardToAnthropic } from "../proxy/forward";
 import { badRequest, notFound } from "../errors";
 import { getAgent } from "../db/agents";
 import { resolveAnthropicKey as resolveAnthropicKeyShared, reportUpstreamFailure, reportUpstreamSuccess } from "../providers/upstream-keys";
+import { assertResourceTenant } from "../auth/scope";
+import type { AuthContext } from "../types";
+
+function assertSessionTenant(auth: AuthContext, sessionId: string): void {
+  const row = getDb()
+    .prepare(`SELECT tenant_id FROM sessions WHERE id = ?`)
+    .get(sessionId) as { tenant_id: string | null } | undefined;
+  if (!row) throw notFound(`session ${sessionId} not found`);
+  assertResourceTenant(auth, row.tenant_id, `session ${sessionId} not found`);
+}
 
 /**
  * Background-stream the remote Anthropic session and tee events into the
@@ -149,7 +160,8 @@ const BatchSchema = z.object({
 });
 
 export function handlePostEvents(request: Request, sessionId: string): Promise<Response> {
-  return routeWrap(request, async () => {
+  return routeWrap(request, async ({ auth }) => {
+    assertSessionTenant(auth, sessionId);
     if (isProxied(sessionId)) {
       const remoteId = resolveRemoteSessionId(sessionId);
       const localSession = getSession(sessionId);
@@ -349,7 +361,8 @@ export function handlePostEvents(request: Request, sessionId: string): Promise<R
 }
 
 export function handleListEvents(request: Request, sessionId: string): Promise<Response> {
-  return routeWrap(request, async () => {
+  return routeWrap(request, async ({ auth }) => {
+    assertSessionTenant(auth, sessionId);
     if (isProxied(sessionId)) {
       // Sync-and-proxy sessions have local events — serve from local DB
       const localSession = getSession(sessionId);

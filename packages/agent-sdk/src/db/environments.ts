@@ -22,20 +22,23 @@ export function createEnvironment(input: {
   config: EnvironmentConfig;
   description?: string | null;
   metadata?: Record<string, string>;
+  /** v0.5: tenant ownership. Null = legacy/global (pre-migration). */
+  tenant_id?: string | null;
 }): Environment {
   const db = getDb();
   const id = newId("env");
   const now = nowMs();
 
   db.prepare(
-    `INSERT INTO environments (id, name, description, config_json, metadata_json, state, created_at)
-     VALUES (?, ?, ?, ?, ?, 'preparing', ?)`,
+    `INSERT INTO environments (id, name, description, config_json, metadata_json, tenant_id, state, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, 'preparing', ?)`,
   ).run(
     id,
     input.name,
     input.description ?? null,
     JSON.stringify(input.config),
     JSON.stringify(input.metadata ?? {}),
+    input.tenant_id ?? null,
     now,
   );
 
@@ -134,6 +137,8 @@ export function listEnvironments(opts: {
   order?: "asc" | "desc";
   includeArchived?: boolean;
   cursor?: string;
+  /** v0.5 tenancy filter. `null` = no filter (global admin). See listAgents. */
+  tenantFilter?: string | null;
 }): Environment[] {
   const db = getDb();
   const limit = Math.min(Math.max(opts.limit ?? 20, 1), 100);
@@ -146,6 +151,10 @@ export function listEnvironments(opts: {
   if (opts.cursor) {
     clauses.push(order === "DESC" ? "id < ?" : "id > ?");
     params.push(opts.cursor);
+  }
+  if (opts.tenantFilter != null) {
+    clauses.push("tenant_id = ?");
+    params.push(opts.tenantFilter);
   }
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
 

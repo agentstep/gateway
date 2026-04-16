@@ -100,8 +100,10 @@ async function createTestEnv(overrides: Record<string, unknown> = {}): Promise<R
   const name = overrides.name as string ?? `env-${Date.now()}-${Math.random()}`;
   const config = overrides.config ?? { type: "cloud", provider: "docker" };
 
+  // Stamp tenant_default so the agent (stamped by the handler) and the env
+  // match when a session is created across them (v0.5).
   db.prepare(
-    `INSERT INTO environments (id, name, config_json, state, created_at) VALUES (?, ?, ?, 'ready', ?)`,
+    `INSERT INTO environments (id, name, config_json, state, tenant_id, created_at) VALUES (?, ?, ?, 'ready', 'tenant_default', ?)`,
   ).run(id, name, JSON.stringify(config), now);
 
   return {

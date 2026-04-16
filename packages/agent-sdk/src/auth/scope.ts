@@ -61,22 +61,25 @@ export function assertResourceTenant(
 
 /**
  * Stamp the tenant_id for a CREATE operation from the caller's auth
- * context. Global admins must pass an explicit tenant_id in the body
- * (caller validates that); tenant admins/users always create in their
- * own tenant.
+ * context. Rules:
  *
- * Returns the tenant id to use, or throws 400 if global admin didn't
- * supply one.
+ *   - Global admin + body.tenant_id given → use it (may pick any tenant).
+ *   - Global admin + no body.tenant_id    → default tenant. Preserves
+ *     the pre-0.5 UX where a legacy `["*"]` seed key transparently
+ *     creates resources without needing to know about tenancy.
+ *   - Tenant admin/user                    → always their own tenant;
+ *     body.tenant_id is ignored (a tenant user can't mint into another
+ *     tenant).
  */
 export function resolveCreateTenant(
   auth: AuthContext,
   bodyTenantId: string | null | undefined,
 ): string {
   if (auth.isGlobalAdmin) {
-    if (!bodyTenantId) {
-      throw badRequest("global admin must specify tenant_id in the request body");
-    }
-    return bodyTenantId;
+    // Default to `tenant_default` (seeded on first boot) when unspecified.
+    // Avoid importing db/tenants here to prevent a circular require —
+    // the id is a plain constant documented in db/tenants.ts.
+    return bodyTenantId ?? "tenant_default";
   }
   // Tenant admin/user — always stamp with their own tenant.
   if (!auth.tenantId) {

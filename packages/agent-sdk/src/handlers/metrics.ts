@@ -28,6 +28,7 @@ import { routeWrap, jsonOk } from "../http";
 import { getDb } from "../db/client";
 import { badRequest } from "../errors";
 import { snapshotApiMetrics } from "../observability/api-metrics";
+import { tenantFilter } from "../auth/scope";
 
 type GroupBy = "agent" | "environment" | "backend" | "hour" | "day" | "api_key" | "none";
 
@@ -148,6 +149,7 @@ function handleKeyTimeSeries(
   from: number,
   to: number,
   bucket: TimeBucket,
+  tenantId: string | null,
 ): Response {
   // Validate combinations — reject the obviously-bad ones with a 400 that
   // names the next-larger bucket instead of silently returning garbage.
@@ -169,6 +171,12 @@ function handleKeyTimeSeries(
 
   const strftime = bucketStrftime(bucket);
 
+  // Tenant scoping — append a clause and extra param when the caller
+  // isn't a global admin. Tenant users only see their own tenant's costs.
+  const tenantClause = tenantId != null ? " AND tenant_id = ?" : "";
+  const tenantClauseJoin = tenantId != null ? " AND s.tenant_id = ?" : "";
+  const tenantArgs: unknown[] = tenantId != null ? [tenantId] : [];
+
   // Pick top-N keys by total cost in the window. Keys outside top-N
   // rewrite to "__other__" before pivot; NULLs rewrite to "__unattributed__".
   const topRows = db
@@ -176,12 +184,12 @@ function handleKeyTimeSeries(
       `SELECT api_key_id AS key, SUM(usage_cost_usd) AS cost
          FROM sessions
         WHERE created_at BETWEEN ? AND ?
-          AND api_key_id IS NOT NULL
+          AND api_key_id IS NOT NULL${tenantClause}
         GROUP BY api_key_id
         ORDER BY cost DESC
         LIMIT ?`,
     )
-    .all(from, to, TOP_N) as Array<{ key: string; cost: number }>;
+    .all(from, to, ...tenantArgs, TOP_N) as Array<{ key: string; cost: number }>;
   const topKeys = new Set(topRows.map(r => r.key));
   const classifyKey = (raw: string | null): string => {
     if (raw == null) return "__unattributed__";
@@ -198,10 +206,10 @@ function handleKeyTimeSeries(
               COALESCE(SUM(s.usage_cost_usd), 0)      AS cost_usd,
               COALESCE(SUM(s.turn_count), 0)          AS turn_count
          FROM sessions s
-        WHERE s.created_at BETWEEN ? AND ?
+        WHERE s.created_at BETWEEN ? AND ?${tenantClauseJoin}
         GROUP BY t, s.api_key_id`,
     )
-    .all(strftime, from, to) as Array<{
+    .all(strftime, from, to, ...tenantArgs) as Array<{
       t: string;
       key: string | null;
       session_count: number;
@@ -219,10 +227,10 @@ function handleKeyTimeSeries(
          FROM events e
          JOIN sessions s ON s.id = e.session_id
         WHERE e.type = 'session.error'
-          AND e.received_at BETWEEN ? AND ?
+          AND e.received_at BETWEEN ? AND ?${tenantClauseJoin}
         GROUP BY t, s.api_key_id`,
     )
-    .all(strftime, from, to) as Array<{
+    .all(strftime, from, to, ...tenantArgs) as Array<{
       t: string;
       key: string | null;
       error_count: number;
@@ -281,13 +289,16 @@ function handleKeyTimeSeries(
     series.set(row.t, p);
   }
 
-  // Load names for the top keys so the chart can label them.
+  // Load names for the top keys so the chart can label them. Also
+  // tenant-scope the api_keys lookup so a tenant user can't resolve
+  // another tenant's key name.
   const keyMeta = new Map<string, string>();
   if (topKeys.size > 0) {
     const placeholders = Array.from(topKeys).map(() => "?").join(",");
+    const tenantWhere = tenantId != null ? " AND tenant_id = ?" : "";
     const rows = db
-      .prepare(`SELECT id, name FROM api_keys WHERE id IN (${placeholders})`)
-      .all(...topKeys) as Array<{ id: string; name: string }>;
+      .prepare(`SELECT id, name FROM api_keys WHERE id IN (${placeholders})${tenantWhere}`)
+      .all(...topKeys, ...tenantArgs) as Array<{ id: string; name: string }>;
     for (const r of rows) keyMeta.set(r.id, r.name);
   }
 
@@ -318,7 +329,7 @@ function handleKeyTimeSeries(
 }
 
 export function handleGetMetrics(request: Request): Promise<Response> {
-  return routeWrap(request, async () => {
+  return routeWrap(request, async ({ auth }) => {
     const url = new URL(request.url);
     const group = parseGroupBy(url.searchParams.get("group_by"));
     const from = Number(url.searchParams.get("from") ?? "0");
@@ -326,6 +337,7 @@ export function handleGetMetrics(request: Request): Promise<Response> {
     const agentId = url.searchParams.get("agent_id");
     const environmentId = url.searchParams.get("environment_id");
     const timeBucket = parseTimeBucket(url.searchParams.get("time_bucket"));
+    const tenantId = tenantFilter(auth);
 
     if (!Number.isFinite(from) || !Number.isFinite(to) || from < 0 || to < 0) {
       throw badRequest("from/to must be non-negative integers (ms since epoch)");
@@ -339,7 +351,7 @@ export function handleGetMetrics(request: Request): Promise<Response> {
     // Time-series fast-path: group_by=api_key + time_bucket returns the
     // series form. Other combos fall through to the existing aggregation.
     if (group === "api_key" && timeBucket) {
-      return handleKeyTimeSeries(db, from, to, timeBucket);
+      return handleKeyTimeSeries(db, from, to, timeBucket, tenantId);
     }
 
     const groupExpr = groupByExpr(group);
@@ -354,6 +366,10 @@ export function handleGetMetrics(request: Request): Promise<Response> {
     if (environmentId) {
       filter += " AND s.environment_id = ?";
       params.push(environmentId);
+    }
+    if (tenantId != null) {
+      filter += " AND s.tenant_id = ?";
+      params.push(tenantId);
     }
 
     interface GroupSql extends Totals {
@@ -395,6 +411,10 @@ export function handleGetMetrics(request: Request): Promise<Response> {
       errorFilter += " AND s.environment_id = ?";
       errorFilterParams.push(environmentId);
     }
+    if (tenantId != null) {
+      errorFilter += " AND s.tenant_id = ?";
+      errorFilterParams.push(tenantId);
+    }
     const errorRows = db
       .prepare(
         `SELECT ${groupExpr} AS key, COUNT(*) AS error_count
@@ -425,10 +445,16 @@ export function handleGetMetrics(request: Request): Promise<Response> {
            AND e.received_at BETWEEN ? AND ?
            ${agentId ? "AND s.agent_id = ?" : ""}
            ${environmentId ? "AND s.environment_id = ?" : ""}
+           ${tenantId != null ? "AND s.tenant_id = ?" : ""}
          GROUP BY json_extract(e.payload_json, '$.stop_reason')`,
       )
       .all(
-        ...[from, to, ...(agentId ? [agentId] : []), ...(environmentId ? [environmentId] : [])],
+        ...[
+          from, to,
+          ...(agentId ? [agentId] : []),
+          ...(environmentId ? [environmentId] : []),
+          ...(tenantId != null ? [tenantId] : []),
+        ],
       ) as Array<{ stop_reason_value: string | null; count: number }>;
 
     const stopReasons: Record<string, number> = {};
@@ -446,11 +472,17 @@ export function handleGetMetrics(request: Request): Promise<Response> {
            AND e.received_at BETWEEN ? AND ?
            ${agentId ? "AND s.agent_id = ?" : ""}
            ${environmentId ? "AND s.environment_id = ?" : ""}
+           ${tenantId != null ? "AND s.tenant_id = ?" : ""}
            AND json_extract(e.payload_json, '$.duration_ms') IS NOT NULL
          ORDER BY d ASC`,
       )
       .all(
-        ...[from, to, ...(agentId ? [agentId] : []), ...(environmentId ? [environmentId] : [])],
+        ...[
+          from, to,
+          ...(agentId ? [agentId] : []),
+          ...(environmentId ? [environmentId] : []),
+          ...(tenantId != null ? [tenantId] : []),
+        ],
       ) as Array<{ d: number }>;
 
     const durations = toolDurationRows.map((r) => r.d).filter((d) => Number.isFinite(d));

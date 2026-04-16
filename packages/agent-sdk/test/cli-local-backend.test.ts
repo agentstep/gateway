@@ -157,7 +157,7 @@ async function createEnv(overrides: Record<string, unknown> = {}): Promise<Recor
   const config = overrides.config ?? { type: "cloud", provider: "sprites" };
 
   db.prepare(
-    `INSERT INTO environments (id, name, config_json, state, created_at) VALUES (?, ?, ?, 'ready', ?)`,
+    `INSERT INTO environments (id, name, config_json, state, tenant_id, created_at) VALUES (?, ?, ?, 'ready', 'tenant_default', ?)`,
   ).run(id, name, JSON.stringify(config), now);
 
   return {

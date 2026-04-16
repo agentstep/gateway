@@ -61,6 +61,11 @@ import {
   handleGetUpstreamKey,
   handlePatchUpstreamKey,
   handleDeleteUpstreamKey,
+  handleCreateTenant,
+  handleListTenants,
+  handleGetTenant,
+  handlePatchTenant,
+  handleArchiveTenant,
 } from "@agentstep/agent-sdk/handlers";
 
 /**
@@ -280,6 +285,22 @@ export function buildApp() {
   app.delete("/v1/upstream-keys/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
     await sendWebResponse(reply, await handleDeleteUpstreamKey(toWebRequest(req), id));
+  });
+
+  // ── Tenants (global-admin only) ─────────────────────────────────────
+  route(app, "post", "/v1/tenants", handleCreateTenant);
+  route(app, "get", "/v1/tenants", handleListTenants);
+  app.get("/v1/tenants/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    await sendWebResponse(reply, await handleGetTenant(toWebRequest(req), id));
+  });
+  app.patch("/v1/tenants/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    await sendWebResponse(reply, await handlePatchTenant(toWebRequest(req), id));
+  });
+  app.delete("/v1/tenants/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    await sendWebResponse(reply, await handleArchiveTenant(toWebRequest(req), id));
   });
 
   return app;

@@ -12,8 +12,8 @@
  */
 import { z } from "zod";
 import { routeWrap, jsonOk } from "../http";
-import { badRequest, notFound } from "../errors";
-import { requireAdmin } from "../auth/scope";
+import { badRequest, forbidden, notFound } from "../errors";
+import { assertResourceTenant, requireAdmin, resolveCreateTenant, tenantFilter } from "../auth/scope";
 import {
   createApiKey,
   listApiKeys,
@@ -24,7 +24,7 @@ import {
 } from "../db/api_keys";
 import { listSessionsByApiKey } from "../db/sessions";
 import { getDb } from "../db/client";
-import type { KeyPermissions } from "../types";
+import type { AuthContext, KeyPermissions } from "../types";
 
 const ScopeSchema = z.object({
   agents: z.array(z.string()),
@@ -58,6 +58,41 @@ function toView(row: ReturnType<typeof listApiKeys>[number]): {
   return row;
 }
 
+/**
+ * Load an API key row and enforce caller tenancy. Throws 404 on cross-tenant.
+ * Returns the row only when the caller may see it.
+ */
+function loadKeyForCaller(auth: AuthContext, id: string) {
+  const row = getApiKeyById(id);
+  if (!row || row.revoked_at != null) throw notFound(`api key ${id} not found`);
+  assertResourceTenant(auth, row.tenant_id, `api key ${id} not found`);
+  return row;
+}
+
+/**
+ * Prevent tenant admins from creating admin keys with the admin bit
+ * outside their own tenant — and prevent any admin from minting a
+ * "global admin" (tenant=null + admin=true) unless they already are one.
+ */
+function validateKeyCreation(auth: AuthContext, permissions: KeyPermissions, tenantId: string): void {
+  // A tenant user can only mint admin keys inside their own tenant.
+  // resolveCreateTenant already pins tenantId to auth.tenantId for
+  // non-global-admins, so the admin bit is fine there. The only case to
+  // block is global-admin minting an admin key with a null tenant but
+  // claiming to be scoped — which can't happen because createTenant
+  // requires a non-null id. We still defensively refuse admin+null.
+  if (permissions.admin && !tenantId) {
+    throw badRequest("admin keys must be scoped to a tenant");
+  }
+  // Only global admins may elevate another key to global admin. We
+  // define global-admin as (tenant_id=null && admin=true). Since we
+  // require tenantId above, this branch is unreachable in practice but
+  // documents the intent.
+  if (!auth.isGlobalAdmin && permissions.admin && tenantId !== auth.tenantId) {
+    throw forbidden("cannot create admin keys outside your tenant");
+  }
+}
+
 export function handleCreateApiKey(request: Request): Promise<Response> {
   return routeWrap(request, async ({ auth, request: req }) => {
     requireAdmin(auth);
@@ -75,10 +110,14 @@ export function handleCreateApiKey(request: Request): Promise<Response> {
       scope: null,
     };
 
+    // Global admins must name a tenant; tenant admins get their own.
+    const tenantId = resolveCreateTenant(auth, parsed.data.tenant_id);
+    validateKeyCreation(auth, permissions, tenantId);
+
     const { key, id } = createApiKey({
       name: parsed.data.name,
       permissions,
-      tenantId: parsed.data.tenant_id ?? null,
+      tenantId,
     });
 
     // `key` is returned exactly once. The caller must store it.
@@ -87,7 +126,7 @@ export function handleCreateApiKey(request: Request): Promise<Response> {
       name: parsed.data.name,
       key,
       permissions,
-      tenant_id: parsed.data.tenant_id ?? null,
+      tenant_id: tenantId,
     }, 201);
   });
 }
@@ -95,15 +134,14 @@ export function handleCreateApiKey(request: Request): Promise<Response> {
 export function handleListApiKeys(request: Request): Promise<Response> {
   return routeWrap(request, async ({ auth }) => {
     requireAdmin(auth);
-    return jsonOk({ data: listApiKeys().map(toView) });
+    return jsonOk({ data: listApiKeys({ tenantFilter: tenantFilter(auth) }).map(toView) });
   });
 }
 
 export function handleGetApiKey(request: Request, id: string): Promise<Response> {
   return routeWrap(request, async ({ auth }) => {
     requireAdmin(auth);
-    const row = getApiKeyById(id);
-    if (!row || row.revoked_at != null) throw notFound(`api key ${id} not found`);
+    const row = loadKeyForCaller(auth, id);
     return jsonOk({
       id: row.id,
       name: row.name,
@@ -118,6 +156,7 @@ export function handleGetApiKey(request: Request, id: string): Promise<Response>
 export function handlePatchApiKey(request: Request, id: string): Promise<Response> {
   return routeWrap(request, async ({ auth, request: req }) => {
     requireAdmin(auth);
+    loadKeyForCaller(auth, id); // tenant guard
 
     const body = await req.json().catch(() => null);
     const parsed = PatchBody.safeParse(body);
@@ -144,6 +183,7 @@ export function handlePatchApiKey(request: Request, id: string): Promise<Respons
 export function handleRevokeApiKey(request: Request, id: string): Promise<Response> {
   return routeWrap(request, async ({ auth }) => {
     requireAdmin(auth);
+    loadKeyForCaller(auth, id); // tenant guard
     // Don't let a key revoke itself — accidentally locking the only admin
     // out of the gateway is a bad UX even if recoverable via SEED_API_KEY.
     if (auth.keyId === id) {
@@ -168,8 +208,7 @@ export function handleGetApiKeyActivity(
 ): Promise<Response> {
   return routeWrap(request, async ({ auth }) => {
     requireAdmin(auth);
-    const row = getApiKeyById(id);
-    if (!row) throw notFound(`api key ${id} not found`);
+    const row = loadKeyForCaller(auth, id);
 
     const sessions = listSessionsByApiKey(id, { limit: 50 });
 

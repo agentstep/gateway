@@ -12,7 +12,16 @@ import { getDb } from "../db/client";
 import { newId } from "../util/ids";
 import { nowMs, toIso } from "../util/clock";
 import { badRequest, notFound } from "../errors";
-import type { SessionResource } from "../types";
+import { assertResourceTenant } from "../auth/scope";
+import type { AuthContext, SessionResource } from "../types";
+
+function assertSessionTenant(auth: AuthContext, sessionId: string): void {
+  const row = getDb()
+    .prepare(`SELECT tenant_id FROM sessions WHERE id = ?`)
+    .get(sessionId) as { tenant_id: string | null } | undefined;
+  if (!row) throw notFound(`session not found: ${sessionId}`);
+  assertResourceTenant(auth, row.tenant_id, `session not found: ${sessionId}`);
+}
 
 const AddResourceSchema = z.object({
   type: z.enum(["uri", "text", "file", "github_repository"]),
@@ -26,7 +35,8 @@ const AddResourceSchema = z.object({
 });
 
 export function handleAddResource(request: Request, sessionId: string): Promise<Response> {
-  return routeWrap(request, async () => {
+  return routeWrap(request, async ({ auth }) => {
+    assertSessionTenant(auth, sessionId);
     const session = getSession(sessionId);
     if (!session) throw notFound(`session not found: ${sessionId}`);
 
@@ -53,7 +63,8 @@ export function handleAddResource(request: Request, sessionId: string): Promise<
 }
 
 export function handleListResources(request: Request, sessionId: string): Promise<Response> {
-  return routeWrap(request, async () => {
+  return routeWrap(request, async ({ auth }) => {
+    assertSessionTenant(auth, sessionId);
     const session = getSession(sessionId);
     if (!session) throw notFound(`session not found: ${sessionId}`);
 
@@ -68,7 +79,8 @@ export function handleListResources(request: Request, sessionId: string): Promis
 }
 
 export function handleDeleteResource(request: Request, sessionId: string, resourceIndex: string): Promise<Response> {
-  return routeWrap(request, async () => {
+  return routeWrap(request, async ({ auth }) => {
+    assertSessionTenant(auth, sessionId);
     const session = getSession(sessionId);
     if (!session) throw notFound(`session not found: ${sessionId}`);
 

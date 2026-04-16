@@ -49,6 +49,8 @@ export function createAgent(input: {
   callable_agents?: Array<{ type: "agent"; id: string; version?: number }>;
   skills?: AgentSkill[];
   model_config?: ModelConfig;
+  /** v0.5: tenant ownership. Null = legacy/global (pre-migration). */
+  tenant_id?: string | null;
 }): Agent {
   const db = getDb();
   const id = newId("agent");
@@ -56,9 +58,9 @@ export function createAgent(input: {
 
   const tx = db.transaction(() => {
     db.prepare(
-      `INSERT INTO agents (id, current_version, name, created_at, updated_at)
-       VALUES (?, 1, ?, ?, ?)`,
-    ).run(id, input.name, now, now);
+      `INSERT INTO agents (id, current_version, name, tenant_id, created_at, updated_at)
+       VALUES (?, 1, ?, ?, ?, ?)`,
+    ).run(id, input.name, input.tenant_id ?? null, now, now);
 
     db.prepare(
       `INSERT INTO agent_versions
@@ -173,6 +175,13 @@ export function listAgents(opts: {
   order?: "asc" | "desc";
   includeArchived?: boolean;
   cursor?: string; // agent id cursor
+  /**
+   * v0.5 tenancy filter:
+   * - `null` (global admin) → no filter
+   * - `string` (tenant id) → WHERE tenant_id = ?
+   * - `undefined` → also no filter (pre-v0.5 callers; default behavior preserved)
+   */
+  tenantFilter?: string | null;
 }): Agent[] {
   const db = getDb();
   const limit = Math.min(Math.max(opts.limit ?? 20, 1), 100);
@@ -185,6 +194,10 @@ export function listAgents(opts: {
   if (opts.cursor) {
     clauses.push(order === "DESC" ? "id < ?" : "id > ?");
     params.push(opts.cursor);
+  }
+  if (opts.tenantFilter != null) {
+    clauses.push("tenant_id = ?");
+    params.push(opts.tenantFilter);
   }
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
 

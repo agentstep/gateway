@@ -50,6 +50,8 @@ export function createSession(input: {
   thread_depth?: number;
   /** v0.4: the API key that authenticated this session creation, for cost attribution. */
   api_key_id?: string | null;
+  /** v0.5: tenant ownership. Null = legacy/global (pre-migration). */
+  tenant_id?: string | null;
 }): Session {
   const db = getDb();
   const id = newId("sess");
@@ -60,8 +62,8 @@ export function createSession(input: {
        id, agent_id, agent_version, environment_id, status,
        title, metadata_json, max_budget_usd, resources_json,
        vault_ids_json, parent_session_id, thread_depth,
-       api_key_id, created_at, updated_at
-     ) VALUES (?, ?, ?, ?, 'idle', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       api_key_id, tenant_id, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, 'idle', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     input.agent_id,
@@ -75,6 +77,7 @@ export function createSession(input: {
     input.parent_session_id ?? null,
     input.thread_depth ?? 0,
     input.api_key_id ?? null,
+    input.tenant_id ?? null,
     now,
     now,
   );
@@ -264,6 +267,8 @@ export function listSessions(opts: {
   createdGte?: number;
   createdLt?: number;
   createdLte?: number;
+  /** v0.5 tenancy filter. `null` = no filter (global admin). */
+  tenantFilter?: string | null;
 }): Session[] {
   const db = getDb();
   const limit = Math.min(Math.max(opts.limit ?? 20, 1), 100);
@@ -273,6 +278,10 @@ export function listSessions(opts: {
   const clauses: string[] = [];
   const params: unknown[] = [];
 
+  if (opts.tenantFilter != null) {
+    clauses.push("tenant_id = ?");
+    params.push(opts.tenantFilter);
+  }
   if (opts.agent_id) {
     clauses.push("agent_id = ?");
     params.push(opts.agent_id);

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { routeWrap, jsonOk } from "../http";
+import { getDb } from "../db/client";
 import {
   createSession,
   getSession,
@@ -18,10 +19,40 @@ import { isProxied, markProxied, unmarkProxied } from "../db/proxy";
 import { forwardToAnthropic } from "../proxy/forward";
 import { syncAndCreateSession } from "../sync/anthropic";
 import { upsertSync, resolveRemoteSessionId } from "../db/sync";
-import { getConfig } from "../config";
 import { badRequest, notFound } from "../errors";
 import { nowMs } from "../util/clock";
-import type { SessionStatus } from "../types";
+import { assertResourceTenant, tenantFilter } from "../auth/scope";
+import type { AuthContext, SessionStatus } from "../types";
+
+function getAgentTenantId(id: string): string | null | undefined {
+  const row = getDb()
+    .prepare(`SELECT tenant_id FROM agents WHERE id = ?`)
+    .get(id) as { tenant_id: string | null } | undefined;
+  return row?.tenant_id;
+}
+
+function getEnvironmentTenantId(id: string): string | null | undefined {
+  const row = getDb()
+    .prepare(`SELECT tenant_id FROM environments WHERE id = ?`)
+    .get(id) as { tenant_id: string | null } | undefined;
+  return row?.tenant_id;
+}
+
+function getSessionTenantId(id: string): string | null | undefined {
+  const row = getDb()
+    .prepare(`SELECT tenant_id FROM sessions WHERE id = ?`)
+    .get(id) as { tenant_id: string | null } | undefined;
+  return row?.tenant_id;
+}
+
+function loadSessionForCaller(auth: AuthContext, id: string) {
+  const tenantId = getSessionTenantId(id);
+  if (tenantId === undefined) throw notFound(`session ${id} not found`);
+  assertResourceTenant(auth, tenantId, `session ${id} not found`);
+  const session = getSession(id);
+  if (!session) throw notFound(`session ${id} not found`);
+  return session;
+}
 
 const ALLOWED_STATUSES: SessionStatus[] = ["idle", "running", "rescheduling", "terminated"];
 
@@ -142,7 +173,6 @@ export function handleCreateSession(request: Request): Promise<Response> {
 
     // Import helpers once up-front.
     const { checkResourceScope } = await import("../auth/scope");
-    const { getVault } = await import("../db/vaults");
 
     /**
      * Attempt to create a session for (agentId, envId, agentVersion?).
@@ -156,6 +186,24 @@ export function handleCreateSession(request: Request): Promise<Response> {
       envId: string,
       agentVersion: number | undefined,
     ): Promise<Response> {
+      // Tenant pre-check — throws 404 on cross-tenant to prevent id-probing
+      // and keeps the fallback chain from spanning tenants even if an
+      // operator mistakenly added a cross-tenant fallback tuple.
+      const agentTenantId = getAgentTenantId(agentId);
+      if (agentTenantId === undefined) throw notFound(`agent not found: ${agentId}`);
+      assertResourceTenant(auth, agentTenantId, `agent not found: ${agentId}`);
+
+      const envTenantId = getEnvironmentTenantId(envId);
+      if (envTenantId === undefined) throw notFound(`environment not found: ${envId}`);
+      assertResourceTenant(auth, envTenantId, `environment not found: ${envId}`);
+
+      // Agent and environment must share a tenant — sessions live in one tenant.
+      if (agentTenantId !== envTenantId) {
+        throw badRequest(
+          `agent and environment belong to different tenants (${agentTenantId} vs ${envTenantId})`,
+        );
+      }
+
       const agent = getAgent(agentId, agentVersion);
       if (!agent) throw notFound(`agent not found: ${agentId}`);
 
@@ -178,12 +226,20 @@ export function handleCreateSession(request: Request): Promise<Response> {
         );
       }
 
-      // Vault ownership: all vault_ids must belong to this agent
+      // Vault ownership: all vault_ids must belong to this agent AND to
+      // the caller's tenant. The agent check also implies the tenant
+      // check (because we already asserted agentTenantId matches auth),
+      // but we double-check by loading the vault's tenant_id so that
+      // attaching a global-tenant vault from another tenant's agent
+      // fails cleanly.
       if (data.vault_ids?.length) {
         for (const vid of data.vault_ids) {
-          const vault = getVault(vid);
-          if (!vault) throw badRequest(`vault not found: ${vid}`);
-          if (vault.agent_id !== agent.id) {
+          const vaultRow = getDb()
+            .prepare(`SELECT agent_id, tenant_id FROM vaults WHERE id = ?`)
+            .get(vid) as { agent_id: string; tenant_id: string | null } | undefined;
+          if (!vaultRow) throw badRequest(`vault not found: ${vid}`);
+          assertResourceTenant(auth, vaultRow.tenant_id, `vault not found: ${vid}`);
+          if (vaultRow.agent_id !== agent.id) {
             throw badRequest(
               `vault ${vid} belongs to a different agent — vaults are scoped per-agent`,
             );
@@ -222,6 +278,7 @@ export function handleCreateSession(request: Request): Promise<Response> {
           resources: data.resources?.length ? data.resources : null,
           vault_ids: data.vault_ids?.length ? data.vault_ids : null,
           api_key_id: auth.keyId,
+          tenant_id: agentTenantId,
         });
 
         upsertSync(session.id, "session", remoteSessionId);
@@ -246,6 +303,7 @@ export function handleCreateSession(request: Request): Promise<Response> {
         resources: data.resources?.length ? data.resources : null,
         vault_ids: data.vault_ids?.length ? data.vault_ids : null,
         api_key_id: auth.keyId,
+        tenant_id: agentTenantId,
       });
 
       getActor(session.id);
@@ -325,7 +383,7 @@ export function handleCreateSession(request: Request): Promise<Response> {
 }
 
 export function handleListSessions(request: Request): Promise<Response> {
-  return routeWrap(request, async ({ request: req }) => {
+  return routeWrap(request, async ({ auth, request: req }) => {
     const url = new URL(req.url);
     const limit = url.searchParams.get("limit");
     const order = url.searchParams.get("order") as "asc" | "desc" | null;
@@ -359,6 +417,7 @@ export function handleListSessions(request: Request): Promise<Response> {
       createdGte: parseMs(url.searchParams.get("created_at[gte]")),
       createdLt: parseMs(url.searchParams.get("created_at[lt]")),
       createdLte: parseMs(url.searchParams.get("created_at[lte]")),
+      tenantFilter: tenantFilter(auth),
     });
     return jsonOk({
       data,
@@ -368,23 +427,27 @@ export function handleListSessions(request: Request): Promise<Response> {
 }
 
 export function handleGetSession(request: Request, id: string): Promise<Response> {
-  return routeWrap(request, async () => {
+  return routeWrap(request, async ({ auth }) => {
     if (isProxied(id)) {
       // Sync-and-proxy sessions have a local record — return it
       const localSession = getSession(id);
-      if (localSession) return jsonOk(localSession);
+      if (localSession) {
+        // tenant guard still applies to local record
+        const tenantId = getSessionTenantId(id);
+        assertResourceTenant(auth, tenantId ?? null, `session ${id} not found`);
+        return jsonOk(localSession);
+      }
       // Pure proxy: forward to Anthropic
       return forwardToAnthropic(request, `/v1/sessions/${resolveRemoteSessionId(id)}`);
     }
-    const session = getSession(id);
-    if (!session) throw notFound(`session ${id} not found`);
-    return jsonOk(session);
+    return jsonOk(loadSessionForCaller(auth, id));
   });
 }
 
 export function handleUpdateSession(request: Request, id: string): Promise<Response> {
-  return routeWrap(request, async () => {
+  return routeWrap(request, async ({ auth }) => {
     if (isProxied(id)) return forwardToAnthropic(request, `/v1/sessions/${resolveRemoteSessionId(id)}`);
+    loadSessionForCaller(auth, id); // tenant guard
     const body = await request.json().catch(() => null);
     const parsed = UpdateSchema.safeParse(body);
     if (!parsed.success) throw badRequest(parsed.error.message);
@@ -399,14 +462,13 @@ export function handleUpdateSession(request: Request, id: string): Promise<Respo
 }
 
 export function handleDeleteSession(request: Request, id: string): Promise<Response> {
-  return routeWrap(request, async () => {
+  return routeWrap(request, async ({ auth }) => {
     if (isProxied(id)) {
       const res = await forwardToAnthropic(request, `/v1/sessions/${resolveRemoteSessionId(id)}`);
       if (res.ok) unmarkProxied(id);
       return res;
     }
-    const session = getSession(id);
-    if (!session) throw notFound(`session ${id} not found`);
+    loadSessionForCaller(auth, id); // tenant guard
 
     const actor = getActor(id);
     await actor.enqueue(async () => {
@@ -427,14 +489,13 @@ export function handleDeleteSession(request: Request, id: string): Promise<Respo
 }
 
 export function handleArchiveSession(request: Request, id: string): Promise<Response> {
-  return routeWrap(request, async () => {
+  return routeWrap(request, async ({ auth }) => {
     if (isProxied(id)) {
       const res = await forwardToAnthropic(request, `/v1/sessions/${resolveRemoteSessionId(id)}/archive`);
       if (res.ok) unmarkProxied(id);
       return res;
     }
-    const session = getSession(id);
-    if (!session) throw notFound(`session ${id} not found`);
+    loadSessionForCaller(auth, id); // tenant guard
 
     const actor = getActor(id);
     await actor.enqueue(async () => {

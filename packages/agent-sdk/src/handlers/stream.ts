@@ -1,17 +1,27 @@
 import { ensureInitialized } from "../init";
 import { authenticate } from "../auth/middleware";
 import { subscribe } from "../sessions/bus";
+import { getDb } from "../db/client";
 import { getSession } from "../db/sessions";
 import { isProxied } from "../db/proxy";
 import { resolveRemoteSessionId } from "../db/sync";
 import { forwardToAnthropic } from "../proxy/forward";
 import { toResponse, notFound } from "../errors";
+import { assertResourceTenant } from "../auth/scope";
 import type { ManagedEvent } from "../types";
 
 export async function handleSessionStream(request: Request, sessionId: string): Promise<Response> {
   try {
     await ensureInitialized();
-    await authenticate(request);
+    const auth = await authenticate(request);
+
+    // Tenant guard — cross-tenant SSE looks like 404, not 403.
+    const tenantRow = getDb()
+      .prepare(`SELECT tenant_id FROM sessions WHERE id = ?`)
+      .get(sessionId) as { tenant_id: string | null } | undefined;
+    if (tenantRow) {
+      assertResourceTenant(auth, tenantRow.tenant_id, `session ${sessionId} not found`);
+    }
 
     // Sync-and-proxy sessions have a local record — serve from local event bus.
     // Pure proxy sessions (no local record) forward to Anthropic.

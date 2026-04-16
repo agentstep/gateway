@@ -23,15 +23,17 @@ function hydrateVault(row: VaultRow): Vault {
 export function createVault(input: {
   agent_id: string;
   name: string;
+  /** v0.5: tenant ownership. Null = legacy/global (pre-migration). */
+  tenant_id?: string | null;
 }): Vault {
   const db = getDb();
   const id = newId("vault");
   const now = nowMs();
 
   db.prepare(
-    `INSERT INTO vaults (id, agent_id, name, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?)`,
-  ).run(id, input.agent_id, input.name, now, now);
+    `INSERT INTO vaults (id, agent_id, name, tenant_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(id, input.agent_id, input.name, input.tenant_id ?? null, now, now);
 
   return getVault(id)!;
 }
@@ -44,19 +46,26 @@ export function getVault(id: string): Vault | null {
   return row ? hydrateVault(row) : null;
 }
 
-export function listVaults(opts: { agent_id?: string }): Vault[] {
+export function listVaults(opts: {
+  agent_id?: string;
+  /** v0.5 tenancy filter. `null` = no filter (global admin). */
+  tenantFilter?: string | null;
+}): Vault[] {
   const db = getDb();
+  const clauses: string[] = [];
+  const params: unknown[] = [];
   if (opts.agent_id) {
-    const rows = db
-      .prepare(
-        `SELECT * FROM vaults WHERE agent_id = ? ORDER BY created_at DESC`,
-      )
-      .all(opts.agent_id) as VaultRow[];
-    return rows.map(hydrateVault);
+    clauses.push("agent_id = ?");
+    params.push(opts.agent_id);
   }
+  if (opts.tenantFilter != null) {
+    clauses.push("tenant_id = ?");
+    params.push(opts.tenantFilter);
+  }
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   const rows = db
-    .prepare(`SELECT * FROM vaults ORDER BY created_at DESC`)
-    .all() as VaultRow[];
+    .prepare(`SELECT * FROM vaults ${where} ORDER BY created_at DESC`)
+    .all(...params) as VaultRow[];
   return rows.map(hydrateVault);
 }
 

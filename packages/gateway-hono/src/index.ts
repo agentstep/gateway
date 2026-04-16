@@ -81,6 +81,11 @@ import {
   handleGetUpstreamKey,
   handlePatchUpstreamKey,
   handleDeleteUpstreamKey,
+  handleCreateTenant,
+  handleListTenants,
+  handleGetTenant,
+  handlePatchTenant,
+  handleArchiveTenant,
 } from "@agentstep/agent-sdk/handlers";
 
 const app = new Hono();
@@ -244,6 +249,13 @@ app.get("/v1/upstream-keys", (c) => handleListUpstreamKeys(c.req.raw));
 app.get("/v1/upstream-keys/:id", (c) => handleGetUpstreamKey(c.req.raw, c.req.param("id")));
 app.patch("/v1/upstream-keys/:id", (c) => handlePatchUpstreamKey(c.req.raw, c.req.param("id")));
 app.delete("/v1/upstream-keys/:id", (c) => handleDeleteUpstreamKey(c.req.raw, c.req.param("id")));
+
+// ── Tenants (global-admin only) ────────────────────────────────────────────
+app.post("/v1/tenants", (c) => handleCreateTenant(c.req.raw));
+app.get("/v1/tenants", (c) => handleListTenants(c.req.raw));
+app.get("/v1/tenants/:id", (c) => handleGetTenant(c.req.raw, c.req.param("id")));
+app.patch("/v1/tenants/:id", (c) => handlePatchTenant(c.req.raw, c.req.param("id")));
+app.delete("/v1/tenants/:id", (c) => handleArchiveTenant(c.req.raw, c.req.param("id")));
 
 // ── SPA catch-all (must be last) ────────────────────────────────────────────
 app.get("*", (c) => {

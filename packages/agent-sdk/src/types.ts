@@ -70,6 +70,8 @@ export interface AgentRow {
    * (retryable or 5xx) error. Null when no fallbacks configured.
    */
   fallback_json: string | null;
+  /** v0.5: tenant ownership. Null = legacy/global (pre-migration). */
+  tenant_id: string | null;
   created_at: number;
   updated_at: number;
   archived_at: number | null;
@@ -163,6 +165,8 @@ export interface EnvironmentRow {
   state_message: string | null;
   template_sprite: string | null;
   checkpoint_id: string | null;
+  /** v0.5: tenant ownership. Null = legacy/global (pre-migration). */
+  tenant_id: string | null;
   created_at: number;
   archived_at: number | null;
 }
@@ -217,6 +221,8 @@ export interface SessionRow {
   thread_depth: number;
   /** v0.4+: API key that authenticated the session creation. Null for pre-0.4 rows. */
   api_key_id: string | null;
+  /** v0.5: tenant ownership. Null = legacy/global (pre-migration). */
+  tenant_id: string | null;
   created_at: number;
   updated_at: number;
   archived_at: number | null;
@@ -273,6 +279,8 @@ export interface VaultRow {
   id: string;
   agent_id: string;
   name: string;
+  /** v0.5: tenant ownership. Null = legacy/global (pre-migration). */
+  tenant_id: string | null;
   created_at: number;
   updated_at: number;
 }

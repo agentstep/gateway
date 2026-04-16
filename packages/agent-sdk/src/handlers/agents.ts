@@ -1,10 +1,35 @@
 import { z } from "zod";
 import { routeWrap, jsonOk } from "../http";
+import { getDb } from "../db/client";
 import { createAgent, getAgent, updateAgent, archiveAgent, listAgents } from "../db/agents";
 import { resolveBackend } from "../backends/registry";
 import { isProxied, markProxied, unmarkProxied } from "../db/proxy";
 import { forwardToAnthropic, validateAnthropicProxy } from "../proxy/forward";
 import { badRequest, notFound, conflict } from "../errors";
+import { assertResourceTenant, resolveCreateTenant, tenantFilter } from "../auth/scope";
+import type { AuthContext } from "../types";
+
+/**
+ * Load the tenant_id column for an agent row directly. The public
+ * `Agent` hydrate doesn't expose it (intentionally — the API doesn't
+ * surface tenancy in resource bodies). Used for tenant assertions.
+ */
+function getAgentTenantId(id: string): string | null | undefined {
+  const row = getDb()
+    .prepare(`SELECT tenant_id FROM agents WHERE id = ?`)
+    .get(id) as { tenant_id: string | null } | undefined;
+  return row?.tenant_id;
+}
+
+/** Common resolve-or-404 guard with tenant scoping. */
+function loadAgentForCaller(auth: AuthContext, id: string, version?: number) {
+  const tenantId = getAgentTenantId(id);
+  if (tenantId === undefined) throw notFound(`agent ${id} not found`);
+  assertResourceTenant(auth, tenantId, `agent ${id} not found`);
+  const agent = getAgent(id, version);
+  if (!agent) throw notFound(`agent ${id} not found`);
+  return agent;
+}
 
 const SkillSchema = z.object({
   name: z.string().min(1),
@@ -62,6 +87,8 @@ const CreateSchema = z.object({
   })).optional(),
   skills: z.array(SkillSchema).max(20).optional(),
   model_config: ModelConfigSchema.optional(),
+  /** v0.5: required for global admin, ignored for tenant users. */
+  tenant_id: z.string().optional(),
 }).refine(data => {
   if (!data.skills) return true;
   const total = data.skills.reduce((sum, s) => sum + s.content.length, 0);
@@ -91,7 +118,7 @@ const UpdateSchema = z.object({
 }, "Total skills content exceeds 1MB limit");
 
 export function handleCreateAgent(request: Request): Promise<Response> {
-  return routeWrap(request, async () => {
+  return routeWrap(request, async ({ auth }) => {
     const rawBody = await request.text();
     const body = rawBody ? JSON.parse(rawBody) : null;
     const parsed = CreateSchema.safeParse(body);
@@ -99,8 +126,10 @@ export function handleCreateAgent(request: Request): Promise<Response> {
       throw badRequest(`invalid body: ${parsed.error.issues.map((i) => i.message).join("; ")}`);
     }
 
-    // Check for duplicate name
-    const existing = listAgents({ limit: 1000 });
+    const createTenantId = resolveCreateTenant(auth, parsed.data.tenant_id);
+
+    // Check for duplicate name within the caller's tenant scope.
+    const existing = listAgents({ limit: 1000, tenantFilter: tenantFilter(auth) });
     if (existing.some(a => a.name === parsed.data.name)) {
       throw conflict(`Agent with name "${parsed.data.name}" already exists`);
     }
@@ -158,13 +187,14 @@ export function handleCreateAgent(request: Request): Promise<Response> {
         installed_at: s.installed_at ?? nowIso,
       })),
       model_config: parsed.data.model_config,
+      tenant_id: createTenantId,
     });
     return jsonOk(agent, 201);
   });
 }
 
 export function handleListAgents(request: Request): Promise<Response> {
-  return routeWrap(request, async ({ request: req }) => {
+  return routeWrap(request, async ({ auth, request: req }) => {
     const url = new URL(req.url);
     const limit = url.searchParams.get("limit");
     const order = url.searchParams.get("order") as "asc" | "desc" | null;
@@ -176,6 +206,7 @@ export function handleListAgents(request: Request): Promise<Response> {
       order: order ?? undefined,
       includeArchived,
       cursor,
+      tenantFilter: tenantFilter(auth),
     });
     return jsonOk({
       data,
@@ -185,20 +216,20 @@ export function handleListAgents(request: Request): Promise<Response> {
 }
 
 export function handleGetAgent(request: Request, id: string): Promise<Response> {
-  return routeWrap(request, async () => {
+  return routeWrap(request, async ({ auth }) => {
     if (isProxied(id)) return forwardToAnthropic(request, `/v1/agents/${id}`);
     const url = new URL(request.url);
     const versionParam = url.searchParams.get("version");
     const version = versionParam ? Number(versionParam) : undefined;
-    const agent = getAgent(id, version);
-    if (!agent) throw notFound(`agent ${id} not found`);
+    const agent = loadAgentForCaller(auth, id, version);
     return jsonOk(agent);
   });
 }
 
 export function handleUpdateAgent(request: Request, id: string): Promise<Response> {
-  return routeWrap(request, async () => {
+  return routeWrap(request, async ({ auth }) => {
     if (isProxied(id)) return forwardToAnthropic(request, `/v1/agents/${id}`);
+    loadAgentForCaller(auth, id); // tenant guard
     const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
 
     if (body && typeof body === "object" && "backend" in body) {
@@ -231,12 +262,13 @@ export function handleUpdateAgent(request: Request, id: string): Promise<Respons
 }
 
 export function handleDeleteAgent(request: Request, id: string): Promise<Response> {
-  return routeWrap(request, async () => {
+  return routeWrap(request, async ({ auth }) => {
     if (isProxied(id)) {
       const res = await forwardToAnthropic(request, `/v1/agents/${id}`);
       if (res.ok) unmarkProxied(id);
       return res;
     }
+    loadAgentForCaller(auth, id); // tenant guard — throws 404 on cross-tenant
     const ok = archiveAgent(id);
     if (!ok) throw notFound(`agent ${id} not found`);
     return jsonOk({ id, type: "agent_deleted" });

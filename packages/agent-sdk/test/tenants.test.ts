@@ -241,7 +241,7 @@ describe("auth/scope.ts helpers", () => {
     expect(() => assertResourceTenant(scopedX, "tenant_y", "nf")).toThrow(/nf/);
   });
 
-  it("resolveCreateTenant: global admin must specify; tenant admin uses their own", async () => {
+  it("resolveCreateTenant: global admin falls back to default tenant; tenant admin uses their own", async () => {
     const { resolveCreateTenant } = await import("../src/auth/scope");
     const global: import("../src/types").AuthContext = {
       keyId: "k1", name: "g", permissions: { admin: true, scope: null },
@@ -252,7 +252,9 @@ describe("auth/scope.ts helpers", () => {
       ...global, keyId: "k2", name: "x", tenantId: "tenant_x", isGlobalAdmin: false,
     };
     expect(resolveCreateTenant(global, "tenant_somewhere")).toBe("tenant_somewhere");
-    expect(() => resolveCreateTenant(global, undefined)).toThrow(/must specify tenant_id/);
+    // Global admin without an explicit tenant_id falls back to the
+    // default tenant — preserves legacy one-tenant UX.
+    expect(resolveCreateTenant(global, undefined)).toBe("tenant_default");
     // Tenant caller always gets their own tenant; body value is ignored
     expect(resolveCreateTenant(scopedX, "tenant_other")).toBe("tenant_x");
     expect(resolveCreateTenant(scopedX, undefined)).toBe("tenant_x");

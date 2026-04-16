@@ -226,13 +226,22 @@ function toView(r: ApiKeyRow): ApiKeyView {
   };
 }
 
-export function listApiKeys(): ApiKeyView[] {
+export function listApiKeys(opts: {
+  /** v0.5 tenancy filter. `null` = no filter (global admin); string = scoped. */
+  tenantFilter?: string | null;
+} = {}): ApiKeyView[] {
   const db = getDb();
+  const clauses: string[] = ["revoked_at IS NULL"];
+  const params: unknown[] = [];
+  if (opts.tenantFilter != null) {
+    clauses.push("tenant_id = ?");
+    params.push(opts.tenantFilter);
+  }
   const rows = db
     .prepare(
-      `SELECT * FROM api_keys WHERE revoked_at IS NULL ORDER BY created_at DESC`,
+      `SELECT * FROM api_keys WHERE ${clauses.join(" AND ")} ORDER BY created_at DESC`,
     )
-    .all() as ApiKeyRow[];
+    .all(...params) as ApiKeyRow[];
   return rows.map(toView);
 }
 
