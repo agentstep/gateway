@@ -3,6 +3,7 @@ import { Link, useRouterState } from "@tanstack/react-router";
 import {
   Home,
   Key,
+  Building2,
   Bot,
   Server,
   MessageSquare,
@@ -29,6 +30,7 @@ import {
   SidebarMenuButton,
   SidebarRail,
 } from "@/components/ui/sidebar";
+import { useWhoami } from "@/hooks/use-whoami";
 
 const VERSION = "0.4.0";
 
@@ -39,10 +41,12 @@ interface NavItem {
   exact?: boolean;
 }
 
-const OVERVIEW: NavItem[] = [
+const OVERVIEW_BASE: NavItem[] = [
   { label: "Home", to: "/", icon: Home, exact: true },
   { label: "API Keys", to: "/api-keys", icon: Key },
 ];
+
+const TENANTS_ITEM: NavItem = { label: "Tenants", to: "/tenants", icon: Building2 };
 
 const RESOURCES: NavItem[] = [
   { label: "Agents", to: "/agents", icon: Bot },
@@ -85,6 +89,39 @@ function NavGroup({ title, items }: { title: string; items: NavItem[] }) {
         })}
       </SidebarMenu>
     </SidebarGroup>
+  );
+}
+
+/**
+ * Overview nav; shows Tenants entry only for global admins. A tenant
+ * user can still reach /tenants directly, but the page renders a
+ * permission notice instead of the list.
+ */
+function OverviewNav() {
+  const { data: me } = useWhoami();
+  const items = me?.is_global_admin
+    ? [...OVERVIEW_BASE, TENANTS_ITEM]
+    : OVERVIEW_BASE;
+  return <NavGroup title="Overview" items={items} />;
+}
+
+/**
+ * Footer row surfacing which tenant context the caller operates in.
+ * Global admins see "(global)"; tenant users see their tenant id.
+ * Helps avoid the "why am I not seeing X" confusion when a key is
+ * scoped to a single tenant.
+ */
+function TenantContextRow() {
+  const { data: me } = useWhoami();
+  if (!me) return null;
+  const label = me.is_global_admin
+    ? "global"
+    : me.tenant_id ?? "unscoped";
+  return (
+    <div className="flex items-center gap-2 px-2 pt-1 pb-0.5 text-[11px] text-sidebar-foreground/60">
+      <Building2 className="size-3" />
+      <span className="truncate font-mono">{label}</span>
+    </div>
   );
 }
 
@@ -135,12 +172,13 @@ export function AppSidebarLeft({
       </SidebarHeader>
 
       <SidebarContent>
-        <NavGroup title="Overview" items={OVERVIEW} />
+        <OverviewNav />
         <NavGroup title="Resources" items={RESOURCES} />
         <NavGroup title="Tools" items={TOOLS} />
       </SidebarContent>
 
       <SidebarFooter>
+        <TenantContextRow />
         <div className="flex items-center justify-between px-2 py-1">
           <span className="font-mono text-[11px] text-sidebar-foreground/50">
             v{VERSION}

@@ -66,6 +66,7 @@ import {
   handleGetTenant,
   handlePatchTenant,
   handleArchiveTenant,
+  handleWhoami,
 } from "@agentstep/agent-sdk/handlers";
 
 /**
@@ -286,6 +287,9 @@ export function buildApp() {
     const { id } = req.params as { id: string };
     await sendWebResponse(reply, await handleDeleteUpstreamKey(toWebRequest(req), id));
   });
+
+  // ── Whoami (any authenticated caller) ───────────────────────────────
+  route(app, "get", "/v1/whoami", handleWhoami);
 
   // ── Tenants (global-admin only) ─────────────────────────────────────
   route(app, "post", "/v1/tenants", handleCreateTenant);

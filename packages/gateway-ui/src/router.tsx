@@ -19,6 +19,7 @@ import { EnvironmentsTab } from "@/components/settings/EnvironmentsTab";
 import { VaultsTab } from "@/components/settings/VaultsTab";
 import { ResourcesTab } from "@/components/settings/ResourcesTab";
 import { MemoryStoresTab } from "@/components/settings/MemoryStoresTab";
+import { TenantsTab } from "@/components/settings/TenantsTab";
 import { DashboardPage } from "@/components/dashboard/DashboardPage";
 import { OnboardingWizard } from "@/components/onboarding/OnboardingWizard";
 import { OverviewPage } from "@/components/pages/OverviewPage";
@@ -70,6 +71,7 @@ function RootLayout() {
 const PAGE_TITLES: Record<string, string> = {
   "/": "Home",
   "/api-keys": "API Keys",
+  "/tenants": "Tenants",
   "/agents": "Agents",
   "/environments": "Environments",
   "/sessions": "Sessions",
@@ -302,6 +304,18 @@ const apiKeysRoute = createRoute({
   component: ApiKeysPage,
 });
 
+const tenantsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/tenants",
+  component: function TenantsPage() {
+    return (
+      <Page>
+        <TenantsTab />
+      </Page>
+    );
+  },
+});
+
 const quickstartRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/quickstart",
@@ -326,6 +340,7 @@ const routeTree = rootRoute.addChildren([
   dashboardRoute,
   docsRoute,
   apiKeysRoute,
+  tenantsRoute,
   quickstartRoute,
 ]);
 

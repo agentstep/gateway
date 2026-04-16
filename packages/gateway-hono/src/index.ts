@@ -86,6 +86,7 @@ import {
   handleGetTenant,
   handlePatchTenant,
   handleArchiveTenant,
+  handleWhoami,
 } from "@agentstep/agent-sdk/handlers";
 
 const app = new Hono();
@@ -249,6 +250,9 @@ app.get("/v1/upstream-keys", (c) => handleListUpstreamKeys(c.req.raw));
 app.get("/v1/upstream-keys/:id", (c) => handleGetUpstreamKey(c.req.raw, c.req.param("id")));
 app.patch("/v1/upstream-keys/:id", (c) => handlePatchUpstreamKey(c.req.raw, c.req.param("id")));
 app.delete("/v1/upstream-keys/:id", (c) => handleDeleteUpstreamKey(c.req.raw, c.req.param("id")));
+
+// ── Whoami (caller identity, any authenticated key) ─────────────────────────
+app.get("/v1/whoami", (c) => handleWhoami(c.req.raw));
 
 // ── Tenants (global-admin only) ────────────────────────────────────────────
 app.post("/v1/tenants", (c) => handleCreateTenant(c.req.raw));

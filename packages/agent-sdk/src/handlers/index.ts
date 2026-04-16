@@ -20,3 +20,4 @@ export { handleAddResource, handleListResources, handleDeleteResource } from "./
 export { handleCreateApiKey, handleListApiKeys, handleGetApiKey, handlePatchApiKey, handleRevokeApiKey, handleGetApiKeyActivity } from "./api_keys";
 export { handleAddUpstreamKey, handleListUpstreamKeys, handleGetUpstreamKey, handlePatchUpstreamKey, handleDeleteUpstreamKey } from "./upstream_keys";
 export { handleCreateTenant, handleListTenants, handleGetTenant, handlePatchTenant, handleArchiveTenant } from "./tenants";
+export { handleWhoami } from "./whoami";
