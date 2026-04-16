@@ -4,6 +4,25 @@ All notable changes to AgentStep Gateway are documented here. Dates are UTC.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project uses [SemVer](https://semver.org/).
 
+## [0.3.8] — 2026-04-16
+
+### Fixed / Changed
+
+- **Skills catalog URL is now configurable.** New env vars `SKILLS_FEED_URL`
+  / `SKILLS_INDEX_URL` and matching settings keys
+  `skills_feed_url` / `skills_index_url`. Default flipped from a
+  third-party personal GitHub account to `www.agentstep.com/v1/skills/*`
+  — removes a supply-chain concern (anyone with write access to the
+  previous repo could push arbitrary JSON that every gateway would then
+  fetch on the Skills page). Operators running air-gapped can point at
+  a self-hosted mirror.
+- Index parser now accepts both `{count, items}` and `{totalSkills, skills}`
+  response shapes, so the backend endpoint can ship either schema.
+- Server-side rejection of `sk-ant-oat*` OAuth tokens for the anthropic
+  sync-and-proxy provider (wizard already rejected them; this closes the
+  API-direct path that the docs claimed was blocked).
+- Minor doc drift: `docs/telemetry.md` cli_version example updated.
+
 ## [0.3.7] — 2026-04-16
 
 ### Fixed

@@ -10,6 +10,9 @@ const NON_SECRET_KEYS = new Set([
   "vercel_team_id",
   "vercel_project_id",
   "fly_app_name",
+  // Skills catalog URL overrides — URLs, not secrets.
+  "skills_feed_url",
+  "skills_index_url",
 ]);
 
 /** All writable/readable setting keys. Anything not in NON_SECRET_KEYS is a secret. */
@@ -21,6 +24,8 @@ const ALLOWED_KEYS = [
   "fly_api_token", "modal_token_id", "modal_token_secret",
   // Provider identifiers (not secrets but pair with credentials)
   "vercel_team_id", "vercel_project_id", "fly_app_name",
+  // Skills catalog URL overrides (operator override; default is agentstep.com)
+  "skills_feed_url", "skills_index_url",
   // UI state
   "saved_repositories",
 ];

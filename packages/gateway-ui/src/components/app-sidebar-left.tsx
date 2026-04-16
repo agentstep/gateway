@@ -30,7 +30,7 @@ import {
   SidebarRail,
 } from "@/components/ui/sidebar";
 
-const VERSION = "0.3.7";
+const VERSION = "0.3.8";
 
 interface NavItem {
   label: string;

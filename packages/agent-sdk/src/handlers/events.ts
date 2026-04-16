@@ -17,9 +17,18 @@ import { badRequest, notFound } from "../errors";
 import { getAgent } from "../db/agents";
 
 /**
- * Resolve the Anthropic API key for a session: prefer vault, fall back to config.
+ * Resolve the Anthropic API key for a session: prefer vault, fall back to
+ * config. Rejects `sk-ant-oat*` OAuth tokens — Anthropic's Managed Agents
+ * API requires real API keys (sk-ant-api03-*). We filter here so the UI
+ * gets a clean local error instead of a cryptic 401 from the upstream.
  */
 function resolveAnthropicKey(sessionId: string): string | null {
+  const candidate = resolveAnthropicKeyRaw(sessionId);
+  if (candidate && candidate.startsWith("sk-ant-oat")) return null;
+  return candidate;
+}
+
+function resolveAnthropicKeyRaw(sessionId: string): string | null {
   const session = getSession(sessionId);
   if (session?.vault_ids?.length) {
     for (const vid of session.vault_ids) {
