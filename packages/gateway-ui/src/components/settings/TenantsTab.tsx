@@ -45,26 +45,41 @@ export function TenantsTab() {
   const [createOpen, setCreateOpen] = useState(false);
   const [archiveTarget, setArchiveTarget] = useState<Tenant | null>(null);
 
-  // The endpoint returns 403 for tenant users; use-tenants normalizes to [].
-  // When we're loading, treat that as "we don't know yet" — avoid flicker.
-  const showForbidden = !isLoading && error != null;
+  // 403 + 404 are normalized to [] inside useTenants (tenant users
+  // landing here see "no list" gracefully). Anything else that reaches
+  // the error branch is typically 401 — an invalid/stale key — which
+  // deserves a different message than a scope-mismatch.
+  const errStatus = (error as { status?: number } | null | undefined)?.status;
+  const showAuthError = !isLoading && error != null;
+  const unauthenticated = errStatus === 401;
 
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Tenants"
         description="Isolation boundary for agents, environments, vaults, sessions, and API keys. Only global admins can manage tenants."
-        actionLabel={tenants && !showForbidden ? "New tenant" : undefined}
+        actionLabel={tenants && !showAuthError ? "New tenant" : undefined}
         onAction={() => setCreateOpen(true)}
       />
 
-      {showForbidden && (
+      {showAuthError && (
         <div className="flex items-start gap-3 rounded-lg border border-border bg-card p-4">
           <AlertCircle className="mt-0.5 size-4 text-muted-foreground" />
-          <p className="text-sm text-muted-foreground">
-            Tenant management requires a global admin API key. Your key is
-            scoped to a tenant and can manage only resources within it.
-          </p>
+          {unauthenticated ? (
+            <p className="text-sm text-muted-foreground">
+              Your API key isn't valid. Check the <code className="font-mono text-xs">x-api-key</code>
+              value (or the one stored in this browser via <code className="font-mono text-xs">localStorage.ma-api-key</code>)
+              matches a row in the <code className="font-mono text-xs">api_keys</code> table. A common cause is
+              more than one <code className="font-mono text-xs">SEED_API_KEY</code> line in <code className="font-mono text-xs">.env</code> —
+              only the last one takes effect in <code className="font-mono text-xs">process.env</code>, but only the first
+              was actually seeded.
+            </p>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Tenant management requires a global admin API key. Your key is
+              scoped to a tenant and can manage only resources within it.
+            </p>
+          )}
         </div>
       )}
 
@@ -91,7 +106,7 @@ export function TenantsTab() {
             </TableBody>
           </Table>
         </div>
-      ) : !showForbidden && !isLoading ? (
+      ) : !showAuthError && !isLoading ? (
         <p className="py-8 text-center text-sm text-muted-foreground">
           No tenants yet. Create one to start isolating resources per team.
         </p>
