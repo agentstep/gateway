@@ -5,7 +5,7 @@
  * or `Authorization: Bearer <token>`. Hashes with sha256 and looks it up in
  * the `api_keys` table. Returns an AuthContext on success.
  */
-import { findByRawKey } from "../db/api_keys";
+import { findByRawKey, hydratePermissions } from "../db/api_keys";
 import type { AuthContext } from "../types";
 import { unauthorized } from "../errors";
 
@@ -29,6 +29,7 @@ export async function authenticate(request: Request): Promise<AuthContext> {
   return {
     keyId: row.id,
     name: row.name,
-    permissions: JSON.parse(row.permissions_json) as string[],
+    permissions: hydratePermissions(row.permissions_json),
+    tenantId: row.tenant_id,
   };
 }

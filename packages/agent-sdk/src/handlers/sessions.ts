@@ -58,7 +58,7 @@ const UpdateSchema = z.object({
 });
 
 export function handleCreateSession(request: Request): Promise<Response> {
-  return routeWrap(request, async () => {
+  return routeWrap(request, async ({ auth }) => {
     const rawBody = await request.text();
     const body = rawBody ? JSON.parse(rawBody) : null;
     const parsed = CreateSchema.safeParse(body);
@@ -85,6 +85,17 @@ export function handleCreateSession(request: Request): Promise<Response> {
 
     const env = getEnvironment(parsed.data.environment_id);
     if (!env) throw notFound(`environment not found: ${parsed.data.environment_id}`);
+
+    // Virtual-key scope: fail early if the caller's API key is not allowed
+    // to use this agent, environment, or any requested vault. Happens after
+    // resolution so we can return 403 for "scope denies" vs 404 for "resource
+    // doesn't exist" — no id-probing via scope errors.
+    const { checkResourceScope } = await import("../auth/scope");
+    checkResourceScope(auth, {
+      agent: agent.id,
+      env: env.id,
+      vaults: parsed.data.vault_ids,
+    });
 
     // Engine-provider compatibility: anthropic provider only runs Claude models
     if (env.config?.provider === "anthropic" && agent.engine !== "claude") {

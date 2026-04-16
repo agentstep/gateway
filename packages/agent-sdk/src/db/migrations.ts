@@ -383,4 +383,20 @@ export function runMigrations(db: InstanceType<typeof Database>): void {
       PRIMARY KEY (local_id, resource_type)
     )
   `);
+
+  // ---------------------------------------------------------------------------
+  // v0.4.0 — Agent ops (virtual keys, cost attribution)
+  // ---------------------------------------------------------------------------
+
+  // Reserved for v0.5 full tenant isolation. No handler reads this column
+  // in v0.4 — it's a forward-compatibility hook so v0.5's migration doesn't
+  // need to rewrite this table. Seed key's tenant_id remains NULL = "legacy
+  // / global admin" until the operator runs `gateway tenants migrate-legacy`
+  // in v0.5.
+  const apiKeyCols = db
+    .prepare(`PRAGMA table_info(api_keys)`)
+    .all() as Array<{ name: string }>;
+  if (!apiKeyCols.some((c) => c.name === "tenant_id")) {
+    db.exec(`ALTER TABLE api_keys ADD COLUMN tenant_id TEXT`);
+  }
 }

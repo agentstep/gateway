@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { getDb } from "./client";
 import { newId } from "../util/ids";
 import { nowMs } from "../util/clock";
+import type { KeyPermissions, KeyScope } from "../types";
 
 export interface ApiKeyRow {
   id: string;
@@ -9,6 +10,7 @@ export interface ApiKeyRow {
   hash: string;
   prefix: string;
   permissions_json: string;
+  tenant_id: string | null;
   created_at: number;
   revoked_at: number | null;
 }
@@ -18,12 +20,57 @@ function hashKey(raw: string): string {
 }
 
 /**
+ * Parse a `permissions_json` column value into a `KeyPermissions` object.
+ *
+ * Legacy backcompat: pre-0.4 rows stored a string array like `["*"]`. Those
+ * keys were unconditional admins. Map that shape to `{admin: true, scope: null}`
+ * on read. Keys stored without an admin field also default to non-admin so
+ * freshly-created scoped keys don't accidentally gain admin rights.
+ */
+export function hydratePermissions(json: string): KeyPermissions {
+  try {
+    const parsed = JSON.parse(json);
+    if (Array.isArray(parsed)) {
+      // Legacy shape: `["*"]` = admin + unrestricted. Any other shape is a
+      // pre-0.4 key we treat conservatively as admin (only global admins
+      // existed pre-0.4, so this is the right call).
+      return { admin: true, scope: null };
+    }
+    if (parsed && typeof parsed === "object") {
+      const admin = parsed.admin === true;
+      const scope = parsed.scope && typeof parsed.scope === "object"
+        ? normalizeScope(parsed.scope)
+        : null;
+      return { admin, scope };
+    }
+  } catch {
+    // Corrupt JSON — fall through to safe default.
+  }
+  return { admin: false, scope: null };
+}
+
+function normalizeScope(raw: Record<string, unknown>): KeyScope {
+  const list = (v: unknown): string[] => {
+    if (!Array.isArray(v)) return [];
+    return v.filter((x): x is string => typeof x === "string");
+  };
+  return {
+    agents: list(raw.agents),
+    environments: list(raw.environments),
+    vaults: list(raw.vaults),
+  };
+}
+
+/**
  * Create a new API key. Returns the full raw key string ONCE —
  * it is not stored in plain text and cannot be retrieved later.
  */
 export function createApiKey(input: {
   name: string;
-  permissions?: string[];
+  /** v0.4+: full permissions object. Legacy callers may still pass a string array. */
+  permissions?: KeyPermissions | string[];
+  /** Reserved for v0.5 tenant isolation. Accepted but not enforced in v0.4. */
+  tenantId?: string | null;
   rawKey?: string;
 }): { key: string; id: string } {
   const db = getDb();
@@ -32,15 +79,25 @@ export function createApiKey(input: {
   const hash = hashKey(raw);
   const prefix = raw.slice(0, 8);
 
+  // Serialize permissions: prefer the new object shape; fall back to legacy
+  // array for backward compat with any external caller still using the old
+  // signature. Both forms hydrate to a `KeyPermissions` on read.
+  const permissionsJson = input.permissions == null
+    ? JSON.stringify({ admin: true, scope: null })   // default: admin key
+    : Array.isArray(input.permissions)
+      ? JSON.stringify(input.permissions)            // legacy string array
+      : JSON.stringify(input.permissions);           // new object shape
+
   db.prepare(
-    `INSERT INTO api_keys (id, name, hash, prefix, permissions_json, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO api_keys (id, name, hash, prefix, permissions_json, tenant_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     input.name,
     hash,
     prefix,
-    JSON.stringify(input.permissions ?? ["*"]),
+    permissionsJson,
+    input.tenantId ?? null,
     nowMs(),
   );
 
@@ -59,6 +116,15 @@ export function findByRawKey(raw: string): ApiKeyRow | null {
   );
 }
 
+export function getApiKeyById(id: string): ApiKeyRow | null {
+  const db = getDb();
+  return (
+    (db
+      .prepare(`SELECT * FROM api_keys WHERE id = ?`)
+      .get(id) as ApiKeyRow | undefined) ?? null
+  );
+}
+
 export function revokeApiKey(id: string): boolean {
   const db = getDb();
   const res = db
@@ -67,12 +133,40 @@ export function revokeApiKey(id: string): boolean {
   return res.changes > 0;
 }
 
-export function listApiKeys(): Array<Omit<ApiKeyRow, "hash">> {
+export function updateApiKeyPermissions(id: string, permissions: KeyPermissions): boolean {
+  const db = getDb();
+  const res = db
+    .prepare(`UPDATE api_keys SET permissions_json = ? WHERE id = ? AND revoked_at IS NULL`)
+    .run(JSON.stringify(permissions), id);
+  return res.changes > 0;
+}
+
+/**
+ * Safe-to-expose listing — strips the hash, hydrates permissions. The
+ * `tenant_id` field passes through but is unused by v0.4 handlers.
+ */
+export interface ApiKeyView {
+  id: string;
+  name: string;
+  prefix: string;
+  permissions: KeyPermissions;
+  tenant_id: string | null;
+  created_at: number;
+}
+
+export function listApiKeys(): ApiKeyView[] {
   const db = getDb();
   const rows = db
     .prepare(
       `SELECT * FROM api_keys WHERE revoked_at IS NULL ORDER BY created_at DESC`,
     )
     .all() as ApiKeyRow[];
-  return rows.map(({ hash: _hash, ...rest }) => rest);
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    prefix: r.prefix,
+    permissions: hydratePermissions(r.permissions_json),
+    tenant_id: r.tenant_id,
+    created_at: r.created_at,
+  }));
 }

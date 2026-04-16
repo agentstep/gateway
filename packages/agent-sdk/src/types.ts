@@ -364,11 +364,36 @@ export interface ManagedEvent {
 }
 
 // ---------------------------------------------------------------------------
-// Auth
+// Auth — virtual keys with scope + admin
 // ---------------------------------------------------------------------------
+
+/**
+ * A scope restricts which resources an API key can reach. The `"*"` sentinel
+ * in any array means "all resources of this type". A field missing or `null`
+ * at the top level (`scope: null`) means unrestricted — equivalent to having
+ * every resource type set to `["*"]`.
+ */
+export interface KeyScope {
+  agents: string[];
+  environments: string[];
+  vaults: string[];
+}
+
+export interface KeyPermissions {
+  /** Admin keys can CRUD /v1/api-keys (and in v0.5, /v1/tenants and /v1/upstream-keys). */
+  admin: boolean;
+  /** null = unrestricted within whatever tenancy applies (v0.4: none). */
+  scope: KeyScope | null;
+}
 
 export interface AuthContext {
   keyId: string;
   name: string;
-  permissions: string[];
+  permissions: KeyPermissions;
+  /**
+   * Reserved for v0.5 full tenant isolation. Always exposed from the
+   * middleware so v0.5 doesn't need another AuthContext change. No v0.4
+   * handler reads this — always null on the seed key.
+   */
+  tenantId: string | null;
 }

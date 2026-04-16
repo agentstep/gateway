@@ -50,6 +50,11 @@ import {
   handleGetOpenApiSpec,
   handleGetDocs,
   handleGetUI,
+  handleCreateApiKey,
+  handleListApiKeys,
+  handleGetApiKey,
+  handlePatchApiKey,
+  handleRevokeApiKey,
 } from "@agentstep/agent-sdk/handlers";
 
 /**
@@ -230,6 +235,25 @@ export function buildApp() {
 
   // ── Batch ────────────────────────────────────────────────────────────
   route(app, "post", "/v1/batch", handleBatch);
+
+  // ── Virtual keys (admin-only) ────────────────────────────────────────
+  route(app, "post", "/v1/api-keys", handleCreateApiKey);
+  route(app, "get", "/v1/api-keys", handleListApiKeys);
+  app.get("/v1/api-keys/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const response = await handleGetApiKey(toWebRequest(req), id);
+    await sendWebResponse(reply, response);
+  });
+  app.patch("/v1/api-keys/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const response = await handlePatchApiKey(toWebRequest(req), id);
+    await sendWebResponse(reply, response);
+  });
+  app.delete("/v1/api-keys/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const response = await handleRevokeApiKey(toWebRequest(req), id);
+    await sendWebResponse(reply, response);
+  });
 
   return app;
 }

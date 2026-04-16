@@ -70,6 +70,11 @@ import {
   handleAddResource,
   handleListResources,
   handleDeleteResource,
+  handleCreateApiKey,
+  handleListApiKeys,
+  handleGetApiKey,
+  handlePatchApiKey,
+  handleRevokeApiKey,
 } from "@agentstep/agent-sdk/handlers";
 
 const app = new Hono();
@@ -217,6 +222,13 @@ app.post("/v1/traces/:id/export", (c) => handleExportTrace(c.req.raw, c.req.para
 // exact-match doesn't shadow it. Hono matches in registration order.
 app.get("/v1/metrics/api", (c) => handleGetApiMetrics(c.req.raw));
 app.get("/v1/metrics", (c) => handleGetMetrics(c.req.raw));
+
+// ── Virtual keys (admin-only) ──────────────────────────────────────────────
+app.post("/v1/api-keys", (c) => handleCreateApiKey(c.req.raw));
+app.get("/v1/api-keys", (c) => handleListApiKeys(c.req.raw));
+app.get("/v1/api-keys/:id", (c) => handleGetApiKey(c.req.raw, c.req.param("id")));
+app.patch("/v1/api-keys/:id", (c) => handlePatchApiKey(c.req.raw, c.req.param("id")));
+app.delete("/v1/api-keys/:id", (c) => handleRevokeApiKey(c.req.raw, c.req.param("id")));
 
 // ── SPA catch-all (must be last) ────────────────────────────────────────────
 app.get("*", (c) => {
