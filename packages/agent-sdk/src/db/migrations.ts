@@ -410,4 +410,31 @@ export function runMigrations(db: InstanceType<typeof Database>): void {
     db.exec(`ALTER TABLE sessions ADD COLUMN api_key_id TEXT`);
   }
   db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_api_key_id ON sessions(api_key_id)`);
+
+  // Budgets + RPM + fallback (v0.4 PR3).
+  // - api_keys.budget_usd / rate_limit_rpm: null = unlimited.
+  // - api_keys.spent_usd: running total, default 0. Incremented in the
+  //   driver's bumpSessionStats transaction so spend can never
+  //   under-report on crash.
+  // - agents.fallback_json: JSON array of {agent_id, environment_id}
+  //   tuples tried on session-creation failure (cycle-detected, max 3 hops).
+  const apiKeyColsBudget = db
+    .prepare(`PRAGMA table_info(api_keys)`)
+    .all() as Array<{ name: string }>;
+  if (!apiKeyColsBudget.some((c) => c.name === "budget_usd")) {
+    db.exec(`ALTER TABLE api_keys ADD COLUMN budget_usd REAL`);
+  }
+  if (!apiKeyColsBudget.some((c) => c.name === "rate_limit_rpm")) {
+    db.exec(`ALTER TABLE api_keys ADD COLUMN rate_limit_rpm INTEGER`);
+  }
+  if (!apiKeyColsBudget.some((c) => c.name === "spent_usd")) {
+    db.exec(`ALTER TABLE api_keys ADD COLUMN spent_usd REAL NOT NULL DEFAULT 0`);
+  }
+
+  const agentColsFallback = db
+    .prepare(`PRAGMA table_info(agents)`)
+    .all() as Array<{ name: string }>;
+  if (!agentColsFallback.some((c) => c.name === "fallback_json")) {
+    db.exec(`ALTER TABLE agents ADD COLUMN fallback_json TEXT`);
+  }
 }

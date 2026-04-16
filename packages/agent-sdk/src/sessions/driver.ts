@@ -127,18 +127,38 @@ export async function runTurn(
     }
   }
 
-  // Budget check: if max_budget_usd is set and usage has exceeded it, refuse the turn
+  // Budget check: refuse turn if session OR owning key is over budget.
+  // Session budget = max_budget_usd on the row (pre-0.4 field, unchanged).
+  // Key budget = api_keys.budget_usd vs api_keys.spent_usd (v0.4 PR3).
+  // Both raise session.error{type:"budget_exceeded"} with a scope tag.
   const budgetRow = getSessionRow(sessionId);
   if (budgetRow?.max_budget_usd != null && budgetRow.usage_cost_usd >= budgetRow.max_budget_usd) {
     emit("session.error", {
       error: {
         type: "budget_exceeded",
-        message: `usage $${budgetRow.usage_cost_usd.toFixed(4)} >= budget $${budgetRow.max_budget_usd.toFixed(4)}`,
+        scope: "session",
+        message: `usage $${budgetRow.usage_cost_usd.toFixed(4)} >= session budget $${budgetRow.max_budget_usd.toFixed(4)}`,
       },
     });
     emit("session.status_idle", { stop_reason: "error" });
     updateSessionStatus(sessionId, "idle", "error");
     return;
+  }
+  if (budgetRow?.api_key_id) {
+    const { getApiKeyById } = await import("../db/api_keys");
+    const key = getApiKeyById(budgetRow.api_key_id);
+    if (key && key.budget_usd != null && (key.spent_usd ?? 0) >= key.budget_usd) {
+      emit("session.error", {
+        error: {
+          type: "budget_exceeded",
+          scope: "key",
+          message: `api key "${key.name}" spent $${(key.spent_usd ?? 0).toFixed(4)} >= budget $${key.budget_usd.toFixed(4)}`,
+        },
+      });
+      emit("session.status_idle", { stop_reason: "error" });
+      updateSessionStatus(sessionId, "idle", "error");
+      return;
+    }
   }
 
   // Mark each pending input as processed-now

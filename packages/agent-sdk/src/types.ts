@@ -64,6 +64,12 @@ export interface AgentRow {
   id: string;
   current_version: number;
   name: string;
+  /**
+   * v0.4+: JSON array of FallbackTuple {agent_id, environment_id} tuples
+   * tried when the primary session-creation fails with a classifiable
+   * (retryable or 5xx) error. Null when no fallbacks configured.
+   */
+  fallback_json: string | null;
   created_at: number;
   updated_at: number;
   archived_at: number | null;
@@ -114,6 +120,8 @@ export interface Agent {
   callable_agents: Array<{ type: "agent"; id: string; version?: number }>;
   skills: AgentSkill[];
   model_config: ModelConfig;
+  /** Raw JSON — parse with parseFallbackJson in handlers. Null when unset. */
+  fallback_json: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -398,4 +406,10 @@ export interface AuthContext {
    * handler reads this — always null on the seed key.
    */
   tenantId: string | null;
+  /** Null = unlimited. In USD. Enforced in the driver pre-turn. */
+  budgetUsd: number | null;
+  /** Null = unlimited. Fixed 60-second window enforced in routeWrap. */
+  rateLimitRpm: number | null;
+  /** Running total of USD spent by this key. Updated transactionally alongside session usage. */
+  spentUsd: number;
 }

@@ -31,5 +31,8 @@ export async function authenticate(request: Request): Promise<AuthContext> {
     name: row.name,
     permissions: hydratePermissions(row.permissions_json),
     tenantId: row.tenant_id,
+    budgetUsd: row.budget_usd ?? null,
+    rateLimitRpm: row.rate_limit_rpm ?? null,
+    spentUsd: row.spent_usd ?? 0,
   };
 }

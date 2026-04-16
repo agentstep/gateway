@@ -224,7 +224,7 @@ describe("Scope enforcement — checkResourceScope helper", () => {
       keyId: "k",
       name: "n",
       permissions: { admin: false, scope: null },
-      tenantId: null,
+      tenantId: null, budgetUsd: null, rateLimitRpm: null, spentUsd: 0,
     };
     expect(() => checkResourceScope(auth, { agent: "a1", env: "e1", vaults: ["v1"] })).not.toThrow();
   });
@@ -235,7 +235,7 @@ describe("Scope enforcement — checkResourceScope helper", () => {
       keyId: "k",
       name: "n",
       permissions: { admin: false, scope: { agents: ["*"], environments: ["e1"], vaults: [] } },
-      tenantId: null,
+      tenantId: null, budgetUsd: null, rateLimitRpm: null, spentUsd: 0,
     };
     expect(() => checkResourceScope(auth, { agent: "anything", env: "e1" })).not.toThrow();
     expect(() => checkResourceScope(auth, { env: "e2" })).toThrow(/environment e2/);
@@ -247,7 +247,7 @@ describe("Scope enforcement — checkResourceScope helper", () => {
       keyId: "k",
       name: "n",
       permissions: { admin: false, scope: { agents: ["agent_a"], environments: ["*"], vaults: ["*"] } },
-      tenantId: null,
+      tenantId: null, budgetUsd: null, rateLimitRpm: null, spentUsd: 0,
     };
     expect(() => checkResourceScope(auth, { agent: "agent_b" })).toThrow(/agent_b/);
   });
@@ -258,7 +258,7 @@ describe("Scope enforcement — checkResourceScope helper", () => {
       keyId: "k",
       name: "n",
       permissions: { admin: false, scope: { agents: ["*"], environments: ["*"], vaults: [] } },
-      tenantId: null,
+      tenantId: null, budgetUsd: null, rateLimitRpm: null, spentUsd: 0,
     };
     expect(() => checkResourceScope(auth, { vaults: ["v1"] })).toThrow(/vault v1/);
   });
@@ -529,6 +529,245 @@ describe("Metrics time-series per key (PR2.5)", () => {
     expect(un).toBeDefined();
     const total = un!.points.reduce((acc, p) => acc + p.cost_usd, 0);
     expect(total).toBeCloseTo(0.75, 2);
+  });
+});
+
+describe("Rate limit middleware (PR3)", () => {
+  beforeEach(() => freshDbEnv());
+
+  it("allows up to rate_limit_rpm requests in the 60s window; 429s the next", async () => {
+    await bootDb();
+    const { createApiKey } = await import("../src/db/api_keys");
+    const { resetRateLimits } = await import("../src/auth/rate_limit");
+    const { handleListApiKeys } = await import("../src/handlers/api_keys");
+
+    resetRateLimits();
+    const { key: adminLimited } = createApiKey({
+      name: "limited-admin",
+      permissions: { admin: true, scope: null },
+      rateLimitRpm: 2,
+      rawKey: "ck_test_limited_admin_1234",
+    });
+
+    const r1 = await handleListApiKeys(req("/v1/api-keys", { apiKey: adminLimited }));
+    expect(r1.status).toBe(200);
+    const r2 = await handleListApiKeys(req("/v1/api-keys", { apiKey: adminLimited }));
+    expect(r2.status).toBe(200);
+    const r3 = await handleListApiKeys(req("/v1/api-keys", { apiKey: adminLimited }));
+    expect(r3.status).toBe(429);
+    expect(r3.headers.get("Retry-After")).toBeTruthy();
+    expect(Number(r3.headers.get("Retry-After"))).toBeGreaterThan(0);
+  });
+
+  it("null rate_limit_rpm means no limit", async () => {
+    await bootDb();
+    const { resetRateLimits } = await import("../src/auth/rate_limit");
+    const { handleListApiKeys } = await import("../src/handlers/api_keys");
+    resetRateLimits();
+    // Fire 10 requests quickly against the seed admin key (rate_limit_rpm=null).
+    for (let i = 0; i < 10; i++) {
+      const res = await handleListApiKeys(req("/v1/api-keys"));
+      expect(res.status).toBe(200);
+    }
+  });
+});
+
+describe("Per-key budget enforcement (PR3)", () => {
+  beforeEach(() => freshDbEnv());
+
+  it("updateApiKeyLimits + bumpKeySpent flow through to AuthContext", async () => {
+    await bootDb();
+    const { createApiKey, updateApiKeyLimits, bumpKeySpent, getApiKeyById } = await import("../src/db/api_keys");
+    const { authenticate } = await import("../src/auth/middleware");
+
+    const { key, id } = createApiKey({
+      name: "budget-test",
+      permissions: { admin: false, scope: null },
+      rawKey: "ck_budget_test_123456789012",
+    });
+
+    updateApiKeyLimits(id, { budgetUsd: 5.00 });
+    bumpKeySpent(id, 1.23);
+
+    const row = getApiKeyById(id);
+    expect(row?.spent_usd).toBeCloseTo(1.23, 2);
+    expect(row?.budget_usd).toBeCloseTo(5.00, 2);
+
+    const ctx = await authenticate(new Request("http://l", { headers: { "x-api-key": key } }));
+    expect(ctx.budgetUsd).toBeCloseTo(5.00, 2);
+    expect(ctx.spentUsd).toBeCloseTo(1.23, 2);
+  });
+
+  it("bumpSessionStats updates both session and key atomically", async () => {
+    const { adminId } = await bootDb();
+    const { createAgent } = await import("../src/db/agents");
+    const { createSession, bumpSessionStats } = await import("../src/db/sessions");
+    const { getApiKeyById } = await import("../src/db/api_keys");
+    const { getDb } = await import("../src/db/client");
+    const { newId } = await import("../src/util/ids");
+    const db = getDb();
+
+    const agent = createAgent({ name: "bump-test", model: "claude-sonnet-4-6" });
+    const envId = newId("env");
+    db.prepare(
+      `INSERT INTO environments (id, name, config_json, state, created_at) VALUES (?, ?, ?, 'ready', ?)`,
+    ).run(envId, "env-bump", JSON.stringify({ type: "cloud", provider: "docker" }), Date.now());
+
+    const session = createSession({
+      agent_id: agent.id,
+      agent_version: 1,
+      environment_id: envId,
+      api_key_id: adminId,
+    });
+
+    bumpSessionStats(session.id, { turn_count: 1 }, { cost_usd: 0.75 });
+
+    const updatedSession = db.prepare("SELECT usage_cost_usd FROM sessions WHERE id = ?").get(session.id) as { usage_cost_usd: number };
+    expect(updatedSession.usage_cost_usd).toBeCloseTo(0.75, 2);
+
+    const keyAfter = getApiKeyById(adminId);
+    expect(keyAfter?.spent_usd).toBeCloseTo(0.75, 2);
+  });
+
+  it("bumpSessionStats with zero cost doesn't touch key total", async () => {
+    const { adminId } = await bootDb();
+    const { createAgent } = await import("../src/db/agents");
+    const { createSession, bumpSessionStats } = await import("../src/db/sessions");
+    const { getApiKeyById } = await import("../src/db/api_keys");
+    const { getDb } = await import("../src/db/client");
+    const { newId } = await import("../src/util/ids");
+    const db = getDb();
+
+    const agent = createAgent({ name: "zero-cost", model: "claude-sonnet-4-6" });
+    const envId = newId("env");
+    db.prepare(
+      `INSERT INTO environments (id, name, config_json, state, created_at) VALUES (?, ?, ?, 'ready', ?)`,
+    ).run(envId, "env-zero", JSON.stringify({ type: "cloud", provider: "docker" }), Date.now());
+
+    const session = createSession({ agent_id: agent.id, agent_version: 1, environment_id: envId, api_key_id: adminId });
+    // turn_count only, no usage.cost_usd
+    bumpSessionStats(session.id, { turn_count: 1 });
+    const key = getApiKeyById(adminId);
+    expect(key?.spent_usd ?? 0).toBe(0);
+  });
+});
+
+describe("Session fallback (PR3)", () => {
+  beforeEach(() => freshDbEnv());
+
+  async function seedAgentEnv(name: string, ready: boolean, fallbackJson?: string) {
+    const { createAgent } = await import("../src/db/agents");
+    const { getDb } = await import("../src/db/client");
+    const { newId } = await import("../src/util/ids");
+    const db = getDb();
+
+    const agent = createAgent({ name, model: "claude-sonnet-4-6" });
+    if (fallbackJson) {
+      db.prepare("UPDATE agents SET fallback_json = ? WHERE id = ?").run(fallbackJson, agent.id);
+    }
+    const envId = newId("env");
+    db.prepare(
+      `INSERT INTO environments (id, name, config_json, state, state_message, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(
+      envId,
+      `env-${name}`,
+      JSON.stringify({ type: "cloud", provider: "docker" }),
+      ready ? "ready" : "failed",
+      ready ? null : "provider unavailable",
+      Date.now(),
+    );
+    return { agentId: agent.id, envId };
+  }
+
+  it("falls over to the fallback tuple when primary env isn't ready", async () => {
+    await bootDb();
+    const fallbackTarget = await seedAgentEnv("bravo", true);
+    const primary = await seedAgentEnv(
+      "alpha",
+      false,
+      JSON.stringify([{ agent_id: fallbackTarget.agentId, environment_id: fallbackTarget.envId }]),
+    );
+
+    const { handleCreateSession } = await import("../src/handlers/sessions");
+    const res = await handleCreateSession(req("/v1/sessions", {
+      body: { agent: primary.agentId, environment_id: primary.envId },
+    }));
+    expect(res.status).toBe(201);
+    const session = await res.json() as { agent: { id: string }; environment_id: string };
+    expect(session.agent.id).toBe(fallbackTarget.agentId);
+    expect(session.environment_id).toBe(fallbackTarget.envId);
+  });
+
+  it("emits session.fallback_used event on successful fallback", async () => {
+    await bootDb();
+    const fallbackTarget = await seedAgentEnv("delta", true);
+    const primary = await seedAgentEnv(
+      "charlie",
+      false,
+      JSON.stringify([{ agent_id: fallbackTarget.agentId, environment_id: fallbackTarget.envId }]),
+    );
+
+    const { handleCreateSession } = await import("../src/handlers/sessions");
+    const res = await handleCreateSession(req("/v1/sessions", {
+      body: { agent: primary.agentId, environment_id: primary.envId },
+    }));
+    const session = await res.json() as { id: string };
+
+    // Give the append a microtask cycle to flush
+    await new Promise(r => setTimeout(r, 50));
+    const { listEvents } = await import("../src/db/events");
+    const events = listEvents(session.id, { limit: 50 });
+    const fb = events.find(e => e.type === "session.fallback_used");
+    expect(fb).toBeDefined();
+  });
+
+  it("cycle-protects (A → B → A) and exhausts cleanly", async () => {
+    await bootDb();
+    // Configure A.fallback = [B]; B.fallback = [A]. Both envs failed.
+    const a = await seedAgentEnv("ring-a", false);
+    const b = await seedAgentEnv("ring-b", false);
+    const { getDb } = await import("../src/db/client");
+    const db = getDb();
+    db.prepare("UPDATE agents SET fallback_json = ? WHERE id = ?").run(
+      JSON.stringify([{ agent_id: b.agentId, environment_id: b.envId }]),
+      a.agentId,
+    );
+
+    const { handleCreateSession } = await import("../src/handlers/sessions");
+    const res = await handleCreateSession(req("/v1/sessions", {
+      body: { agent: a.agentId, environment_id: a.envId },
+    }));
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: { message: string } };
+    expect(body.error.message).toMatch(/session creation failed/i);
+    expect(body.error.message).toMatch(/Attempted:/);
+  });
+
+  it("propagates non-fallback errors (scope denial) unchanged without trying alternates", async () => {
+    await bootDb();
+    const primary = await seedAgentEnv(
+      "scope-test",
+      true,
+      JSON.stringify([{ agent_id: "fallback_agent", environment_id: "fallback_env" }]),
+    );
+
+    const { createApiKey } = await import("../src/db/api_keys");
+    const { key: scopedKey } = createApiKey({
+      name: "scoped",
+      permissions: {
+        admin: false,
+        scope: { agents: ["different_agent"], environments: ["*"], vaults: ["*"] },
+      },
+      rawKey: "ck_scoped_nofallback_12345",
+    });
+
+    const { handleCreateSession } = await import("../src/handlers/sessions");
+    const res = await handleCreateSession(req("/v1/sessions", {
+      apiKey: scopedKey,
+      body: { agent: primary.agentId, environment_id: primary.envId },
+    }));
+    // Should be 403 (scope), not 400 (fallback exhausted)
+    expect(res.status).toBe(403);
   });
 });
 

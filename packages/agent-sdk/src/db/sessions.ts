@@ -188,38 +188,58 @@ export interface UsageDelta {
   cost_usd?: number;
 }
 
+/**
+ * Bump session counters and (if the session has an api_key_id) the
+ * owning key's spent_usd in a single transaction, so a crash between
+ * the two can't cause permanent under-reporting.
+ */
 export function bumpSessionStats(
   id: string,
   delta: { turn_count?: number; tool_calls_count?: number; duration_seconds?: number; active_seconds?: number },
   usage?: UsageDelta,
 ): void {
   const db = getDb();
-  db.prepare(
-    `UPDATE sessions SET
-       turn_count                        = turn_count + ?,
-       tool_calls_count                  = tool_calls_count + ?,
-       active_seconds                    = active_seconds + ?,
-       duration_seconds                  = duration_seconds + ?,
-       usage_input_tokens                = usage_input_tokens + ?,
-       usage_output_tokens               = usage_output_tokens + ?,
-       usage_cache_read_input_tokens     = usage_cache_read_input_tokens + ?,
-       usage_cache_creation_input_tokens = usage_cache_creation_input_tokens + ?,
-       usage_cost_usd                    = usage_cost_usd + ?,
-       updated_at                        = ?
-     WHERE id = ?`,
-  ).run(
-    delta.turn_count ?? 0,
-    delta.tool_calls_count ?? 0,
-    delta.active_seconds ?? 0,
-    delta.duration_seconds ?? 0,
-    usage?.input_tokens ?? 0,
-    usage?.output_tokens ?? 0,
-    usage?.cache_read_input_tokens ?? 0,
-    usage?.cache_creation_input_tokens ?? 0,
-    usage?.cost_usd ?? 0,
-    nowMs(),
-    id,
-  );
+  const tx = db.transaction(() => {
+    db.prepare(
+      `UPDATE sessions SET
+         turn_count                        = turn_count + ?,
+         tool_calls_count                  = tool_calls_count + ?,
+         active_seconds                    = active_seconds + ?,
+         duration_seconds                  = duration_seconds + ?,
+         usage_input_tokens                = usage_input_tokens + ?,
+         usage_output_tokens               = usage_output_tokens + ?,
+         usage_cache_read_input_tokens     = usage_cache_read_input_tokens + ?,
+         usage_cache_creation_input_tokens = usage_cache_creation_input_tokens + ?,
+         usage_cost_usd                    = usage_cost_usd + ?,
+         updated_at                        = ?
+       WHERE id = ?`,
+    ).run(
+      delta.turn_count ?? 0,
+      delta.tool_calls_count ?? 0,
+      delta.active_seconds ?? 0,
+      delta.duration_seconds ?? 0,
+      usage?.input_tokens ?? 0,
+      usage?.output_tokens ?? 0,
+      usage?.cache_read_input_tokens ?? 0,
+      usage?.cache_creation_input_tokens ?? 0,
+      usage?.cost_usd ?? 0,
+      nowMs(),
+      id,
+    );
+    // Fold the key's running total into the same transaction. If the
+    // session isn't attributed to a key, or the cost delta is zero, this
+    // is a no-op. The correlated subquery yields NULL for legacy sessions,
+    // and `WHERE id = NULL` matches no rows — safe.
+    const costDelta = usage?.cost_usd ?? 0;
+    if (costDelta !== 0) {
+      db.prepare(
+        `UPDATE api_keys
+            SET spent_usd = spent_usd + ?
+          WHERE id = (SELECT api_key_id FROM sessions WHERE id = ? AND api_key_id IS NOT NULL)`,
+      ).run(costDelta, id);
+    }
+  });
+  tx();
 }
 
 export function archiveSession(id: string): boolean {

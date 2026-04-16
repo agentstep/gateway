@@ -29,6 +29,7 @@ function hydrate(row: AgentRow, ver: AgentVersionRow): Agent {
     callable_agents: ver.callable_agents_json ? JSON.parse(ver.callable_agents_json) : [],
     skills: ver.skills_json ? (JSON.parse(ver.skills_json) as AgentSkill[]) : [],
     model_config: ver.model_config_json ? (JSON.parse(ver.model_config_json) as ModelConfig) : {},
+    fallback_json: row.fallback_json ?? null,
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
   };

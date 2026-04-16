@@ -57,16 +57,76 @@ const UpdateSchema = z.object({
   vault_ids: z.array(z.string()).optional(),
 });
 
+/**
+ * FallbackTuple declared on agents.fallback_json. On session-creation
+ * failure for classifiable reasons (retryable error, 5xx from upstream,
+ * env-not-ready), the handler walks this chain and tries each in order.
+ * Max 3 hops; cycles are detected and short-circuit exhaustion.
+ */
+interface FallbackTuple {
+  agent_id: string;
+  environment_id: string;
+}
+
+/**
+ * Errors thrown by session-creation that are candidates for triggering
+ * the fallback chain. Non-retryable 4xx (scope, vault ownership,
+ * engine-provider compat, billing, bad request) are propagated
+ * unchanged — those masquerade config mistakes as transient issues.
+ */
+function shouldFallback(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  // Our own env-not-ready guard throws badRequest. We explicitly want to
+  // try fallbacks for this — it's the canonical "primary is sick" case.
+  if (/environment is not ready/i.test(msg)) return true;
+  // Anthropic sync failures come through as Error("Anthropic API ...
+  // failed (NNN): ...") — fall back on 5xx and 429.
+  const upstreamMatch = /Anthropic API .* failed \((\d+)\)/i.exec(msg);
+  if (upstreamMatch) {
+    const code = Number(upstreamMatch[1]);
+    if (code >= 500 || code === 429) return true;
+    return false;
+  }
+  // Classify anything else via the existing retry taxonomy.
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { classifyError } = require("../sessions/errors") as typeof import("../sessions/errors");
+    return classifyError(msg).retryable;
+  } catch {
+    return false;
+  }
+}
+
+function parseFallbackJson(raw: string | null | undefined): FallbackTuple[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const out: FallbackTuple[] = [];
+    for (const item of parsed) {
+      if (item && typeof item.agent_id === "string" && typeof item.environment_id === "string") {
+        out.push({ agent_id: item.agent_id, environment_id: item.environment_id });
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
 export function handleCreateSession(request: Request): Promise<Response> {
   return routeWrap(request, async ({ auth }) => {
     const rawBody = await request.text();
     const body = rawBody ? JSON.parse(rawBody) : null;
     const parsed = CreateSchema.safeParse(body);
     if (!parsed.success) throw badRequest(parsed.error.message);
+    // Capture the narrowed payload once so the inner tryCreate closure can
+    // reach it without TS losing the narrowing across the async boundary.
+    const data = parsed.data;
 
-    const agentId = typeof parsed.data.agent === "string" ? parsed.data.agent : parsed.data.agent.id;
+    const initialAgentId = typeof data.agent === "string" ? data.agent : data.agent.id;
 
-    if (isProxied(agentId)) {
+    if (isProxied(initialAgentId)) {
       const proxyRes = await forwardToAnthropic(request, "/v1/sessions", { body: rawBody });
       if (proxyRes.ok) {
         try {
@@ -77,116 +137,196 @@ export function handleCreateSession(request: Request): Promise<Response> {
       return proxyRes;
     }
 
-    const agentVersion =
-      typeof parsed.data.agent === "string" ? undefined : parsed.data.agent.version;
+    const initialAgentVersion =
+      typeof data.agent === "string" ? undefined : data.agent.version;
 
-    const agent = getAgent(agentId, agentVersion);
-    if (!agent) throw notFound(`agent not found: ${agentId}`);
-
-    const env = getEnvironment(parsed.data.environment_id);
-    if (!env) throw notFound(`environment not found: ${parsed.data.environment_id}`);
-
-    // Virtual-key scope: fail early if the caller's API key is not allowed
-    // to use this agent, environment, or any requested vault. Happens after
-    // resolution so we can return 403 for "scope denies" vs 404 for "resource
-    // doesn't exist" — no id-probing via scope errors.
+    // Import helpers once up-front.
     const { checkResourceScope } = await import("../auth/scope");
-    checkResourceScope(auth, {
-      agent: agent.id,
-      env: env.id,
-      vaults: parsed.data.vault_ids,
-    });
+    const { getVault } = await import("../db/vaults");
 
-    // Engine-provider compatibility: anthropic provider only runs Claude models
-    if (env.config?.provider === "anthropic" && agent.engine !== "claude") {
-      throw badRequest(
-        `${agent.engine} engine cannot run on the anthropic provider — ` +
-        `Anthropic's managed agents API only supports Claude models. ` +
-        `Use a container provider (docker, e2b, fly, etc.) instead.`,
-      );
-    }
+    /**
+     * Attempt to create a session for (agentId, envId, agentVersion?).
+     * Each failure throws; callers decide whether to retry the next
+     * fallback based on `shouldFallback(err)`. Scope and vault-ownership
+     * are validated per-attempt so fallback can't be a privilege
+     * escalation.
+     */
+    async function tryCreate(
+      agentId: string,
+      envId: string,
+      agentVersion: number | undefined,
+    ): Promise<Response> {
+      const agent = getAgent(agentId, agentVersion);
+      if (!agent) throw notFound(`agent not found: ${agentId}`);
 
-    // Vault ownership: all vault_ids must belong to this agent
-    if (parsed.data.vault_ids?.length) {
-      const { getVault } = await import("../db/vaults");
-      for (const vid of parsed.data.vault_ids) {
-        const vault = getVault(vid);
-        if (!vault) throw badRequest(`vault not found: ${vid}`);
-        if (vault.agent_id !== agent.id) {
-          throw badRequest(
-            `vault ${vid} belongs to a different agent — vaults are scoped per-agent`,
-          );
-        }
-      }
-    }
+      const env = getEnvironment(envId);
+      if (!env) throw notFound(`environment not found: ${envId}`);
 
-    // ── Anthropic provider: sync local config → Anthropic, then proxy ──
-    if (env.config?.provider === "anthropic") {
-      // Prefer vault-provided key, fall back to server config
-      let apiKey: string | undefined;
-      if (parsed.data.vault_ids?.length) {
-        const { listEntries } = await import("../db/vaults");
-        for (const vid of parsed.data.vault_ids) {
-          const entries = listEntries(vid);
-          const found = entries.find(e => e.key === "ANTHROPIC_API_KEY");
-          if (found) { apiKey = found.value; break; }
-        }
-      }
-      if (!apiKey) {
-        const cfg = getConfig();
-        apiKey = cfg.anthropicApiKey;
-      }
-      if (!apiKey) throw badRequest("ANTHROPIC_API_KEY required for anthropic provider (add to vault or .env)");
-
-      const { remoteSessionId } = await syncAndCreateSession({
-        agentId,
-        agentVersion: typeof parsed.data.agent === "string" ? undefined : parsed.data.agent.version,
-        environmentId: parsed.data.environment_id,
-        vaultIds: parsed.data.vault_ids ?? undefined,
-        title: parsed.data.title ?? undefined,
-        apiKey,
+      // Virtual-key scope per-attempt.
+      checkResourceScope(auth, {
+        agent: agent.id,
+        env: env.id,
+        vaults: data.vault_ids,
       });
 
-      // Create local session record (for UI, event bus, analytics)
+      // Engine-provider compatibility: anthropic provider only runs Claude models
+      if (env.config?.provider === "anthropic" && agent.engine !== "claude") {
+        throw badRequest(
+          `${agent.engine} engine cannot run on the anthropic provider — ` +
+          `Anthropic's managed agents API only supports Claude models. ` +
+          `Use a container provider (docker, e2b, fly, etc.) instead.`,
+        );
+      }
+
+      // Vault ownership: all vault_ids must belong to this agent
+      if (data.vault_ids?.length) {
+        for (const vid of data.vault_ids) {
+          const vault = getVault(vid);
+          if (!vault) throw badRequest(`vault not found: ${vid}`);
+          if (vault.agent_id !== agent.id) {
+            throw badRequest(
+              `vault ${vid} belongs to a different agent — vaults are scoped per-agent`,
+            );
+          }
+        }
+      }
+
+      // ── Anthropic provider: sync local config → Anthropic, then proxy ──
+      if (env.config?.provider === "anthropic") {
+        // Prefer vault-provided key, fall back to server config
+        let apiKey: string | undefined;
+        if (data.vault_ids?.length) {
+          const { listEntries } = await import("../db/vaults");
+          for (const vid of data.vault_ids) {
+            const entries = listEntries(vid);
+            const found = entries.find(e => e.key === "ANTHROPIC_API_KEY");
+            if (found) { apiKey = found.value; break; }
+          }
+        }
+        if (!apiKey) {
+          const cfg = getConfig();
+          apiKey = cfg.anthropicApiKey;
+        }
+        if (!apiKey) throw badRequest("ANTHROPIC_API_KEY required for anthropic provider (add to vault or .env)");
+
+        const { remoteSessionId } = await syncAndCreateSession({
+          agentId: agent.id,
+          agentVersion: agent.version,
+          environmentId: env.id,
+          vaultIds: data.vault_ids ?? undefined,
+          title: data.title ?? undefined,
+          apiKey,
+        });
+
+        const session = createSession({
+          agent_id: agent.id,
+          agent_version: agent.version,
+          environment_id: env.id,
+          title: data.title ?? null,
+          metadata: { ...data.metadata, _anthropic_session_id: remoteSessionId },
+          max_budget_usd: data.max_budget_usd ?? null,
+          resources: data.resources?.length ? data.resources : null,
+          vault_ids: data.vault_ids?.length ? data.vault_ids : null,
+          api_key_id: auth.keyId,
+        });
+
+        upsertSync(session.id, "session", remoteSessionId);
+        markProxied(session.id, "session");
+        getActor(session.id);
+        return jsonOk(session, 201);
+      }
+
+      if (env.state !== "ready") {
+        throw badRequest(
+          `environment is not ready (state=${env.state}${env.state_message ? `: ${env.state_message}` : ""})`,
+        );
+      }
+
       const session = createSession({
         agent_id: agent.id,
         agent_version: agent.version,
         environment_id: env.id,
-        title: parsed.data.title ?? null,
-        metadata: { ...parsed.data.metadata, _anthropic_session_id: remoteSessionId },
-        max_budget_usd: parsed.data.max_budget_usd ?? null,
-        resources: parsed.data.resources?.length ? parsed.data.resources : null,
-        vault_ids: parsed.data.vault_ids?.length ? parsed.data.vault_ids : null,
+        title: data.title ?? null,
+        metadata: data.metadata ?? {},
+        max_budget_usd: data.max_budget_usd ?? null,
+        resources: data.resources?.length ? data.resources : null,
+        vault_ids: data.vault_ids?.length ? data.vault_ids : null,
         api_key_id: auth.keyId,
       });
 
-      // Map local session → remote session, mark as proxied
-      upsertSync(session.id, "session", remoteSessionId);
-      markProxied(session.id, "session");
       getActor(session.id);
       return jsonOk(session, 201);
     }
 
-    if (env.state !== "ready") {
-      throw badRequest(
-        `environment is not ready (state=${env.state}${env.state_message ? `: ${env.state_message}` : ""})`,
-      );
+    // Build the candidate chain: [primary, ...fallbacks-from-primary's-agent-row].
+    // Cap at 3 hops total. Cycle-detect via visited (agent_id, env_id).
+    const MAX_HOPS = 3;
+    const primary: FallbackTuple = {
+      agent_id: initialAgentId,
+      environment_id: data.environment_id,
+    };
+    const primaryAgent = getAgent(initialAgentId, initialAgentVersion);
+    const candidates: FallbackTuple[] = [primary];
+    if (primaryAgent) {
+      for (const fb of parseFallbackJson(primaryAgent.fallback_json ?? null)) {
+        candidates.push(fb);
+        if (candidates.length >= MAX_HOPS) break;
+      }
     }
 
-    const session = createSession({
-      agent_id: agent.id,
-      agent_version: agent.version,
-      environment_id: env.id,
-      title: parsed.data.title ?? null,
-      metadata: parsed.data.metadata ?? {},
-      max_budget_usd: parsed.data.max_budget_usd ?? null,
-      resources: parsed.data.resources?.length ? parsed.data.resources : null,
-      vault_ids: parsed.data.vault_ids?.length ? parsed.data.vault_ids : null,
-      api_key_id: auth.keyId,
-    });
+    const attempted: Array<FallbackTuple & { error: string }> = [];
+    const visited = new Set<string>();
+    let lastError: unknown = null;
 
-    getActor(session.id);
-    return jsonOk(session, 201);
+    for (let i = 0; i < candidates.length; i++) {
+      const cand = candidates[i];
+      const visitKey = `${cand.agent_id}:${cand.environment_id}`;
+      if (visited.has(visitKey)) continue; // cycle
+      visited.add(visitKey);
+
+      try {
+        const res = await tryCreate(
+          cand.agent_id,
+          cand.environment_id,
+          i === 0 ? initialAgentVersion : undefined,
+        );
+        // On fallback success, emit a telemetry event so the client sees
+        // which step succeeded. Best-effort — don't let emit failure
+        // derail the response.
+        if (i > 0) {
+          try {
+            const sessionJson = await res.clone().json() as { id: string };
+            const sessionId = sessionJson.id;
+            appendEvent(sessionId, {
+              type: "session.fallback_used",
+              payload: { from: primary, to: cand, attempted },
+              origin: "server",
+              processedAt: nowMs(),
+            });
+          } catch { /* best-effort */ }
+        }
+        return res;
+      } catch (err) {
+        lastError = err;
+        const msg = err instanceof Error ? err.message : String(err);
+        attempted.push({ ...cand, error: msg });
+        if (!shouldFallback(err)) {
+          // Non-retryable (403, 400 scope/config, billing, etc.) —
+          // propagate unchanged. No fallback for user-error.
+          throw err;
+        }
+      }
+    }
+
+    // All candidates exhausted. Throw a wrapped error that surfaces the
+    // full attempted chain, not just the last underlying failure — so an
+    // operator can tell at a glance "fallback tried A → B, both failed".
+    // lastError is preserved in the log surface; the response body gets
+    // the structured message.
+    const tail = attempted[attempted.length - 1]?.error ?? (lastError instanceof Error ? lastError.message : "unknown");
+    const chain = attempted.map(a => `${a.agent_id}/${a.environment_id}`).join(" → ");
+    const msg = `session creation failed after ${attempted.length} attempts. Attempted: ${chain}. Last error: ${tail}.`;
+    throw badRequest(msg);
   });
 }
 
