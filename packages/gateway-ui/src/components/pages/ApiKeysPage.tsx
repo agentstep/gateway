@@ -39,6 +39,7 @@ import {
   type KeyPermissions,
 } from "@/hooks/use-api-keys";
 import { KeyCostOverTime } from "@/components/dashboard/KeyCostOverTime";
+import { UpstreamKeysSection } from "@/components/settings/UpstreamKeysSection";
 
 function maskKey(key: string): string {
   if (key.length <= 10) return "••••••••";
@@ -313,7 +314,7 @@ export function ApiKeysPage() {
             </Dialog>
           </div>
 
-          <div className="rounded-lg border border-border overflow-hidden">
+          <div className="rounded-lg border border-border overflow-hidden mb-6">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -367,6 +368,8 @@ export function ApiKeysPage() {
               </TableBody>
             </Table>
           </div>
+
+          <UpstreamKeysSection />
         </>
       )}
 
