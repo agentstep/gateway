@@ -2,6 +2,19 @@
   "license": "Apache-2.0",
   "name": "@agentstep/agent-sdk",
   "version": "0.3.5",
+  "description": "Core engine for AgentStep Gateway — backends, sandbox providers, session orchestration, and vault encryption.",
+  "keywords": [
+    "anthropic",
+    "managed-agents",
+    "claude-code",
+    "codex",
+    "opencode",
+    "gemini",
+    "sandbox",
+    "agent",
+    "llm",
+    "sdk"
+  ],
   "private": false,
   "type": "module",
   "main": "src/index.ts",
@@ -16,6 +29,11 @@
     "./handlers": "./src/handlers/index.ts",
     "./*": "./src/*.ts"
   },
+  "homepage": "https://www.agentstep.com",
+  "bugs": {
+    "url": "https://github.com/agentstep/gateway/issues"
+  },
+  "author": "AgentStep",
   "repository": {
     "type": "git",
     "url": "https://github.com/agentstep/gateway.git",

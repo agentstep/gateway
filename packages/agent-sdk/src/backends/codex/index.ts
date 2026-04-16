@@ -1,13 +1,8 @@
 /**
  * Codex backend: drives OpenAI's `codex exec` on sprites.dev containers.
  *
- * Ported from
- * 
- * (the  codex provider), adapted for our sprite-only
- * execution model. Opencompletions only ran codex in its local backend;
- * this adapter is the first time codex runs inside a sprites.dev sprite,
- * so the wrapper script + install flow mirror the opencode adapter's
- * sprite-side patterns.
+ * The wrapper script + install flow mirror the opencode adapter's
+ * sprite-side patterns (see `wrapper-script.ts`).
  *
  * Custom tool re-entry is NOT supported by codex — codex exec has no
  * equivalent of claude's --input-format stream-json. buildTurn rejects

@@ -4,6 +4,37 @@ All notable changes to AgentStep Gateway are documented here. Dates are UTC.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project uses [SemVer](https://semver.org/).
 
+## [0.3.5] — 2026-04-16
+
+### Security
+
+- **Fastify + Next UI adapters** now gate `window.__MA_API_KEY__` injection
+  to loopback-remote requests (previously only the Hono adapter did). Without
+  this, any LAN-reachable deployment of either adapter still leaked the
+  gateway's API key via the HTML returned at `/`.
+- **Docker vault key persistence.** `VAULT_ENCRYPTION_KEY_FILE` is now
+  honored by the vault module. The Dockerfile sets it to
+  `/home/node/app/data/.vault-key` (inside the `VOLUME`) so the key
+  survives container recreation. Previously the key landed in `.env`
+  outside the volume, orphaning all encrypted entries on every restart.
+- **Telemetry error path no longer leaks raw argv.** The `.catch()`
+  handler at `packages/gateway/src/index.ts` now sends only the command
+  name chain, matching the success path and `docs/telemetry.md`.
+- **Dev server default bind.** `npm run dev` is now loopback
+  (`HOST=0.0.0.0` to expose), matching `gateway serve`.
+- **Next adapter loopback detection fails closed.** `x-forwarded-for`
+  and `x-real-ip` are only trusted under explicit `TRUST_PROXY=1`;
+  otherwise no auto-login.
+
+### Operational
+
+- Repository history re-squashed. Pre-0.3.1 tags contained committed
+  SQLite DB files with vault secrets. All leaked keys have been rotated
+  with their providers; the old commits and tags are removed from both
+  public remotes. Single-commit history starts at v0.3.5.
+- `docker-compose.yml` volume path corrected to `/home/node/app/data`
+  (was `/app/data` — would have bypassed the volume entirely).
+
 ## [0.3.4] — 2026-04-16
 
 ### Added

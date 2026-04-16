@@ -83,16 +83,16 @@ Found a security issue? See [`SECURITY.md`](SECURITY.md).
 
 ## Packages
 
-| Package | npm | Description |
-|---------|-----|-------------|
-| [`@agentstep/agent-sdk`](https://www.npmjs.com/package/@agentstep/agent-sdk) | `packages/agent-sdk` | Engine — backends, providers, DB, session orchestration |
-| [`@agentstep/gateway`](https://www.npmjs.com/package/@agentstep/gateway) | `packages/gateway` | CLI (`gateway`) — single-file bundle with UI embedded |
-| `@agentstep/gateway-ui` | `packages/gateway-ui` | React + shadcn/ui web app (inlined into the CLI bundle) |
-| `@agentstep/gateway-hono` | `packages/gateway-hono` | Hono server adapter (powers `gateway serve`) |
-| `@agentstep/gateway-fastify` | `packages/gateway-fastify` | Fastify server adapter (reference) |
-| `@agentstep/gateway-next` | `packages/gateway-next` | Next.js integration |
+| Package | Published | Description |
+|---------|-----------|-------------|
+| [`@agentstep/agent-sdk`](https://www.npmjs.com/package/@agentstep/agent-sdk) | npm | Core engine — backends, providers, DB, session orchestration, vault crypto |
+| [`@agentstep/gateway`](https://www.npmjs.com/package/@agentstep/gateway) | npm | CLI (`gateway`) — single-file bundle with UI embedded |
+| `@agentstep/gateway-ui` | source only | React + shadcn/ui web app (inlined into the CLI bundle) |
+| `@agentstep/gateway-hono` | source only | Hono server adapter (powers `gateway serve`) |
+| `@agentstep/gateway-fastify` | source only | Fastify server adapter (reference implementation) |
+| `@agentstep/gateway-next` | source only | Next.js integration (reference implementation) |
 
-The server packages are reference implementations. The hosted product ([agentstep.com](https://www.agentstep.com)) uses `@agentstep/agent-sdk` directly, same handler functions.
+The server packages are reference implementations. The hosted product ([agentstep.com](https://www.agentstep.com)) uses `@agentstep/agent-sdk` directly — same handler functions, same event model.
 
 ## Development
 

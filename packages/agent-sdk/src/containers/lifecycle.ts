@@ -30,6 +30,12 @@ import { dockerProvider } from "../providers/docker";
 import { resolveVaultSecrets } from "../providers/resolve-secrets";
 import type { SessionResource, AgentSkill } from "../types";
 
+// Gate container-lifecycle logs behind DEBUG_LIFECYCLE=1 so a busy
+// gateway's logs aren't dominated by per-session creation chatter.
+const lcLog = (...args: unknown[]): void => {
+  if (process.env.DEBUG_LIFECYCLE === "1") console.log(...args);
+};
+
 const SPRITE_NAME_PREFIX = "ca-sess-";
 
 /**
@@ -153,9 +159,9 @@ export async function acquireForFirstTurn(sessionId: string): Promise<string> {
   } : provider;
 
   const name = deriveSpriteName(sessionId);
-  console.log(`[lifecycle] ${sessionId} creating container via ${sp.name}...`);
+  lcLog(`[lifecycle] ${sessionId} creating container via ${sp.name}...`);
   await sp.create({ name });
-  console.log(`[lifecycle] ${sessionId} container created: ${name}`);
+  lcLog(`[lifecycle] ${sessionId} container created: ${name}`);
 
   // Backends with slow prep (e.g. opencode's npm install) bracket the work
   // with span events so the client sees something on the event stream
@@ -172,9 +178,9 @@ export async function acquireForFirstTurn(sessionId: string): Promise<string> {
   }
 
   try {
-    console.log(`[lifecycle] ${sessionId} installing ${backend.name} engine on container...`);
+    lcLog(`[lifecycle] ${sessionId} installing ${backend.name} engine on container...`);
     await backend.prepareOnSprite(name, sp);
-    console.log(`[lifecycle] ${sessionId} engine installed`);
+    lcLog(`[lifecycle] ${sessionId} engine installed`);
 
     // Install custom tool bridge if the agent has custom tools or threads_enabled (claude backend only)
     if (agent.engine === "claude") {
@@ -212,9 +218,9 @@ export async function acquireForFirstTurn(sessionId: string): Promise<string> {
 
     // Install agent skills into the container
     if (agent.skills && agent.skills.length > 0) {
-      console.log(`[lifecycle] ${sessionId} installing ${agent.skills.length} skill(s)...`);
+      lcLog(`[lifecycle] ${sessionId} installing ${agent.skills.length} skill(s)...`);
       await installSkills(name, sp, agent.skills, agent.engine);
-      console.log(`[lifecycle] ${sessionId} skills installed`);
+      lcLog(`[lifecycle] ${sessionId} skills installed`);
     }
   } catch (err) {
     await sp.delete(name).catch(() => {});

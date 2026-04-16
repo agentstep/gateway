@@ -1,9 +1,6 @@
 /**
  * Stateful translator: opencode NDJSON → Managed Agents events.
  *
- * Ported from
- * 
- *
  * Opencode's event model (emitted by `opencode run --format json`):
  *   - `step_start` — an agent step is starting. Carries `sessionID` on the
  *     root event object. First occurrence marks the first turn.

@@ -9,8 +9,6 @@
  *      plan §I8.)
  *   3. Sprite orphan reconciler: best-effort pruning of old sprites whose
  *      sessions no longer exist.
- *
- * Pattern from 
  */
 import fs from "node:fs";
 import path from "node:path";

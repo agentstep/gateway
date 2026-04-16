@@ -4,10 +4,6 @@
  * Extracts an API key from `x-api-key` (preferred per Managed Agents spec)
  * or `Authorization: Bearer <token>`. Hashes with sha256 and looks it up in
  * the `api_keys` table. Returns an AuthContext on success.
- *
- * Simplified rewrite of
- *  —
- * no WorkOS, no grace cache, no admin bypass key.
  */
 import { findByRawKey } from "../db/api_keys";
 import type { AuthContext } from "../types";

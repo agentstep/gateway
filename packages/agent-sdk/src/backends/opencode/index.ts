@@ -1,14 +1,7 @@
 /**
  * Opencode backend: drives sst/opencode-ai's `opencode run` on sprites.dev
- * containers.
- *
- * Ported from
- * 
- * (the  opencode provider), adapted for our sprite-only
- * execution model. Opencompletions only ran opencode in its local backend;
- * this adapter is the first time opencode runs inside a sprites.dev sprite,
- * so the wrapper script + install flow are new (see wrapper-script.ts and
- * setup.ts).
+ * containers. See wrapper-script.ts and setup.ts for the sprite-side
+ * install + invocation flow.
  *
  * Custom tool re-entry (the stream-json user frame path claude uses) is NOT
  * supported by opencode — `opencode run` has no equivalent input format.

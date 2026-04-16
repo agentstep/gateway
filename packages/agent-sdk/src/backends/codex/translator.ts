@@ -1,9 +1,6 @@
 /**
  * Stateful translator: codex NDJSON → Managed Agents events.
  *
- * Ported from
- * 
- *
  * Codex's event model (emitted by `codex exec --json`):
  *   - `thread.started` — session init with `thread_id`
  *   - `item.completed` — work item finished; `item.type` determines the shape:

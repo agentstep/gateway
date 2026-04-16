@@ -1,9 +1,6 @@
 /**
  * Build the `opencode run` argv for one turn.
  *
- * Ported from
- * 
- *
  * Opencode-specific constraints:
  * - No --max-turns (opencode has no equivalent; silently ignored)
  * - No --allowed-tools / --disallowed-tools (tools are configured via

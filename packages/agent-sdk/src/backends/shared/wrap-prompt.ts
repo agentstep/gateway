@@ -4,8 +4,6 @@
  * the user prompt with a separator. If no system prompt, return the prompt
  * unchanged.
  *
- * Pattern from
- *
  * (opencode) and 253-256 (codex) — both use the identical wrapping format.
  */
 export function wrapPromptWithSystem(
