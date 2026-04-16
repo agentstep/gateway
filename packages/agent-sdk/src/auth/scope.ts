@@ -12,13 +12,79 @@
  * is already exposed but unused in v0.4.
  */
 import type { AuthContext } from "../types";
-import { forbidden } from "../errors";
+import { badRequest, forbidden, notFound } from "../errors";
 
-/** Throws 403 unless the caller is an admin. */
+/** Throws 403 unless the caller is an admin (global or tenant). */
 export function requireAdmin(auth: AuthContext): void {
   if (!auth.permissions.admin) {
     throw forbidden("admin permission required");
   }
+}
+
+/** Throws 403 unless the caller is a global admin (null tenant + admin). */
+export function requireGlobalAdmin(auth: AuthContext): void {
+  if (!auth.isGlobalAdmin) {
+    throw forbidden("global admin permission required");
+  }
+}
+
+/**
+ * The tenant filter to apply to a list/get query.
+ *
+ * - Global admin (null tenant + admin) → `null` = no filter, see everything.
+ * - Tenant admin/user → their tenantId, which callers append as
+ *   `WHERE tenant_id = ?`.
+ *
+ * Anything not global-admin is tenant-filtered, even if the caller has
+ * admin rights within their tenant. This is the whole point of tenancy.
+ */
+export function tenantFilter(auth: AuthContext): string | null {
+  if (auth.isGlobalAdmin) return null;
+  return auth.tenantId;
+}
+
+/**
+ * Assert the resource's `tenant_id` matches the caller's tenant (or the
+ * caller is a global admin). Throws 404 (not 403) on mismatch so callers
+ * can't probe resource IDs from other tenants.
+ */
+export function assertResourceTenant(
+  auth: AuthContext,
+  resourceTenantId: string | null,
+  notFoundMsg: string,
+): void {
+  if (auth.isGlobalAdmin) return;
+  if (resourceTenantId === auth.tenantId) return;
+  // Different tenant (or caller has no tenant): pretend not found.
+  throw notFound(notFoundMsg);
+}
+
+/**
+ * Stamp the tenant_id for a CREATE operation from the caller's auth
+ * context. Global admins must pass an explicit tenant_id in the body
+ * (caller validates that); tenant admins/users always create in their
+ * own tenant.
+ *
+ * Returns the tenant id to use, or throws 400 if global admin didn't
+ * supply one.
+ */
+export function resolveCreateTenant(
+  auth: AuthContext,
+  bodyTenantId: string | null | undefined,
+): string {
+  if (auth.isGlobalAdmin) {
+    if (!bodyTenantId) {
+      throw badRequest("global admin must specify tenant_id in the request body");
+    }
+    return bodyTenantId;
+  }
+  // Tenant admin/user — always stamp with their own tenant.
+  if (!auth.tenantId) {
+    // Defensive: non-global-admin with null tenant is a corrupt auth
+    // context. Refuse rather than silently stamp null.
+    throw forbidden("this key has no tenant assigned");
+  }
+  return auth.tenantId;
 }
 
 /** True if `id` is present in the allow-list (direct match OR "*" sentinel). */

@@ -26,11 +26,18 @@ export async function authenticate(request: Request): Promise<AuthContext> {
   const row = findByRawKey(key);
   if (!row) throw unauthorized();
 
+  const permissions = hydratePermissions(row.permissions_json);
   return {
     keyId: row.id,
     name: row.name,
-    permissions: hydratePermissions(row.permissions_json),
+    permissions,
     tenantId: row.tenant_id,
+    // Global admin: null tenant + admin bit. Legacy ["*"] keys hydrate
+    // as {admin: true, scope: null} with tenantId still null, so they
+    // remain global admins across a 0.4 → 0.5 upgrade. This is the
+    // documented default; `gateway tenants migrate-legacy` is the
+    // explicit step that changes it.
+    isGlobalAdmin: row.tenant_id === null && permissions.admin,
     budgetUsd: row.budget_usd ?? null,
     rateLimitRpm: row.rate_limit_rpm ?? null,
     spentUsd: row.spent_usd ?? 0,

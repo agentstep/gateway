@@ -52,6 +52,11 @@ async function doInit(): Promise<void> {
   // 1. Bootstrap DB + migrations
   getDb();
 
+  // 1a. Seed the `default` tenant row (v0.5+). Idempotent — does nothing
+  // if the row is already there.
+  const { seedDefaultTenant } = await import("./db/tenants");
+  seedDefaultTenant();
+
   // 1b. Auto-seed a default API key if none exist
   seedDefaultApiKey();
 

@@ -458,4 +458,43 @@ export function runMigrations(db: InstanceType<typeof Database>): void {
     `CREATE INDEX IF NOT EXISTS idx_upstream_keys_provider_active
        ON upstream_keys(provider, disabled_at, last_used_at)`,
   );
+
+  // ---------------------------------------------------------------------------
+  // v0.5.0 — Tenancy
+  // ---------------------------------------------------------------------------
+
+  // tenants table. `default` tenant is seeded by init.ts on first boot via
+  // INSERT OR IGNORE. Archived tenants stay in the table — cost metrics and
+  // audit logs can still reference them by id.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS tenants (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      archived_at INTEGER
+    )
+  `);
+
+  // tenant_id on every resource that needs tenant isolation. Null =
+  // "legacy, global-admin-only" until the operator runs
+  // `gateway tenants migrate-legacy` to assign it to a tenant. The
+  // migration is opt-in so operators can see the transition.
+  //
+  // Out of scope for v0.5: memory_stores, files, proxy_resources,
+  // settings, skills_catalog, anthropic_sync, events (event access is
+  // gated via the parent session's tenant). Documented in docs/tenants.md.
+  for (const table of ["agents", "environments", "vaults", "sessions"]) {
+    const cols = db
+      .prepare(`PRAGMA table_info(${table})`)
+      .all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === "tenant_id")) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN tenant_id TEXT`);
+    }
+  }
+  // api_keys.tenant_id already exists from v0.4 (reserved column).
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_agents_tenant       ON agents(tenant_id)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_environments_tenant ON environments(tenant_id)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_vaults_tenant       ON vaults(tenant_id)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_tenant     ON sessions(tenant_id)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_api_keys_tenant     ON api_keys(tenant_id)`);
 }

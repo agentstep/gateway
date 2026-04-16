@@ -46,6 +46,17 @@ export { pushPendingUserInput, type TurnInput } from "./state";
 // DB
 export { getDb, closeDb } from "./db/client";
 export { createApiKey, listApiKeys } from "./db/api_keys";
+export {
+  DEFAULT_TENANT_ID,
+  seedDefaultTenant,
+  createTenant,
+  getTenant,
+  listTenants,
+  archiveTenant,
+  renameTenant,
+  assignNullRowsToTenant,
+  countNullTenantRows,
+} from "./db/tenants";
 export { createAgent, getAgent, updateAgent, archiveAgent, listAgents } from "./db/agents";
 export {
   createSession,

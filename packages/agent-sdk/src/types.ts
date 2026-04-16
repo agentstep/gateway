@@ -401,15 +401,34 @@ export interface AuthContext {
   name: string;
   permissions: KeyPermissions;
   /**
-   * Reserved for v0.5 full tenant isolation. Always exposed from the
-   * middleware so v0.5 doesn't need another AuthContext change. No v0.4
-   * handler reads this — always null on the seed key.
+   * The tenant this key belongs to. Null = global admin (cross-tenant visibility).
+   * All non-global-admin operations filter by this tenant.
    */
   tenantId: string | null;
+  /** Convenience: tenantId === null && permissions.admin. */
+  isGlobalAdmin: boolean;
   /** Null = unlimited. In USD. Enforced in the driver pre-turn. */
   budgetUsd: number | null;
   /** Null = unlimited. Fixed 60-second window enforced in routeWrap. */
   rateLimitRpm: number | null;
   /** Running total of USD spent by this key. Updated transactionally alongside session usage. */
   spentUsd: number;
+}
+
+// ---------------------------------------------------------------------------
+// Tenants (v0.5)
+// ---------------------------------------------------------------------------
+
+export interface TenantRow {
+  id: string;
+  name: string;
+  created_at: number;
+  archived_at: number | null;
+}
+
+export interface Tenant {
+  id: string;
+  name: string;
+  created_at: string;
+  archived_at: string | null;
 }
