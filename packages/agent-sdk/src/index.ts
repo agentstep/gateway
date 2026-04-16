@@ -107,6 +107,16 @@ export { forwardToAnthropic, validateAnthropicProxy } from "./proxy/forward";
 export { releaseSession } from "./containers/lifecycle";
 export { kickoffEnvironmentSetup } from "./containers/setup";
 
+// Webhook signing (v0.5)
+export {
+  computeSignature,
+  verifyWebhookSignature,
+  SIGNATURE_HEADER,
+  TIMESTAMP_HEADER,
+  type VerifyInput,
+  type VerifyResult,
+} from "./webhooks/signing";
+
 // OpenAPI
 export { buildOpenApiDocument } from "./openapi/spec";
 

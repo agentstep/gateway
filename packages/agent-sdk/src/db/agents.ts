@@ -24,6 +24,7 @@ function hydrate(row: AgentRow, ver: AgentVersionRow): Agent {
     engine: (ver.backend ?? "claude") as BackendName,
     webhook_url: ver.webhook_url ?? null,
     webhook_events: ver.webhook_events_json ? (JSON.parse(ver.webhook_events_json) as string[]) : ["session.status_idle", "session.status_running", "session.error"],
+    webhook_signing_enabled: ver.webhook_secret != null && ver.webhook_secret.length > 0,
     threads_enabled: Boolean(ver.threads_enabled),
     confirmation_mode: Boolean(ver.confirmation_mode),
     callable_agents: ver.callable_agents_json ? JSON.parse(ver.callable_agents_json) : [],
@@ -44,6 +45,8 @@ export function createAgent(input: {
   backend?: BackendName;
   webhook_url?: string | null;
   webhook_events?: string[];
+  /** v0.5: HMAC-SHA256 shared secret for webhook payload signing. */
+  webhook_secret?: string | null;
   threads_enabled?: boolean;
   confirmation_mode?: boolean;
   callable_agents?: Array<{ type: "agent"; id: string; version?: number }>;
@@ -64,8 +67,8 @@ export function createAgent(input: {
 
     db.prepare(
       `INSERT INTO agent_versions
-         (agent_id, version, model, system, tools_json, mcp_servers_json, backend, webhook_url, webhook_events_json, threads_enabled, confirmation_mode, callable_agents_json, skills_json, model_config_json, created_at)
-       VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (agent_id, version, model, system, tools_json, mcp_servers_json, backend, webhook_url, webhook_events_json, webhook_secret, threads_enabled, confirmation_mode, callable_agents_json, skills_json, model_config_json, created_at)
+       VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       id,
       input.model,
@@ -75,6 +78,7 @@ export function createAgent(input: {
       input.backend ?? "claude",
       input.webhook_url ?? null,
       JSON.stringify(input.webhook_events ?? ["session.status_idle", "session.status_running", "session.error"]),
+      input.webhook_secret ?? null,
       input.threads_enabled ? 1 : 0,
       input.confirmation_mode ? 1 : 0,
       input.callable_agents?.length ? JSON.stringify(input.callable_agents) : null,
@@ -116,6 +120,12 @@ export function updateAgent(
     mcp_servers?: Record<string, McpServerConfig>;
     webhook_url?: string | null;
     webhook_events?: string[];
+    /**
+     * v0.5: pass a string to set/rotate the webhook signing secret, or
+     * `null` to clear. `undefined` keeps the existing value (so PATCH
+     * callers that don't mention the field won't accidentally nuke it).
+     */
+    webhook_secret?: string | null;
     threads_enabled?: boolean;
     confirmation_mode?: boolean;
     callable_agents?: Array<{ type: "agent"; id: string; version?: number }>;
@@ -127,14 +137,20 @@ export function updateAgent(
   const existing = getAgent(id);
   if (!existing) return null;
 
+  // Need the raw existing secret — it's not surfaced via getAgent/hydrate.
+  const existingVer = db
+    .prepare(`SELECT webhook_secret FROM agent_versions WHERE agent_id = ? AND version = ?`)
+    .get(id, existing.version) as { webhook_secret: string | null } | undefined;
+  const carriedSecret = existingVer?.webhook_secret ?? null;
+
   const newVersion = existing.version + 1;
   const now = nowMs();
 
   const tx = db.transaction(() => {
     db.prepare(
       `INSERT INTO agent_versions
-         (agent_id, version, model, system, tools_json, mcp_servers_json, backend, webhook_url, webhook_events_json, threads_enabled, confirmation_mode, callable_agents_json, skills_json, model_config_json, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (agent_id, version, model, system, tools_json, mcp_servers_json, backend, webhook_url, webhook_events_json, webhook_secret, threads_enabled, confirmation_mode, callable_agents_json, skills_json, model_config_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       id,
       newVersion,
@@ -145,6 +161,7 @@ export function updateAgent(
       existing.engine,
       input.webhook_url !== undefined ? input.webhook_url : existing.webhook_url,
       JSON.stringify(input.webhook_events ?? existing.webhook_events),
+      input.webhook_secret !== undefined ? input.webhook_secret : carriedSecret,
       input.threads_enabled !== undefined ? (input.threads_enabled ? 1 : 0) : (existing.threads_enabled ? 1 : 0),
       input.confirmation_mode !== undefined ? (input.confirmation_mode ? 1 : 0) : (existing.confirmation_mode ? 1 : 0),
       input.callable_agents !== undefined ? (input.callable_agents.length ? JSON.stringify(input.callable_agents) : null) : (existing.callable_agents.length ? JSON.stringify(existing.callable_agents) : null),

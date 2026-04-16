@@ -497,4 +497,15 @@ export function runMigrations(db: InstanceType<typeof Database>): void {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_vaults_tenant       ON vaults(tenant_id)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_tenant     ON sessions(tenant_id)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_api_keys_tenant     ON api_keys(tenant_id)`);
+
+  // Webhook HMAC (v0.5 PR4a). Per-agent-version shared secret used to
+  // sign webhook payloads. When null, webhooks are delivered unsigned
+  // (matches pre-v0.5 behavior). Null -> unsigned delivery; set → all
+  // deliveries include X-AgentStep-Signature: sha256=<hex(hmac)>.
+  const agentVerColsHook = db
+    .prepare(`PRAGMA table_info(agent_versions)`)
+    .all() as Array<{ name: string }>;
+  if (!agentVerColsHook.some((c) => c.name === "webhook_secret")) {
+    db.exec(`ALTER TABLE agent_versions ADD COLUMN webhook_secret TEXT`);
+  }
 }

@@ -78,6 +78,12 @@ const CreateSchema = z.object({
   engine: z.enum(["claude", "opencode", "codex", "anthropic", "gemini", "factory", "pi"]).optional(),
   webhook_url: z.string().url().optional(),
   webhook_events: z.array(z.string()).optional(),
+  /**
+   * v0.5: shared secret for HMAC signing of webhook deliveries. Min
+   * length 32 to nudge toward strong entropy; values shorter than that
+   * are almost always a typo or misplaced username.
+   */
+  webhook_secret: z.string().min(32).max(512).optional(),
   threads_enabled: z.boolean().optional(),
   confirmation_mode: z.boolean().optional(),
   callable_agents: z.array(z.object({
@@ -103,6 +109,8 @@ const UpdateSchema = z.object({
   mcp_servers: z.record(z.unknown()).optional(),
   webhook_url: z.string().url().nullish(),
   webhook_events: z.array(z.string()).optional(),
+  /** Null clears the secret (unsigned webhooks); string rotates it. */
+  webhook_secret: z.string().min(32).max(512).nullish(),
   confirmation_mode: z.boolean().optional(),
   callable_agents: z.array(z.object({
     type: z.literal("agent"),
@@ -179,6 +187,7 @@ export function handleCreateAgent(request: Request): Promise<Response> {
       backend: backendName,
       webhook_url: parsed.data.webhook_url ?? null,
       webhook_events: parsed.data.webhook_events,
+      webhook_secret: parsed.data.webhook_secret ?? null,
       threads_enabled: parsed.data.threads_enabled ?? false,
       confirmation_mode: parsed.data.confirmation_mode ?? false,
       callable_agents: parsed.data.callable_agents,
@@ -248,6 +257,7 @@ export function handleUpdateAgent(request: Request, id: string): Promise<Respons
       mcp_servers: parsed.data.mcp_servers as never,
       webhook_url: parsed.data.webhook_url,
       webhook_events: parsed.data.webhook_events,
+      webhook_secret: parsed.data.webhook_secret,
       confirmation_mode: parsed.data.confirmation_mode,
       callable_agents: parsed.data.callable_agents,
       skills: parsed.data.skills?.map(s => ({

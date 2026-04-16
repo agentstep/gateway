@@ -87,6 +87,12 @@ export interface AgentVersionRow {
   backend: BackendName;
   webhook_url: string | null;
   webhook_events_json: string;
+  /**
+   * v0.5: shared secret used to HMAC-sign webhook payloads. When set,
+   * deliveries include `X-AgentStep-Signature: sha256=<hex>`. Null for
+   * agents created pre-0.5 or intentionally unsigned webhooks.
+   */
+  webhook_secret: string | null;
   threads_enabled: number;
   confirmation_mode: number;
   callable_agents_json: string | null;
@@ -117,6 +123,11 @@ export interface Agent {
   engine: EngineName;
   webhook_url: string | null;
   webhook_events: string[];
+  /**
+   * Indicates whether a webhook shared secret is configured. The
+   * secret itself is never returned over the API — only this boolean.
+   */
+  webhook_signing_enabled: boolean;
   threads_enabled: boolean;
   confirmation_mode: boolean;
   callable_agents: Array<{ type: "agent"; id: string; version?: number }>;
