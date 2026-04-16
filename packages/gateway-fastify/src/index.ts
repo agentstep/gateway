@@ -67,6 +67,7 @@ import {
   handlePatchTenant,
   handleArchiveTenant,
   handleWhoami,
+  handleListAudit,
 } from "@agentstep/agent-sdk/handlers";
 
 /**
@@ -290,6 +291,9 @@ export function buildApp() {
 
   // ── Whoami (any authenticated caller) ───────────────────────────────
   route(app, "get", "/v1/whoami", handleWhoami);
+
+  // ── Audit log (admin-only, tenant-scoped) ───────────────────────────
+  route(app, "get", "/v1/audit-log", handleListAudit);
 
   // ── Tenants (global-admin only) ─────────────────────────────────────
   route(app, "post", "/v1/tenants", handleCreateTenant);

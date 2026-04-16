@@ -17,6 +17,7 @@ import {
   archiveTenant,
   renameTenant,
 } from "../db/tenants";
+import { recordAudit } from "../db/audit";
 
 const CreateBody = z.object({
   name: z.string().min(1).max(200),
@@ -37,6 +38,14 @@ export function handleCreateTenant(request: Request): Promise<Response> {
     }
     try {
       const tenant = createTenant(parsed.data);
+      recordAudit({
+        auth,
+        action: "tenants.create",
+        resource_type: "tenant",
+        resource_id: tenant.id,
+        tenant_id: tenant.id,
+        metadata: { name: tenant.name },
+      });
       return jsonOk(tenant, 201);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -80,6 +89,14 @@ export function handlePatchTenant(request: Request, id: string): Promise<Respons
     }
     const tenant = getTenant(id);
     if (!tenant) throw notFound(`tenant ${id} not found`);
+    recordAudit({
+      auth,
+      action: "tenants.update",
+      resource_type: "tenant",
+      resource_id: id,
+      tenant_id: id,
+      metadata: parsed.data.name ? { new_name: parsed.data.name } : {},
+    });
     return jsonOk(tenant);
   });
 }
@@ -93,6 +110,13 @@ export function handleArchiveTenant(request: Request, id: string): Promise<Respo
         `cannot archive tenant ${id} — not found, already archived, or the default tenant`,
       );
     }
+    recordAudit({
+      auth,
+      action: "tenants.archive",
+      resource_type: "tenant",
+      resource_id: id,
+      tenant_id: id,
+    });
     return jsonOk({ ok: true, id });
   });
 }

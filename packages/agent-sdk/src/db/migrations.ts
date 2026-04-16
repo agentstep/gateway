@@ -508,4 +508,27 @@ export function runMigrations(db: InstanceType<typeof Database>): void {
   if (!agentVerColsHook.some((c) => c.name === "webhook_secret")) {
     db.exec(`ALTER TABLE agent_versions ADD COLUMN webhook_secret TEXT`);
   }
+
+  // Audit log (v0.5 PR4c). Append-only record of admin-sensitive
+  // operations (tenant/key/upstream-key/agent CRUD) so operators can
+  // reconstruct "who changed what when" after a security incident.
+  // Indexed on tenant_id + created_at so tenant-scoped queries stay fast
+  // as the table grows.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id            TEXT PRIMARY KEY,
+      created_at    INTEGER NOT NULL,
+      actor_key_id  TEXT,
+      actor_name    TEXT,
+      tenant_id     TEXT,
+      action        TEXT NOT NULL,
+      resource_type TEXT,
+      resource_id   TEXT,
+      outcome       TEXT NOT NULL,
+      metadata_json TEXT
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_audit_tenant_time ON audit_log(tenant_id, created_at)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_audit_actor       ON audit_log(actor_key_id, created_at)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_audit_action_time ON audit_log(action, created_at)`);
 }

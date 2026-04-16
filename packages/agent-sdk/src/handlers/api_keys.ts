@@ -24,6 +24,7 @@ import {
 } from "../db/api_keys";
 import { listSessionsByApiKey } from "../db/sessions";
 import { getDb } from "../db/client";
+import { recordAudit } from "../db/audit";
 import type { AuthContext, KeyPermissions } from "../types";
 
 const ScopeSchema = z.object({
@@ -120,6 +121,15 @@ export function handleCreateApiKey(request: Request): Promise<Response> {
       tenantId,
     });
 
+    recordAudit({
+      auth,
+      action: "api_keys.create",
+      resource_type: "api_key",
+      resource_id: id,
+      tenant_id: tenantId,
+      metadata: { name: parsed.data.name, admin: permissions.admin },
+    });
+
     // `key` is returned exactly once. The caller must store it.
     return jsonOk({
       id,
@@ -169,6 +179,14 @@ export function handlePatchApiKey(request: Request, id: string): Promise<Respons
 
     const row = getApiKeyById(id);
     if (!row) throw notFound(`api key ${id} not found`);
+    recordAudit({
+      auth,
+      action: "api_keys.update",
+      resource_type: "api_key",
+      resource_id: id,
+      tenant_id: row.tenant_id,
+      metadata: { admin: parsed.data.permissions.admin },
+    });
     return jsonOk({
       id: row.id,
       name: row.name,
@@ -183,7 +201,7 @@ export function handlePatchApiKey(request: Request, id: string): Promise<Respons
 export function handleRevokeApiKey(request: Request, id: string): Promise<Response> {
   return routeWrap(request, async ({ auth }) => {
     requireAdmin(auth);
-    loadKeyForCaller(auth, id); // tenant guard
+    const targetRow = loadKeyForCaller(auth, id); // tenant guard + fetch
     // Don't let a key revoke itself — accidentally locking the only admin
     // out of the gateway is a bad UX even if recoverable via SEED_API_KEY.
     if (auth.keyId === id) {
@@ -191,6 +209,13 @@ export function handleRevokeApiKey(request: Request, id: string): Promise<Respon
     }
     const ok = revokeApiKey(id);
     if (!ok) throw notFound(`api key ${id} not found`);
+    recordAudit({
+      auth,
+      action: "api_keys.revoke",
+      resource_type: "api_key",
+      resource_id: id,
+      tenant_id: targetRow.tenant_id,
+    });
     return jsonOk({ ok: true, id });
   });
 }

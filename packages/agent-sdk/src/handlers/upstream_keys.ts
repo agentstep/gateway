@@ -18,6 +18,7 @@ import {
   deleteUpstreamKey,
 } from "../db/upstream_keys";
 import { SUPPORTED_PROVIDERS } from "../providers/upstream-keys";
+import { recordAudit } from "../db/audit";
 
 const AddBody = z.object({
   provider: z.enum(SUPPORTED_PROVIDERS),
@@ -39,6 +40,13 @@ export function handleAddUpstreamKey(request: Request): Promise<Response> {
     }
     try {
       const added = addUpstreamKey(parsed.data);
+      recordAudit({
+        auth,
+        action: "upstream_keys.add",
+        resource_type: "upstream_key",
+        resource_id: added.id,
+        metadata: { provider: added.provider, prefix: added.prefix },
+      });
       return jsonOk(added, 201);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -80,6 +88,13 @@ export function handlePatchUpstreamKey(request: Request, id: string): Promise<Re
     const ok = parsed.data.disabled ? disableUpstreamKey(id) : enableUpstreamKey(id);
     if (!ok) throw notFound(`upstream key ${id} not found`);
     const after = getUpstreamKey(id);
+    recordAudit({
+      auth,
+      action: parsed.data.disabled ? "upstream_keys.disable" : "upstream_keys.enable",
+      resource_type: "upstream_key",
+      resource_id: id,
+      metadata: { provider: after?.provider },
+    });
     return jsonOk(after);
   });
 }
@@ -87,8 +102,16 @@ export function handlePatchUpstreamKey(request: Request, id: string): Promise<Re
 export function handleDeleteUpstreamKey(request: Request, id: string): Promise<Response> {
   return routeWrap(request, async ({ auth }) => {
     requireAdmin(auth);
+    const before = getUpstreamKey(id);
     const ok = deleteUpstreamKey(id);
     if (!ok) throw notFound(`upstream key ${id} not found`);
+    recordAudit({
+      auth,
+      action: "upstream_keys.delete",
+      resource_type: "upstream_key",
+      resource_id: id,
+      metadata: before ? { provider: before.provider, prefix: before.prefix } : {},
+    });
     return jsonOk({ ok: true, id });
   });
 }

@@ -451,3 +451,43 @@ export interface Tenant {
   created_at: string;
   archived_at: string | null;
 }
+
+// ---------------------------------------------------------------------------
+// Audit log (v0.5 PR4c)
+// ---------------------------------------------------------------------------
+
+/** "success" for a committed action, "denied" for auth/403, "failure" for unexpected errors. */
+export type AuditOutcome = "success" | "denied" | "failure";
+
+export interface AuditLogRow {
+  id: string;
+  created_at: number;
+  /** Key id of the caller, or null for system-initiated events. */
+  actor_key_id: string | null;
+  /** Friendly actor name captured at log time (keys can be renamed later). */
+  actor_name: string | null;
+  /** Tenant the action was scoped to. Null for global-scope ops. */
+  tenant_id: string | null;
+  /** Dotted verb: `tenants.create`, `api_keys.revoke`, `upstream_keys.add`, ... */
+  action: string;
+  /** "agent" | "tenant" | "api_key" | "upstream_key" | "session" | null. */
+  resource_type: string | null;
+  /** Resource id, when applicable. */
+  resource_id: string | null;
+  outcome: AuditOutcome;
+  /** Arbitrary action-specific context, JSON-encoded. */
+  metadata_json: string | null;
+}
+
+export interface AuditLogEntry {
+  id: string;
+  created_at: string;
+  actor_key_id: string | null;
+  actor_name: string | null;
+  tenant_id: string | null;
+  action: string;
+  resource_type: string | null;
+  resource_id: string | null;
+  outcome: AuditOutcome;
+  metadata: Record<string, unknown> | null;
+}
