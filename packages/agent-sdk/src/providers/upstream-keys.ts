@@ -1,13 +1,16 @@
 /**
- * Unified upstream-key resolution for the Anthropic provider.
+ * Unified upstream-key resolution for supported providers.
  *
  * Cascade, highest precedence first:
- *   1. Session's vault entries (ANTHROPIC_API_KEY)
+ *   1. Session's vault entries (per-provider named key)
  *   2. Upstream-key pool (LRU-selected active row)
- *   3. Config cascade (env var ANTHROPIC_API_KEY, then settings table)
+ *   3. Config cascade (env var, then settings table)
  *
- * Rejects `sk-ant-oat*` OAuth tokens — Anthropic's Managed Agents API
- * requires real API keys.
+ * Providers (v0.5):
+ *   - anthropic: rejects `sk-ant-oat*` OAuth tokens — the managed-agents
+ *     proxy path requires real API keys. Vault key: ANTHROPIC_API_KEY.
+ *   - openai: vault key OPENAI_API_KEY. Config: config.openAiApiKey.
+ *   - gemini: vault key GEMINI_API_KEY. Config: config.geminiApiKey.
  *
  * Failure tracking: in-memory consecutive-failure counter per pool
  * key-id. Reports are best-effort — they're not required to keep the
@@ -20,6 +23,9 @@ import { selectNextUpstreamKey, disableUpstreamKey } from "../db/upstream_keys";
 import { getConfig } from "../config";
 
 const CONSECUTIVE_FAIL_THRESHOLD = 3;
+
+export const SUPPORTED_PROVIDERS = ["anthropic", "openai", "gemini"] as const;
+export type UpstreamProvider = typeof SUPPORTED_PROVIDERS[number];
 
 /** HMR-safe per-provider failure counter: keyed on upstream_keys.id. */
 type GlobalFailStore = typeof globalThis & {
@@ -35,21 +41,46 @@ export interface ResolvedKey {
   poolId: string | null;
 }
 
-function rejectOAuth(value: string | null | undefined): string | null {
+function rejectOAuth(provider: UpstreamProvider, value: string | null | undefined): string | null {
   if (!value) return null;
-  if (value.startsWith("sk-ant-oat")) return null;
+  // Anthropic: managed-agents proxy refuses OAuth tokens; reject them
+  // up-front so the user gets a clean error from the wizard instead of a
+  // confusing 401 from the upstream.
+  if (provider === "anthropic" && value.startsWith("sk-ant-oat")) return null;
   return value;
 }
 
+/** Lookup table: provider → vault entry key name. */
+const VAULT_KEY_FOR: Record<UpstreamProvider, string> = {
+  anthropic: "ANTHROPIC_API_KEY",
+  openai:    "OPENAI_API_KEY",
+  gemini:    "GEMINI_API_KEY",
+};
+
+function configKeyFor(provider: UpstreamProvider): string | undefined {
+  const cfg = getConfig();
+  switch (provider) {
+    case "anthropic": return cfg.anthropicApiKey;
+    case "openai":    return cfg.openAiApiKey;
+    case "gemini":    return cfg.geminiApiKey;
+  }
+}
+
 /**
- * Resolve an Anthropic API key for a session or a standalone context.
+ * Resolve a provider's API key for a session or a standalone context.
  *
+ * @param provider     — which upstream provider to resolve (anthropic/openai/gemini)
  * @param opts.sessionId — if present, vault lookup via the session's vault_ids.
  * @param opts.vaultIds  — explicit vault id list (if you don't have a session yet).
  *
- * Returns null when no source supplied a valid (non-OAuth) key.
+ * Returns null when no source supplied a valid key.
  */
-export function resolveAnthropicKey(opts: { sessionId?: string; vaultIds?: string[] } = {}): ResolvedKey | null {
+export function resolveProviderKey(
+  provider: UpstreamProvider,
+  opts: { sessionId?: string; vaultIds?: string[] } = {},
+): ResolvedKey | null {
+  const vaultKeyName = VAULT_KEY_FOR[provider];
+
   // 1. Vault (if session or vaultIds provided)
   let vaultIds: string[] | undefined = opts.vaultIds;
   if (!vaultIds && opts.sessionId) {
@@ -59,25 +90,32 @@ export function resolveAnthropicKey(opts: { sessionId?: string; vaultIds?: strin
   if (vaultIds?.length) {
     for (const vid of vaultIds) {
       const entries = listEntries(vid);
-      const found = entries.find(e => e.key === "ANTHROPIC_API_KEY");
-      const clean = rejectOAuth(found?.value);
+      const found = entries.find(e => e.key === vaultKeyName);
+      const clean = rejectOAuth(provider, found?.value);
       if (clean) return { value: clean, poolId: null };
     }
   }
 
   // 2. Upstream-key pool (LRU selection, per-provider).
-  const pooled = selectNextUpstreamKey("anthropic");
+  const pooled = selectNextUpstreamKey(provider);
   if (pooled) {
-    const clean = rejectOAuth(pooled.value);
+    const clean = rejectOAuth(provider, pooled.value);
     if (clean) return { value: clean, poolId: pooled.id };
   }
 
   // 3. Config cascade (env var → settings table)
-  const cfg = getConfig();
-  const clean = rejectOAuth(cfg.anthropicApiKey);
+  const clean = rejectOAuth(provider, configKeyFor(provider));
   if (clean) return { value: clean, poolId: null };
 
   return null;
+}
+
+/**
+ * Back-compat shim — Anthropic was the only supported provider in v0.4.
+ * New code should call `resolveProviderKey("anthropic", opts)`.
+ */
+export function resolveAnthropicKey(opts: { sessionId?: string; vaultIds?: string[] } = {}): ResolvedKey | null {
+  return resolveProviderKey("anthropic", opts);
 }
 
 /**

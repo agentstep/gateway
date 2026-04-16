@@ -314,3 +314,119 @@ describe("/v1/upstream-keys handlers", () => {
     expect(second.status).toBe(400);
   });
 });
+
+// ── v0.5: OpenAI + Gemini providers on the same pool ───────────────────
+
+describe("Upstream-key pool — OpenAI + Gemini", () => {
+  beforeEach(() => freshDbEnv());
+
+  it("accepts openai + gemini providers via the admin API", async () => {
+    const adminKey = await bootDb();
+    const { handleAddUpstreamKey, handleListUpstreamKeys } = await import(
+      "../src/handlers/upstream_keys"
+    );
+
+    const a = await handleAddUpstreamKey(req("/v1/upstream-keys", {
+      body: { provider: "openai", value: "sk-proj-openai-padding-padding-padding" },
+      apiKey: adminKey,
+    }));
+    expect(a.status).toBe(201);
+
+    const b = await handleAddUpstreamKey(req("/v1/upstream-keys", {
+      body: { provider: "gemini", value: "AIza-gemini-padding-padding-padding" },
+      apiKey: adminKey,
+    }));
+    expect(b.status).toBe(201);
+
+    const listRes = await handleListUpstreamKeys(req("/v1/upstream-keys", { apiKey: adminKey }));
+    const list = await listRes.json() as { data: Array<{ provider: string }> };
+    const providers = list.data.map(d => d.provider).sort();
+    expect(providers).toEqual(["gemini", "openai"]);
+  });
+
+  it("rejects providers outside the known set", async () => {
+    const adminKey = await bootDb();
+    const { handleAddUpstreamKey } = await import("../src/handlers/upstream_keys");
+    const res = await handleAddUpstreamKey(req("/v1/upstream-keys", {
+      body: { provider: "cohere", value: "whatever-padding-padding-padding-padding" },
+      apiKey: adminKey,
+    }));
+    expect(res.status).toBe(400);
+  });
+
+  it("resolveProviderKey pulls the right vault entry per provider", async () => {
+    await bootDb();
+    const { createAgent } = await import("../src/db/agents");
+    const { createVault, setEntry } = await import("../src/db/vaults");
+    const { resolveProviderKey } = await import("../src/providers/upstream-keys");
+
+    const agent = createAgent({ name: "multi", model: "claude-sonnet-4-6" });
+    const vault = createVault({ agent_id: agent.id, name: "v" });
+    setEntry(vault.id, "ANTHROPIC_API_KEY", "sk-ant-api03-from-vault");
+    setEntry(vault.id, "OPENAI_API_KEY",    "sk-proj-openai-vault");
+    setEntry(vault.id, "GEMINI_API_KEY",    "AIza-gemini-vault");
+
+    expect(resolveProviderKey("anthropic", { vaultIds: [vault.id] })?.value).toBe(
+      "sk-ant-api03-from-vault",
+    );
+    expect(resolveProviderKey("openai", { vaultIds: [vault.id] })?.value).toBe(
+      "sk-proj-openai-vault",
+    );
+    expect(resolveProviderKey("gemini", { vaultIds: [vault.id] })?.value).toBe(
+      "AIza-gemini-vault",
+    );
+  });
+
+  it("resolveProviderKey falls through pool then config per provider", async () => {
+    await bootDb();
+    const orig = process.env.OPENAI_API_KEY;
+    const origG = process.env.GEMINI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.GEMINI_API_KEY;
+    // Ensure the config cache from an earlier test run doesn't shadow our mutations.
+    const { addUpstreamKey } = await import("../src/db/upstream_keys");
+    const { resolveProviderKey } = await import("../src/providers/upstream-keys");
+
+    try {
+      // openai pool hit
+      const oai = addUpstreamKey({ provider: "openai", value: "sk-proj-openai-pool-padding" });
+      // invalidate config cache
+      (globalThis as { __caConfigCache?: unknown }).__caConfigCache = undefined;
+      const oaiResolved = resolveProviderKey("openai");
+      expect(oaiResolved?.value).toBe("sk-proj-openai-pool-padding");
+      expect(oaiResolved?.poolId).toBe(oai.id);
+
+      // gemini no pool; fall through to config via settings table
+      const { writeSetting } = await import("../src/config");
+      writeSetting("gemini_api_key", "AIza-gemini-from-settings");
+      (globalThis as { __caConfigCache?: unknown }).__caConfigCache = undefined;
+      const gResolved = resolveProviderKey("gemini");
+      expect(gResolved?.value).toBe("AIza-gemini-from-settings");
+      expect(gResolved?.poolId).toBeNull();
+    } finally {
+      if (orig !== undefined) process.env.OPENAI_API_KEY = orig;
+      if (origG !== undefined) process.env.GEMINI_API_KEY = origG;
+    }
+  });
+
+  it("OAuth rejection applies to anthropic only, not openai/gemini", async () => {
+    await bootDb();
+    const { createAgent } = await import("../src/db/agents");
+    const { createVault, setEntry } = await import("../src/db/vaults");
+    const { resolveProviderKey } = await import("../src/providers/upstream-keys");
+
+    const agent = createAgent({ name: "oauth-test", model: "claude-sonnet-4-6" });
+    const vault = createVault({ agent_id: agent.id, name: "v" });
+
+    // Anthropic OAuth → rejected
+    setEntry(vault.id, "ANTHROPIC_API_KEY", "sk-ant-oat-should-reject");
+    expect(resolveProviderKey("anthropic", { vaultIds: [vault.id] })).toBeNull();
+
+    // OpenAI value that coincidentally starts with the same prefix must NOT be rejected —
+    // the OAuth check is Anthropic-specific.
+    setEntry(vault.id, "OPENAI_API_KEY", "sk-ant-oat-looks-like-oauth-but-isnt");
+    expect(resolveProviderKey("openai", { vaultIds: [vault.id] })?.value).toBe(
+      "sk-ant-oat-looks-like-oauth-but-isnt",
+    );
+  });
+});

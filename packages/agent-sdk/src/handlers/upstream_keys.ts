@@ -1,8 +1,9 @@
 /**
  * /v1/upstream-keys — admin-only CRUD for the per-provider upstream key pool.
  *
- * v0.4 provider set: "anthropic" only. Future providers (openai, gemini)
- * plug into the same shape.
+ * v0.5 provider set: "anthropic", "openai", "gemini". The resolver in
+ * providers/upstream-keys.ts knows how to pull the right vault entry
+ * name and config field for each.
  */
 import { z } from "zod";
 import { routeWrap, jsonOk } from "../http";
@@ -16,9 +17,10 @@ import {
   enableUpstreamKey,
   deleteUpstreamKey,
 } from "../db/upstream_keys";
+import { SUPPORTED_PROVIDERS } from "../providers/upstream-keys";
 
 const AddBody = z.object({
-  provider: z.enum(["anthropic"]),
+  provider: z.enum(SUPPORTED_PROVIDERS),
   value: z.string().min(20).max(500),
   weight: z.number().int().positive().optional(),
 });
