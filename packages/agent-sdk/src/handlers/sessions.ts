@@ -312,15 +312,38 @@ export function handleCreateSession(request: Request): Promise<Response> {
 
     // Build the candidate chain: [primary, ...fallbacks-from-primary's-agent-row].
     // Cap at 3 hops total. Cycle-detect via visited (agent_id, env_id).
+    //
+    // v0.5: tenant isolation. A fallback tuple pointing at an agent in a
+    // different tenant is silently skipped — we never step across tenant
+    // boundaries even if an operator mis-configured the list. The primary
+    // agent's tenant is the "anchor" for the entire chain; every fallback
+    // must share it. Cross-tenant tuples are logged to the attempted list
+    // so operators can see why a tuple was passed over.
     const MAX_HOPS = 3;
     const primary: FallbackTuple = {
       agent_id: initialAgentId,
       environment_id: data.environment_id,
     };
+    const anchorTenantId = getAgentTenantId(initialAgentId);
     const primaryAgent = getAgent(initialAgentId, initialAgentVersion);
     const candidates: FallbackTuple[] = [primary];
+    const skippedCrossTenant: Array<FallbackTuple & { reason: string }> = [];
     if (primaryAgent) {
       for (const fb of parseFallbackJson(primaryAgent.fallback_json ?? null)) {
+        // Refuse fallback candidates that cross the tenant boundary.
+        // Skipping beats failing loudly — a well-configured chain may
+        // intentionally include some tenant-neutral placeholder tuples
+        // and we don't want to abort the whole fallback for one bad row.
+        const fbAgentTenant = getAgentTenantId(fb.agent_id);
+        const fbEnvTenant = getEnvironmentTenantId(fb.environment_id);
+        if (anchorTenantId != null && fbAgentTenant !== anchorTenantId) {
+          skippedCrossTenant.push({ ...fb, reason: "fallback agent is in a different tenant" });
+          continue;
+        }
+        if (anchorTenantId != null && fbEnvTenant !== anchorTenantId) {
+          skippedCrossTenant.push({ ...fb, reason: "fallback environment is in a different tenant" });
+          continue;
+        }
         candidates.push(fb);
         if (candidates.length >= MAX_HOPS) break;
       }
@@ -374,10 +397,14 @@ export function handleCreateSession(request: Request): Promise<Response> {
     // full attempted chain, not just the last underlying failure — so an
     // operator can tell at a glance "fallback tried A → B, both failed".
     // lastError is preserved in the log surface; the response body gets
-    // the structured message.
+    // the structured message. Include the skipped cross-tenant tuples
+    // so operators can see why some fallbacks were silently dropped.
     const tail = attempted[attempted.length - 1]?.error ?? (lastError instanceof Error ? lastError.message : "unknown");
     const chain = attempted.map(a => `${a.agent_id}/${a.environment_id}`).join(" → ");
-    const msg = `session creation failed after ${attempted.length} attempts. Attempted: ${chain}. Last error: ${tail}.`;
+    const skipped = skippedCrossTenant.length
+      ? ` Skipped cross-tenant fallbacks: ${skippedCrossTenant.map(s => `${s.agent_id}/${s.environment_id} (${s.reason})`).join(", ")}.`
+      : "";
+    const msg = `session creation failed after ${attempted.length} attempts. Attempted: ${chain}. Last error: ${tail}.${skipped}`;
     throw badRequest(msg);
   });
 }

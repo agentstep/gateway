@@ -337,6 +337,130 @@ describe("v0.5 tenant enforcement — sessions", () => {
   });
 });
 
+describe("v0.5 tenant enforcement — session fallback", () => {
+  beforeEach(() => freshDbEnv());
+
+  it("cross-tenant fallback tuples are silently skipped", async () => {
+    const { globalKey } = await bootTenants();
+    const { handleCreateAgent } = await import("../src/handlers/agents");
+    const { handleCreateSession } = await import("../src/handlers/sessions");
+    const { getDb } = await import("../src/db/client");
+    const { newId } = await import("../src/util/ids");
+    const { nowMs } = await import("../src/util/clock");
+
+    // Primary agent + primary env in default tenant.
+    const primaryAgent = await readJson(
+      await handleCreateAgent(
+        req("/v1/agents", globalKey, {
+          body: { name: "primary", model: "claude-sonnet-4-6", tenant_id: "tenant_default" },
+        }),
+      ),
+    );
+
+    const primaryEnvId = newId("env");
+    const acmeEnvId = newId("env");
+    const acmeAgentId = newId("agent");
+    const acmeAgentVer = 1;
+    const now = nowMs();
+    const db = getDb();
+
+    // Primary env — broken (state="error") so fallback is forced.
+    db.prepare(
+      `INSERT INTO environments (id, name, config_json, state, tenant_id, created_at)
+       VALUES (?, 'primary-env', '{"type":"cloud","provider":"docker"}', 'error', 'tenant_default', ?)`,
+    ).run(primaryEnvId, now);
+
+    // Acme tenant env (cross-tenant — should be skipped as fallback).
+    db.prepare(
+      `INSERT INTO environments (id, name, config_json, state, tenant_id, created_at)
+       VALUES (?, 'acme-env', '{"type":"cloud","provider":"docker"}', 'ready', 'tenant_acme', ?)`,
+    ).run(acmeEnvId, now);
+
+    // Acme tenant agent (cross-tenant — should be skipped).
+    db.prepare(
+      `INSERT INTO agents (id, current_version, name, tenant_id, created_at, updated_at)
+       VALUES (?, ?, 'acme-agent', 'tenant_acme', ?, ?)`,
+    ).run(acmeAgentId, acmeAgentVer, now, now);
+    db.prepare(
+      `INSERT INTO agent_versions (agent_id, version, model, tools_json, mcp_servers_json, backend, created_at)
+       VALUES (?, ?, 'claude-sonnet-4-6', '[]', '{}', 'claude', ?)`,
+    ).run(acmeAgentId, acmeAgentVer, now);
+
+    // Configure primary agent with a cross-tenant fallback only.
+    const fallbackJson = JSON.stringify([
+      { agent_id: acmeAgentId, environment_id: acmeEnvId },
+    ]);
+    db.prepare(`UPDATE agents SET fallback_json = ? WHERE id = ?`).run(fallbackJson, primaryAgent.id);
+
+    // Creating a session should fail — primary env is broken (state=error)
+    // so `tryCreate` throws "environment is not ready" (which is normally
+    // retryable), and the only fallback is cross-tenant and gets skipped.
+    const res = await handleCreateSession(
+      req("/v1/sessions", globalKey, {
+        body: { agent: primaryAgent.id, environment_id: primaryEnvId },
+      }),
+    );
+    expect(res.status).toBe(400);
+    const body = await readJson(res);
+    const err = body.error as { message: string };
+    expect(err.message).toMatch(/Skipped cross-tenant fallbacks/);
+    expect(err.message).toMatch(new RegExp(acmeAgentId));
+  });
+
+  it("same-tenant fallback still works", async () => {
+    const { acmeAdminKey } = await bootTenants();
+    const { handleCreateAgent } = await import("../src/handlers/agents");
+    const { handleCreateSession } = await import("../src/handlers/sessions");
+    const { getDb } = await import("../src/db/client");
+    const { newId } = await import("../src/util/ids");
+    const { nowMs } = await import("../src/util/clock");
+
+    const primary = await readJson(
+      await handleCreateAgent(
+        req("/v1/agents", acmeAdminKey, {
+          body: { name: "primary", model: "claude-sonnet-4-6" },
+        }),
+      ),
+    );
+    const backup = await readJson(
+      await handleCreateAgent(
+        req("/v1/agents", acmeAdminKey, {
+          body: { name: "backup", model: "claude-sonnet-4-6" },
+        }),
+      ),
+    );
+
+    const brokenEnv = newId("env");
+    const healthyEnv = newId("env");
+    const now = nowMs();
+    const db = getDb();
+    db.prepare(
+      `INSERT INTO environments (id, name, config_json, state, tenant_id, created_at)
+       VALUES (?, 'broken', '{"type":"cloud","provider":"docker"}', 'error', 'tenant_acme', ?)`,
+    ).run(brokenEnv, now);
+    db.prepare(
+      `INSERT INTO environments (id, name, config_json, state, tenant_id, created_at)
+       VALUES (?, 'healthy', '{"type":"cloud","provider":"docker"}', 'ready', 'tenant_acme', ?)`,
+    ).run(healthyEnv, now);
+
+    // Primary agent falls back to backup/healthy within the same tenant.
+    db.prepare(`UPDATE agents SET fallback_json = ? WHERE id = ?`).run(
+      JSON.stringify([{ agent_id: backup.id, environment_id: healthyEnv }]),
+      primary.id,
+    );
+
+    const res = await handleCreateSession(
+      req("/v1/sessions", acmeAdminKey, {
+        body: { agent: primary.id, environment_id: brokenEnv },
+      }),
+    );
+    expect(res.status).toBe(201);
+    const session = await readJson(res);
+    expect((session.agent as { id: string }).id).toBe(backup.id);
+    expect(session.environment_id).toBe(healthyEnv);
+  });
+});
+
 describe("v0.5 tenant enforcement — api keys", () => {
   beforeEach(() => freshDbEnv());
 
