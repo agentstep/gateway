@@ -1,12 +1,14 @@
 /**
- * In-memory fixed-window rate limiter, keyed by API key id.
+ * Fixed-window rate limiter, keyed by API key id.
  *
- * v0.4: single-process only. Documented as such. When a gateway is
- * clustered (multiple `gateway serve` workers behind a proxy), each
- * process tracks its own window — the effective limit per key is
- * `limit × workers`. Acceptable for the "stop runaway scripts" use case
- * that virtual keys target. For actual fairness across a cluster, swap
- * to a Redis backend via the `RATE_LIMIT_BACKEND` env var.
+ * Two backends, selected via `RATE_LIMIT_BACKEND`:
+ *   - `memory` (default) — per-process Map. Single-host only; a
+ *     clustered deployment (N `gateway serve` workers behind a proxy)
+ *     ends up with an effective limit of `limit × N` per key.
+ *   - `redis` — shared fixed-window counter. Uses `INCR` + `PEXPIRE` on
+ *     a bucket key that rotates every 60s. Atomic across processes and
+ *     hosts. Requires `REDIS_URL`; `ioredis` is dynamic-imported so the
+ *     dependency is only loaded when you actually opt in.
  *
  * Fixed window (not sliding or token bucket) — over-allows at boundaries
  * by up to 2×, but is trivial to reason about and removes the need for
@@ -23,6 +25,7 @@ interface Bucket {
 /** HMR-safe singleton on globalThis so dev server reloads don't lose counters. */
 type GlobalBucketStore = typeof globalThis & {
   __caRateLimitBuckets?: Map<string, Bucket>;
+  __caRateLimitRedis?: RedisClientLike | "unavailable" | undefined;
 };
 const g = globalThis as GlobalBucketStore;
 if (!g.__caRateLimitBuckets) g.__caRateLimitBuckets = new Map();
@@ -30,15 +33,9 @@ const buckets = g.__caRateLimitBuckets;
 
 const WINDOW_MS = 60_000;
 
-/**
- * Check-and-bump: returns `null` if the request is allowed, or a
- * non-negative integer (seconds until the next window starts) if
- * refused.
- *
- * `limitPerMinute === null` → unlimited (always returns null).
- */
-export function checkAndBump(keyId: string, limitPerMinute: number | null): number | null {
-  if (limitPerMinute == null || limitPerMinute <= 0) return null;
+// ── Memory backend ────────────────────────────────────────────────────
+
+function memoryCheckAndBump(keyId: string, limitPerMinute: number): number | null {
   const now = Date.now();
   let b = buckets.get(keyId);
   if (!b || now - b.windowStart >= WINDOW_MS) {
@@ -55,6 +52,120 @@ export function checkAndBump(keyId: string, limitPerMinute: number | null): numb
   return null;
 }
 
+// ── Redis backend ─────────────────────────────────────────────────────
+//
+// `ioredis` is optional — only loaded when RATE_LIMIT_BACKEND=redis. If
+// the module isn't installed we degrade to memory and log a one-time
+// warning, rather than crashing the server. That keeps the defaults
+// frictionless for single-host installs.
+
+interface RedisClientLike {
+  incr(key: string): Promise<number>;
+  pexpire(key: string, ms: number): Promise<number>;
+  quit?(): Promise<unknown>;
+}
+
+let redisLoadPromise: Promise<RedisClientLike | "unavailable"> | null = null;
+
+async function loadRedis(): Promise<RedisClientLike | "unavailable"> {
+  if (g.__caRateLimitRedis != null) return g.__caRateLimitRedis;
+  if (redisLoadPromise) return redisLoadPromise;
+  redisLoadPromise = (async () => {
+    try {
+      // ioredis default export is the `Redis` class. Using `new` with
+      // the URL gives a lazily-connected client — the first operation
+      // establishes the socket, so we don't block startup.
+      const mod = await import("ioredis" as string);
+      const Ctor = (mod.default ?? mod.Redis) as new (url: string) => RedisClientLike;
+      const url = process.env.REDIS_URL;
+      if (!url) {
+        console.warn("[rate_limit] RATE_LIMIT_BACKEND=redis but REDIS_URL is unset — falling back to memory");
+        g.__caRateLimitRedis = "unavailable";
+        return "unavailable";
+      }
+      const client = new Ctor(url);
+      g.__caRateLimitRedis = client;
+      return client;
+    } catch (err) {
+      console.warn(
+        "[rate_limit] RATE_LIMIT_BACKEND=redis but ioredis isn't installed. " +
+        "Run `npm i ioredis` in the deployment image. Falling back to memory for now.",
+        err instanceof Error ? err.message : String(err),
+      );
+      g.__caRateLimitRedis = "unavailable";
+      return "unavailable";
+    }
+  })();
+  return redisLoadPromise;
+}
+
+/**
+ * Atomic fixed-window increment on Redis. The bucket key includes the
+ * window start so concurrent minutes never contend on the same key —
+ * and `PEXPIRE` guarantees stale windows get reaped without a sweeper.
+ */
+async function redisCheckAndBump(
+  client: RedisClientLike,
+  keyId: string,
+  limitPerMinute: number,
+): Promise<number | null> {
+  const now = Date.now();
+  const windowStart = Math.floor(now / WINDOW_MS) * WINDOW_MS;
+  const bucketKey = `as:rl:${keyId}:${windowStart}`;
+  try {
+    const count = await client.incr(bucketKey);
+    if (count === 1) {
+      // Fresh bucket — set TTL so we don't accumulate dead keys.
+      await client.pexpire(bucketKey, WINDOW_MS + 1000);
+    }
+    if (count > limitPerMinute) {
+      const retryAfterMs = windowStart + WINDOW_MS - now;
+      return Math.max(1, Math.ceil(retryAfterMs / 1000));
+    }
+    return null;
+  } catch (err) {
+    // Redis outage → fail open to memory. Safer than dropping all
+    // requests because the rate-limiter is down. Also matches
+    // docker-compose environments where Redis takes a moment to come up.
+    console.warn("[rate_limit] redis error, falling back to memory for this request:", err);
+    return memoryCheckAndBump(keyId, limitPerMinute);
+  }
+}
+
+// ── Public API ────────────────────────────────────────────────────────
+
+function getBackend(): "memory" | "redis" {
+  const v = (process.env.RATE_LIMIT_BACKEND ?? "memory").toLowerCase();
+  return v === "redis" ? "redis" : "memory";
+}
+
+/**
+ * Check-and-bump: returns `null` if the request is allowed, or a
+ * non-negative integer (seconds until the next window starts) if
+ * refused.
+ *
+ * `limitPerMinute === null` → unlimited (always returns null).
+ *
+ * Async so the Redis backend can actually call the network. The memory
+ * backend completes synchronously and Promise.resolve()s immediately,
+ * so routeWrap pays at most one microtask on the hot path.
+ */
+export async function checkAndBump(
+  keyId: string,
+  limitPerMinute: number | null,
+): Promise<number | null> {
+  if (limitPerMinute == null || limitPerMinute <= 0) return null;
+
+  if (getBackend() === "redis") {
+    const client = await loadRedis();
+    if (client !== "unavailable") {
+      return redisCheckAndBump(client, keyId, limitPerMinute);
+    }
+    // Fall through to memory on unavailable.
+  }
+  return memoryCheckAndBump(keyId, limitPerMinute);
+}
+
 /** Test hook: clear all counters. No-op in production code paths. */
 export function resetRateLimits(): void {
   buckets.clear();
@@ -63,4 +174,10 @@ export function resetRateLimits(): void {
 /** Test hook: inspect the counter for a key (or undefined if no window active). */
 export function peekRateLimit(keyId: string): Bucket | undefined {
   return buckets.get(keyId);
+}
+
+/** Test hook: override the resolved Redis client (or force "unavailable"). */
+export function _setRedisClientForTesting(client: RedisClientLike | "unavailable" | undefined): void {
+  g.__caRateLimitRedis = client;
+  redisLoadPromise = null;
 }

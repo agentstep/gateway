@@ -32,10 +32,11 @@ export async function routeWrap(
     await ensureInitialized();
     const auth = await authenticate(request);
 
-    // Per-key RPM rate limit. Fixed 60s window, in-memory (per-process).
-    // null rateLimitRpm short-circuits the check. On refusal we return
-    // 429 with a Retry-After header (seconds).
-    const retryAfter = checkAndBump(auth.keyId, auth.rateLimitRpm);
+    // Per-key RPM rate limit. Fixed 60s window; backend is memory by
+    // default, Redis when RATE_LIMIT_BACKEND=redis. null rateLimitRpm
+    // short-circuits the check. On refusal we return 429 with a
+    // Retry-After header (seconds).
+    const retryAfter = await checkAndBump(auth.keyId, auth.rateLimitRpm);
     if (retryAfter != null) {
       const err = tooManyRequests(
         `rate limit exceeded (${auth.rateLimitRpm}/min for this key); retry after ${retryAfter}s`,
