@@ -54,6 +54,14 @@ export function registerUpstreamKeyCommands(parent: Command): void {
         process.exit(1);
       }
       let value = opts.value;
+      if (value) {
+        // --value ends up in the user's shell history. Flag it once so
+        // ops can either clean their history or switch to the prompt.
+        console.warn(
+          "warning: the key value is visible in your shell history. " +
+          "Prefer piping through the interactive prompt: `gateway upstream-keys add --provider <p>`.",
+        );
+      }
       if (!value) {
         if (!process.stdin.isTTY) {
           console.error("Non-TTY: pass --value.");

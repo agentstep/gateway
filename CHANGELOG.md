@@ -4,6 +4,97 @@ All notable changes to AgentStep Gateway are documented here. Dates are UTC.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project uses [SemVer](https://semver.org/).
 
+## [0.5.0] — 2026-04-17
+
+### Added
+
+- **Tenancy** — agents, environments, vaults, sessions, and API keys now
+  carry a `tenant_id`. Three roles: **global admin** (`tenantId=null +
+  admin`), **tenant admin** (`tenantId=X + admin`), **tenant user**
+  (`tenantId=X`). Tenant admins see only their tenant; global admins see
+  everything. Cross-tenant `id` lookups return 404 (not 403) to prevent
+  id-probing. Admin API at `/v1/tenants`; UI settings page at `/tenants`.
+  Legacy installs keep working — pre-0.5 keys hydrate as global admins
+  and resources default to `tenant_default` (seeded on boot).
+- **Migration path** — `gateway tenants migrate-legacy` is an
+  interactive, opt-in CLI that stamps all null-tenant rows onto a
+  chosen tenant. Nothing auto-migrates; upgrades from 0.4 are a no-op
+  at the database level until the command is run.
+- **Cross-tenant fallback guard** — the session-creation fallback chain
+  refuses to step across tenant boundaries. Each skipped tuple carries
+  a specific reason (`fallback agent not found`, `fallback environment
+  in different tenant`, etc.) so operators can debug stale config.
+- **OpenAI + Gemini in the upstream-key pool** — generalized from
+  Anthropic-only. Vault entries use `ANTHROPIC_API_KEY`,
+  `OPENAI_API_KEY`, `GEMINI_API_KEY` respectively.
+- **Webhook HMAC signatures** — optional per-agent `webhook_secret`.
+  When set, outbound webhooks include `X-AgentStep-Signature:
+  sha256=<hex>` and `X-AgentStep-Timestamp: <ms>`. The SDK exports a
+  `verifyWebhookSignature()` helper for receivers (constant-time
+  compare, ±5-minute replay window, case-insensitive headers).
+- **Redis rate-limit backend** — set `RATE_LIMIT_BACKEND=redis` and
+  `REDIS_URL=…` to share per-key counters across replicas. Uses atomic
+  `INCR + PEXPIRE` on a rotating window key. `ioredis` is an *optional*
+  dependency loaded dynamically; when requested but missing, boot
+  fails loudly unless `RATE_LIMIT_BACKEND_ALLOW_FALLBACK=true` is set.
+  Transient Redis errors fail *open* to memory for that one request.
+- **Audit log** — append-only ledger of admin-sensitive operations
+  (`tenants.*`, `api_keys.*`, `upstream_keys.*`). `GET /v1/audit-log` is
+  admin-only and tenant-scoped. `gateway audit [--action ...]` CLI
+  mirrors the same filters. Upstream-key-pool entries are tagged
+  `tenant_id=null` since the pool is global.
+- **CLI parity** — `gateway tenants rename`, `gateway upstream-keys
+  {list,add,disable,enable,delete}`, `gateway audit`. The `add`
+  command prompts for the value interactively so secrets don't leak
+  into shell history.
+- **`GET /v1/whoami`** — tiny caller-identity endpoint the UI uses to
+  decide which controls to show (Tenants nav, UpstreamKeys pool,
+  admin-only dialogs).
+
+### Changed
+
+- **Upstream-key pool is global-admin-only** — `POST/GET/PATCH/DELETE
+  /v1/upstream-keys` all require global admin. Tenant admins get 403.
+  The pool is a shared resource across every tenant; letting one
+  tenant admin touch it was a cross-tenant hole.
+- **`/v1/metrics/api` is global-admin-only** — the in-process ring
+  buffer isn't tenant-partitioned so the snapshot would leak
+  cross-tenant traffic patterns.
+- **Corrupted-ciphertext auto-disable now logs specifically** — when
+  the pool decrypts a row and fails, the warning calls out
+  `VAULT_ENCRYPTION_KEY` rotation as the likely cause rather than a
+  generic "disabled" line. Helps ops correlate a post-rotation outage.
+- **Pure-proxy resources get `tenant_id`** — `proxy_resources` gained a
+  `tenant_id` column. Resources created with `engine=anthropic` (no
+  local mirror row) are now tenant-checked at every endpoint.
+
+### Security
+
+Closes cross-tenant access gaps introduced by tenancy:
+
+- Upstream-key pool CRUD was admin-scoped instead of global-admin-scoped.
+- `/v1/metrics/api` leaked cluster-wide throughput.
+- Pure-proxy sessions (Anthropic backend, no local row) bypassed tenant
+  checks on `GET`, `DELETE`, `archive`, and SSE `stream`.
+- Session fallback was tenant-gated only when the primary agent had a
+  non-null tenant; a null-tenant anchor silently allowed any
+  cross-tenant fallback tuple.
+
+### Operational notes
+
+- **v0.4 → v0.5 upgrade**: no migration required to boot. Resources
+  stay tenant-less (visible to global admins only) until you run
+  `gateway tenants migrate-legacy`.
+- **Clustered deployments** should set `RATE_LIMIT_BACKEND=redis +
+  REDIS_URL` and `npm i ioredis` in the runtime image. Without this,
+  each replica enforces its own per-key counter, effectively
+  multiplying the limit by the replica count.
+- **Webhook signing** is optional and off by default — existing
+  receivers keep working unsigned. Rotate a secret via `PATCH
+  /v1/agents/:id` with `{webhook_secret: "<32+ char hex>"}`. Note that
+  active sessions pin the agent version they were created under; the
+  new secret takes effect for *new* sessions only.
+
 ## [0.4.0] — 2026-04-16
 
 ### Added

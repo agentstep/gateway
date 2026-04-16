@@ -140,14 +140,29 @@ export function listAudit(opts: ListAuditOpts): AuditLogEntry[] {
     params.push(opts.createdLte);
   }
   if (opts.cursor) {
-    // Entries are ordered newest-first (id is a ULID so it's time-sortable).
-    clauses.push("id < ?");
-    params.push(opts.cursor);
+    // ULIDs sort by time within a single process, but two processes
+    // writing in the same millisecond can produce out-of-order ids.
+    // Use a composite (created_at, id) cursor so rows never get
+    // double-returned or skipped across a page boundary — look up the
+    // cursor row's timestamp and filter on (created_at, id) lexical
+    // order.
+    const anchor = db
+      .prepare(`SELECT created_at FROM audit_log WHERE id = ?`)
+      .get(opts.cursor) as { created_at: number } | undefined;
+    if (anchor) {
+      clauses.push("(created_at < ? OR (created_at = ? AND id < ?))");
+      params.push(anchor.created_at, anchor.created_at, opts.cursor);
+    } else {
+      // Unknown cursor — fall back to id-only so callers still make
+      // forward progress rather than hitting an empty page.
+      clauses.push("id < ?");
+      params.push(opts.cursor);
+    }
   }
 
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   const rows = db
-    .prepare(`SELECT * FROM audit_log ${where} ORDER BY id DESC LIMIT ?`)
+    .prepare(`SELECT * FROM audit_log ${where} ORDER BY created_at DESC, id DESC LIMIT ?`)
     .all(...params, limit) as AuditLogRow[];
   return rows.map(hydrate);
 }

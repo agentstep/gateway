@@ -32,6 +32,7 @@ import {
   useUpstreamKeys, useAddUpstreamKey, useSetUpstreamKeyDisabled, useDeleteUpstreamKey,
   type UpstreamKeyView, type UpstreamProvider,
 } from "@/hooks/use-upstream-keys";
+import { useWhoami } from "@/hooks/use-whoami";
 
 const PROVIDERS: Array<{ value: UpstreamProvider; label: string; vaultKey: string }> = [
   { value: "anthropic", label: "Anthropic", vaultKey: "ANTHROPIC_API_KEY" },
@@ -52,12 +53,17 @@ function timeAgo(ms: number | null): string {
 }
 
 export function UpstreamKeysSection() {
+  const { data: me } = useWhoami();
   const { data: keys, error } = useUpstreamKeys();
   const [addOpen, setAddOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<UpstreamKeyView | null>(null);
 
-  // Server returns 403 for non-admins; useUpstreamKeys collapses to [].
-  // We only hide the section entirely when an explicit error is still set.
+  // The pool is a global resource; only global admins can see or mutate
+  // it. Hiding for everyone else keeps tenant admins from even seeing
+  // provider prefixes the operator has configured.
+  if (me && !me.is_global_admin) return null;
+  // Server returns 403 for non-global-admin callers; useUpstreamKeys
+  // collapses that to [] but we still hide on any explicit error.
   if (error) return null;
 
   return (

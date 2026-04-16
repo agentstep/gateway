@@ -12,7 +12,7 @@
  * is already exposed but unused in v0.4.
  */
 import type { AuthContext } from "../types";
-import { badRequest, forbidden, notFound } from "../errors";
+import { forbidden, notFound } from "../errors";
 
 /** Throws 403 unless the caller is an admin (global or tenant). */
 export function requireAdmin(auth: AuthContext): void {

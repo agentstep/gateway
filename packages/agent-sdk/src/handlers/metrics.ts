@@ -28,7 +28,7 @@ import { routeWrap, jsonOk } from "../http";
 import { getDb } from "../db/client";
 import { badRequest } from "../errors";
 import { snapshotApiMetrics } from "../observability/api-metrics";
-import { tenantFilter } from "../auth/scope";
+import { requireGlobalAdmin, tenantFilter } from "../auth/scope";
 
 type GroupBy = "agent" | "environment" | "backend" | "hour" | "day" | "api_key" | "none";
 
@@ -525,14 +525,17 @@ export function handleGetMetrics(request: Request): Promise<Response> {
  * API throughput / latency snapshot for the dashboard.
  *
  * Unlike `handleGetMetrics` which aggregates the DB, this handler reads
- * the in-process ring buffer populated by `routeWrap`. Cheap, restart-
- * resets, good for a live dashboard.
+ * the in-process ring buffer populated by `routeWrap`. The ring buffer
+ * is NOT tenant-partitioned — it counts every request, so the snapshot
+ * leaks cross-tenant traffic patterns (throughput, 5xx rate, route
+ * cardinality). Global-admin-only for that reason.
  *
  * Query params:
  *   - `window_minutes`  — rolling window (1..60, default 60)
  */
 export function handleGetApiMetrics(request: Request): Promise<Response> {
-  return routeWrap(request, async () => {
+  return routeWrap(request, async ({ auth }) => {
+    requireGlobalAdmin(auth);
     const url = new URL(request.url);
     const wmRaw = Number(url.searchParams.get("window_minutes") ?? "60");
     if (!Number.isFinite(wmRaw) || wmRaw <= 0) {

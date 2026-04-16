@@ -407,6 +407,48 @@ describe("v0.5 tenant enforcement — session fallback", () => {
     expect(err.message).toMatch(new RegExp(acmeAgentId));
   });
 
+  it("fallback pointing at a deleted agent/env surfaces a 'not found' reason", async () => {
+    // P1-3: distinguish "fallback row was deleted" from "fallback is in
+    // another tenant". Before the fix, both landed in the same bucket
+    // with the "different tenant" message, misleading the operator.
+    const { globalKey } = await bootTenants();
+    const { handleCreateAgent } = await import("../src/handlers/agents");
+    const { handleCreateSession } = await import("../src/handlers/sessions");
+    const { getDb } = await import("../src/db/client");
+    const { newId } = await import("../src/util/ids");
+    const { nowMs } = await import("../src/util/clock");
+
+    const primary = await readJson(
+      await handleCreateAgent(
+        req("/v1/agents", globalKey, {
+          body: { name: "has-stale-fallback", model: "claude-sonnet-4-6", tenant_id: "tenant_default" },
+        }),
+      ),
+    );
+    const primaryEnvId = newId("env");
+    getDb().prepare(
+      `INSERT INTO environments (id, name, config_json, state, tenant_id, created_at)
+       VALUES (?, 'env', '{"type":"cloud","provider":"docker"}', 'error', 'tenant_default', ?)`,
+    ).run(primaryEnvId, nowMs());
+
+    // Fallback references rows that don't exist anywhere.
+    const fallbackJson = JSON.stringify([
+      { agent_id: "agent_deleted_at_some_point", environment_id: "env_also_gone" },
+    ]);
+    getDb().prepare(`UPDATE agents SET fallback_json = ? WHERE id = ?`)
+      .run(fallbackJson, primary.id);
+
+    const res = await handleCreateSession(
+      req("/v1/sessions", globalKey, {
+        body: { agent: primary.id, environment_id: primaryEnvId },
+      }),
+    );
+    expect(res.status).toBe(400);
+    const body = await readJson(res);
+    const err = body.error as { message: string };
+    expect(err.message).toMatch(/fallback agent not found/);
+  });
+
   it("same-tenant fallback still works", async () => {
     const { acmeAdminKey } = await bootTenants();
     const { handleCreateAgent } = await import("../src/handlers/agents");
@@ -458,6 +500,324 @@ describe("v0.5 tenant enforcement — session fallback", () => {
     const session = await readJson(res);
     expect((session.agent as { id: string }).id).toBe(backup.id);
     expect(session.environment_id).toBe(healthyEnv);
+  });
+});
+
+describe("v0.5 tenant enforcement — upstream-key pool (global-admin only)", () => {
+  beforeEach(() => freshDbEnv());
+
+  it("tenant admin cannot list, add, or delete pool entries", async () => {
+    const { acmeAdminKey } = await bootTenants();
+    const {
+      handleAddUpstreamKey, handleListUpstreamKeys,
+      handleGetUpstreamKey, handlePatchUpstreamKey, handleDeleteUpstreamKey,
+    } = await import("../src/handlers/upstream_keys");
+
+    const listRes = await handleListUpstreamKeys(req("/v1/upstream-keys", acmeAdminKey));
+    expect(listRes.status).toBe(403);
+
+    const addRes = await handleAddUpstreamKey(req("/v1/upstream-keys", acmeAdminKey, {
+      body: { provider: "anthropic", value: "sk-ant-api03-tenant-admin-cannot-add-padding" },
+    }));
+    expect(addRes.status).toBe(403);
+
+    const getRes = await handleGetUpstreamKey(
+      req("/v1/upstream-keys/ukey_something", acmeAdminKey), "ukey_something",
+    );
+    expect(getRes.status).toBe(403);
+
+    const patchRes = await handlePatchUpstreamKey(
+      req("/v1/upstream-keys/ukey_something", acmeAdminKey, { method: "PATCH", body: { disabled: true } }),
+      "ukey_something",
+    );
+    expect(patchRes.status).toBe(403);
+
+    const delRes = await handleDeleteUpstreamKey(
+      req("/v1/upstream-keys/ukey_something", acmeAdminKey, { method: "DELETE" }),
+      "ukey_something",
+    );
+    expect(delRes.status).toBe(403);
+  });
+
+  it("global admin can add + list; audit entries land under null tenant", async () => {
+    const { globalKey } = await bootTenants();
+    const {
+      handleAddUpstreamKey, handleListUpstreamKeys,
+    } = await import("../src/handlers/upstream_keys");
+    const { listAudit } = await import("../src/db/audit");
+
+    const addRes = await handleAddUpstreamKey(req("/v1/upstream-keys", globalKey, {
+      body: { provider: "anthropic", value: "sk-ant-api03-global-admin-add-padding" },
+    }));
+    expect(addRes.status).toBe(201);
+
+    const listRes = await handleListUpstreamKeys(req("/v1/upstream-keys", globalKey));
+    expect(listRes.status).toBe(200);
+
+    // The pool is global — audit entries should be tenant_id=null, not
+    // bucketed under the acting admin's (also null) tenant by accident.
+    const entries = listAudit({ action: "upstream_keys.add" });
+    expect(entries).toHaveLength(1);
+    expect(entries[0].tenant_id).toBeNull();
+  });
+});
+
+describe("v0.5 tenant enforcement — proxied (Anthropic backend) sessions", () => {
+  beforeEach(() => freshDbEnv());
+
+  it("pure-proxy session id from another tenant returns 404 on get/delete/stream", async () => {
+    // Stamp two proxy-only sessions directly (one per tenant) — the
+    // handler path expects proxy_resources rows, so seeding the table
+    // is sufficient to reproduce the pure-proxy shape.
+    const { globalKey, acmeAdminKey } = await bootTenants();
+    const { markProxied } = await import("../src/db/proxy");
+
+    markProxied("sess_proxy_default", "session", "tenant_default");
+    markProxied("sess_proxy_acme",    "session", "tenant_acme");
+
+    const { handleGetSession, handleDeleteSession, handleArchiveSession } =
+      await import("../src/handlers/sessions");
+    const { handleSessionStream } = await import("../src/handlers/stream");
+
+    // Acme admin trying to access tenant_default's proxy session: 404
+    // (not 403) so there's no id-existence probe.
+    const getRes = await handleGetSession(
+      req("/v1/sessions/sess_proxy_default", acmeAdminKey), "sess_proxy_default",
+    );
+    expect(getRes.status).toBe(404);
+
+    const delRes = await handleDeleteSession(
+      req("/v1/sessions/sess_proxy_default", acmeAdminKey, { method: "DELETE" }),
+      "sess_proxy_default",
+    );
+    expect(delRes.status).toBe(404);
+
+    const archRes = await handleArchiveSession(
+      req("/v1/sessions/sess_proxy_default/archive", acmeAdminKey, { method: "POST" }),
+      "sess_proxy_default",
+    );
+    expect(archRes.status).toBe(404);
+
+    const streamRes = await handleSessionStream(
+      req("/v1/sessions/sess_proxy_default/stream", acmeAdminKey),
+      "sess_proxy_default",
+    );
+    expect(streamRes.status).toBe(404);
+
+    // Global admin is fine (will forward upstream — this test doesn't
+    // stub that; we just assert the tenant gate doesn't block).
+    // Skipping the forward call to avoid a network dependency.
+    void globalKey;
+  });
+
+  it("proxy agent/env with another tenant returns 404 on get", async () => {
+    const { acmeAdminKey } = await bootTenants();
+    const { markProxied } = await import("../src/db/proxy");
+
+    markProxied("agent_proxy_default", "agent", "tenant_default");
+    markProxied("env_proxy_default", "environment", "tenant_default");
+
+    const { handleGetAgent } = await import("../src/handlers/agents");
+    const { handleGetEnvironment } = await import("../src/handlers/environments");
+
+    const a = await handleGetAgent(
+      req("/v1/agents/agent_proxy_default", acmeAdminKey), "agent_proxy_default",
+    );
+    expect(a.status).toBe(404);
+
+    const e = await handleGetEnvironment(
+      req("/v1/environments/env_proxy_default", acmeAdminKey), "env_proxy_default",
+    );
+    expect(e.status).toBe(404);
+  });
+});
+
+describe("v0.5 tenant enforcement — metrics endpoints", () => {
+  beforeEach(() => freshDbEnv());
+
+  it("/v1/metrics?group_by=agent returns only the caller's tenant's rows", async () => {
+    const { globalKey, acmeAdminKey } = await bootTenants();
+    const { getDb } = await import("../src/db/client");
+    const { nowMs } = await import("../src/util/clock");
+    const { handleGetMetrics } = await import("../src/handlers/metrics");
+
+    const db = getDb();
+    const now = nowMs();
+    db.prepare(
+      `INSERT INTO agents (id, current_version, name, tenant_id, created_at, updated_at)
+       VALUES ('agent_def', 1, 'def', 'tenant_default', ?, ?)`,
+    ).run(now, now);
+    db.prepare(
+      `INSERT INTO agents (id, current_version, name, tenant_id, created_at, updated_at)
+       VALUES ('agent_acme', 1, 'acme', 'tenant_acme', ?, ?)`,
+    ).run(now, now);
+    db.prepare(
+      `INSERT INTO agent_versions (agent_id, version, model, tools_json, mcp_servers_json, backend, webhook_events_json, skills_json, model_config_json, created_at)
+       VALUES ('agent_def', 1, 'claude-sonnet-4-6', '[]', '{}', 'claude', '[]', '[]', '{}', ?)`,
+    ).run(now);
+    db.prepare(
+      `INSERT INTO agent_versions (agent_id, version, model, tools_json, mcp_servers_json, backend, webhook_events_json, skills_json, model_config_json, created_at)
+       VALUES ('agent_acme', 1, 'claude-sonnet-4-6', '[]', '{}', 'claude', '[]', '[]', '{}', ?)`,
+    ).run(now);
+    db.prepare(
+      `INSERT INTO environments (id, name, config_json, state, tenant_id, created_at)
+       VALUES ('env_def', 'def', '{}', 'ready', 'tenant_default', ?)`,
+    ).run(now);
+    db.prepare(
+      `INSERT INTO environments (id, name, config_json, state, tenant_id, created_at)
+       VALUES ('env_acme', 'acme', '{}', 'ready', 'tenant_acme', ?)`,
+    ).run(now);
+    db.prepare(
+      `INSERT INTO sessions (id, agent_id, agent_version, environment_id, status, metadata_json, tenant_id, created_at, updated_at)
+       VALUES ('sess_def', 'agent_def', 1, 'env_def', 'idle', '{}', 'tenant_default', ?, ?)`,
+    ).run(now, now);
+    db.prepare(
+      `INSERT INTO sessions (id, agent_id, agent_version, environment_id, status, metadata_json, tenant_id, created_at, updated_at)
+       VALUES ('sess_acme', 'agent_acme', 1, 'env_acme', 'idle', '{}', 'tenant_acme', ?, ?)`,
+    ).run(now, now);
+
+    const globalRes = await handleGetMetrics(req("/v1/metrics?group_by=agent", globalKey));
+    const globalBody = await readJson(globalRes);
+    const globalKeys = (globalBody.groups as Array<{ key: string }>).map(g => g.key).sort();
+    expect(globalKeys).toEqual(["agent_acme", "agent_def"]);
+
+    const acmeRes = await handleGetMetrics(req("/v1/metrics?group_by=agent", acmeAdminKey));
+    const acmeBody = await readJson(acmeRes);
+    const acmeKeys = (acmeBody.groups as Array<{ key: string }>).map(g => g.key);
+    expect(acmeKeys).toEqual(["agent_acme"]);
+  });
+
+  it("/v1/metrics/api is 403 for non-global-admin callers", async () => {
+    const { acmeAdminKey } = await bootTenants();
+    const { handleGetApiMetrics } = await import("../src/handlers/metrics");
+    const res = await handleGetApiMetrics(req("/v1/metrics/api", acmeAdminKey));
+    expect(res.status).toBe(403);
+  });
+});
+
+describe("v0.5 tenant enforcement — session-scoped subresources", () => {
+  beforeEach(() => freshDbEnv());
+
+  async function seedSession(tenantId: string): Promise<string> {
+    const { getDb } = await import("../src/db/client");
+    const { newId } = await import("../src/util/ids");
+    const { nowMs } = await import("../src/util/clock");
+    const db = getDb();
+    const now = nowMs();
+    const id = newId("sess");
+    const aid = newId("agent");
+    const eid = newId("env");
+    db.prepare(
+      `INSERT INTO agents (id, current_version, name, tenant_id, created_at, updated_at)
+       VALUES (?, 1, 'a', ?, ?, ?)`,
+    ).run(aid, tenantId, now, now);
+    db.prepare(
+      `INSERT INTO agent_versions (agent_id, version, model, tools_json, mcp_servers_json, backend, webhook_events_json, skills_json, model_config_json, created_at)
+       VALUES (?, 1, 'claude-sonnet-4-6', '[]', '{}', 'claude', '[]', '[]', '{}', ?)`,
+    ).run(aid, now);
+    db.prepare(
+      `INSERT INTO environments (id, name, config_json, state, tenant_id, created_at)
+       VALUES (?, 'e', '{}', 'ready', ?, ?)`,
+    ).run(eid, tenantId, now);
+    db.prepare(
+      `INSERT INTO sessions (id, agent_id, agent_version, environment_id, status, metadata_json, tenant_id, created_at, updated_at)
+       VALUES (?, ?, 1, ?, 'idle', '{}', ?, ?, ?)`,
+    ).run(id, aid, eid, tenantId, now, now);
+    return id;
+  }
+
+  it("events POST + list from another tenant returns 404", async () => {
+    const { acmeAdminKey } = await bootTenants();
+    const sess = await seedSession("tenant_default");
+
+    const { handlePostEvents, handleListEvents } = await import("../src/handlers/events");
+
+    const postRes = await handlePostEvents(
+      req(`/v1/sessions/${sess}/events`, acmeAdminKey, {
+        body: { events: [{ type: "user.interrupt" }] },
+      }),
+      sess,
+    );
+    expect(postRes.status).toBe(404);
+
+    const listRes = await handleListEvents(
+      req(`/v1/sessions/${sess}/events`, acmeAdminKey),
+      sess,
+    );
+    expect(listRes.status).toBe(404);
+  });
+
+  it("stream from another tenant returns 404", async () => {
+    const { acmeAdminKey } = await bootTenants();
+    const sess = await seedSession("tenant_default");
+    const { handleSessionStream } = await import("../src/handlers/stream");
+    const res = await handleSessionStream(
+      req(`/v1/sessions/${sess}/stream`, acmeAdminKey),
+      sess,
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("resources from another tenant returns 404", async () => {
+    const { acmeAdminKey } = await bootTenants();
+    const sess = await seedSession("tenant_default");
+    const { handleAddResource, handleListResources } = await import("../src/handlers/resources");
+    const listRes = await handleListResources(
+      req(`/v1/sessions/${sess}/resources`, acmeAdminKey),
+      sess,
+    );
+    expect(listRes.status).toBe(404);
+    const addRes = await handleAddResource(
+      req(`/v1/sessions/${sess}/resources`, acmeAdminKey, {
+        body: { type: "uri", uri: "https://x" },
+      }),
+      sess,
+    );
+    expect(addRes.status).toBe(404);
+  });
+
+  it("threads from another tenant returns 404", async () => {
+    const { acmeAdminKey } = await bootTenants();
+    const sess = await seedSession("tenant_default");
+    const { handleListThreads } = await import("../src/handlers/threads");
+    const res = await handleListThreads(
+      req(`/v1/sessions/${sess}/threads`, acmeAdminKey),
+      sess,
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("files scope_id from another tenant returns 404", async () => {
+    const { acmeAdminKey } = await bootTenants();
+    const sess = await seedSession("tenant_default");
+    const { handleListFiles } = await import("../src/handlers/files");
+    const res = await handleListFiles(
+      req(`/v1/files?scope_id=${sess}`, acmeAdminKey),
+    );
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("v0.5 /v1/whoami", () => {
+  beforeEach(() => freshDbEnv());
+
+  it("global admin sees is_global_admin=true, tenant_id=null", async () => {
+    const { globalKey } = await bootTenants();
+    const { handleWhoami } = await import("../src/handlers/whoami");
+    const res = await handleWhoami(req("/v1/whoami", globalKey));
+    expect(res.status).toBe(200);
+    const body = await readJson(res);
+    expect(body.is_global_admin).toBe(true);
+    expect(body.tenant_id).toBeNull();
+  });
+
+  it("tenant admin sees their tenant_id and is_global_admin=false", async () => {
+    const { acmeAdminKey } = await bootTenants();
+    const { handleWhoami } = await import("../src/handlers/whoami");
+    const res = await handleWhoami(req("/v1/whoami", acmeAdminKey));
+    const body = await readJson(res);
+    expect(body.is_global_admin).toBe(false);
+    expect(body.tenant_id).toBe("tenant_acme");
   });
 });
 

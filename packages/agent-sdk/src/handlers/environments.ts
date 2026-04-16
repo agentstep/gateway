@@ -12,7 +12,7 @@ import {
 } from "../db/environments";
 import { kickoffEnvironmentSetup } from "../containers/setup";
 import { resolveContainerProvider as resolveProvider } from "../providers/registry";
-import { isProxied, markProxied, unmarkProxied } from "../db/proxy";
+import { isProxied, markProxied, unmarkProxied, getProxiedTenantId } from "../db/proxy";
 import { forwardToAnthropic } from "../proxy/forward";
 import { badRequest, conflict, notFound } from "../errors";
 import { assertResourceTenant, resolveCreateTenant, tenantFilter } from "../auth/scope";
@@ -32,6 +32,16 @@ function loadEnvForCaller(auth: AuthContext, id: string) {
   const env = getEnvironment(id);
   if (!env) throw notFound(`environment ${id} not found`);
   return env;
+}
+
+/**
+ * Tenant guard for proxied environments. Same rationale as
+ * assertProxiedAgentTenant in agents.ts.
+ */
+function assertProxiedEnvTenant(auth: AuthContext, id: string): void {
+  const proxied = getProxiedTenantId(id);
+  if (proxied === undefined) return;
+  assertResourceTenant(auth, proxied, `environment ${id} not found`);
 }
 
 const PackagesSchema = z
@@ -86,6 +96,10 @@ export function handleCreateEnvironment(request: Request): Promise<Response> {
     const parsed = CreateSchema.safeParse(body);
     if (!parsed.success) throw badRequest(parsed.error.message);
 
+    // Resolve tenant up-front so both the proxy and local paths can
+    // stamp it on any created resources.
+    const createTenantId = resolveCreateTenant(auth, parsed.data.tenant_id);
+
     if (parsed.data.backend === "anthropic") {
       const { backend: _, ...rest } = body as Record<string, unknown>;
       const forwardBody = JSON.stringify(rest);
@@ -93,13 +107,11 @@ export function handleCreateEnvironment(request: Request): Promise<Response> {
       if (proxyRes.ok) {
         try {
           const data = (await proxyRes.clone().json()) as { id: string };
-          markProxied(data.id, "environment");
+          markProxied(data.id, "environment", createTenantId);
         } catch { /* best-effort */ }
       }
       return proxyRes;
     }
-
-    const createTenantId = resolveCreateTenant(auth, parsed.data.tenant_id);
 
     // Check for duplicate name within the caller's tenant scope.
     const existingEnvs = listEnvironments({ limit: 1000, tenantFilter: tenantFilter(auth) });
@@ -158,7 +170,10 @@ export function handleListEnvironments(request: Request): Promise<Response> {
 
 export function handleGetEnvironment(request: Request, id: string): Promise<Response> {
   return routeWrap(request, async ({ auth }) => {
-    if (isProxied(id)) return forwardToAnthropic(request, `/v1/environments/${id}`);
+    if (isProxied(id)) {
+      assertProxiedEnvTenant(auth, id);
+      return forwardToAnthropic(request, `/v1/environments/${id}`);
+    }
     return jsonOk(loadEnvForCaller(auth, id));
   });
 }
@@ -166,6 +181,7 @@ export function handleGetEnvironment(request: Request, id: string): Promise<Resp
 export function handleDeleteEnvironment(request: Request, id: string): Promise<Response> {
   return routeWrap(request, async ({ auth }) => {
     if (isProxied(id)) {
+      assertProxiedEnvTenant(auth, id);
       const res = await forwardToAnthropic(request, `/v1/environments/${id}`);
       if (res.ok) unmarkProxied(id);
       return res;
@@ -182,6 +198,7 @@ export function handleDeleteEnvironment(request: Request, id: string): Promise<R
 export function handleArchiveEnvironment(request: Request, id: string): Promise<Response> {
   return routeWrap(request, async ({ auth }) => {
     if (isProxied(id)) {
+      assertProxiedEnvTenant(auth, id);
       const res = await forwardToAnthropic(request, `/v1/environments/${id}/archive`);
       if (res.ok) unmarkProxied(id);
       return res;
@@ -199,6 +216,7 @@ export function handleArchiveEnvironment(request: Request, id: string): Promise<
 export function handleUpdateEnvironment(request: Request, id: string): Promise<Response> {
   return routeWrap(request, async ({ auth }) => {
     if (isProxied(id)) {
+      assertProxiedEnvTenant(auth, id);
       return forwardToAnthropic(request, `/v1/environments/${id}`, {
         body: await request.text(),
       });

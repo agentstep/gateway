@@ -67,33 +67,70 @@ interface RedisClientLike {
 
 let redisLoadPromise: Promise<RedisClientLike | "unavailable"> | null = null;
 
+/**
+ * Are we allowed to silently fall back to memory when the Redis
+ * backend can't be loaded? Two policies:
+ *
+ *   - strict (default): any of (a) ioredis not installed, (b) REDIS_URL
+ *     unset throws at *first use* of `checkAndBump`. Failing loud
+ *     prevents the "N replicas silently enforce limit × N" footgun
+ *     where ops believe they've deployed a shared limiter but haven't.
+ *   - lenient: set RATE_LIMIT_BACKEND_ALLOW_FALLBACK=true. Fall back
+ *     to memory with a warning. Intended for single-host installs
+ *     that opted into redis in a template and don't want to block
+ *     boot when Redis isn't there.
+ *
+ * Note: transient Redis errors *at request time* always fail open to
+ * memory (handled in redisCheckAndBump). The strict/lenient toggle
+ * only covers the load-time "ioredis missing" / "REDIS_URL missing"
+ * case.
+ */
+function allowFallback(): boolean {
+  const v = (process.env.RATE_LIMIT_BACKEND_ALLOW_FALLBACK ?? "").toLowerCase();
+  return v === "1" || v === "true" || v === "yes";
+}
+
 async function loadRedis(): Promise<RedisClientLike | "unavailable"> {
   if (g.__caRateLimitRedis != null) return g.__caRateLimitRedis;
   if (redisLoadPromise) return redisLoadPromise;
   redisLoadPromise = (async () => {
+    const url = process.env.REDIS_URL;
+    if (!url) {
+      const msg = "[rate_limit] RATE_LIMIT_BACKEND=redis but REDIS_URL is unset.";
+      if (allowFallback()) {
+        console.warn(`${msg} Falling back to memory (RATE_LIMIT_BACKEND_ALLOW_FALLBACK=true).`);
+        g.__caRateLimitRedis = "unavailable";
+        return "unavailable";
+      }
+      // Strict default: fail the first rate-limit call so that a
+      // mis-configured cluster surface this *now*, not after days of
+      // silent over-allowance.
+      throw new Error(
+        `${msg} Set REDIS_URL or opt into the memory fallback with ` +
+        `RATE_LIMIT_BACKEND_ALLOW_FALLBACK=true.`,
+      );
+    }
+
     try {
       // ioredis default export is the `Redis` class. Using `new` with
       // the URL gives a lazily-connected client — the first operation
       // establishes the socket, so we don't block startup.
       const mod = await import("ioredis" as string);
       const Ctor = (mod.default ?? mod.Redis) as new (url: string) => RedisClientLike;
-      const url = process.env.REDIS_URL;
-      if (!url) {
-        console.warn("[rate_limit] RATE_LIMIT_BACKEND=redis but REDIS_URL is unset — falling back to memory");
-        g.__caRateLimitRedis = "unavailable";
-        return "unavailable";
-      }
       const client = new Ctor(url);
       g.__caRateLimitRedis = client;
       return client;
     } catch (err) {
-      console.warn(
+      const detail = err instanceof Error ? err.message : String(err);
+      const msg =
         "[rate_limit] RATE_LIMIT_BACKEND=redis but ioredis isn't installed. " +
-        "Run `npm i ioredis` in the deployment image. Falling back to memory for now.",
-        err instanceof Error ? err.message : String(err),
-      );
-      g.__caRateLimitRedis = "unavailable";
-      return "unavailable";
+        "Run `npm i ioredis` in the deployment image.";
+      if (allowFallback()) {
+        console.warn(`${msg} Falling back to memory (RATE_LIMIT_BACKEND_ALLOW_FALLBACK=true). detail=${detail}`);
+        g.__caRateLimitRedis = "unavailable";
+        return "unavailable";
+      }
+      throw new Error(`${msg} detail=${detail}`);
     }
   })();
   return redisLoadPromise;

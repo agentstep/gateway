@@ -3,7 +3,7 @@ import { routeWrap, jsonOk } from "../http";
 import { getDb } from "../db/client";
 import { createAgent, getAgent, updateAgent, archiveAgent, listAgents } from "../db/agents";
 import { resolveBackend } from "../backends/registry";
-import { isProxied, markProxied, unmarkProxied } from "../db/proxy";
+import { isProxied, markProxied, unmarkProxied, getProxiedTenantId } from "../db/proxy";
 import { forwardToAnthropic, validateAnthropicProxy } from "../proxy/forward";
 import { badRequest, notFound, conflict } from "../errors";
 import { assertResourceTenant, resolveCreateTenant, tenantFilter } from "../auth/scope";
@@ -29,6 +29,18 @@ function loadAgentForCaller(auth: AuthContext, id: string, version?: number) {
   const agent = getAgent(id, version);
   if (!agent) throw notFound(`agent ${id} not found`);
   return agent;
+}
+
+/**
+ * Tenant guard for proxied agents. Proxied agents live in
+ * `proxy_resources` and have no row in the local `agents` table, so
+ * the regular loadAgentForCaller can't help. Legacy rows (no
+ * tenant_id) resolve as global-admin-only.
+ */
+function assertProxiedAgentTenant(auth: AuthContext, id: string): void {
+  const proxied = getProxiedTenantId(id);
+  if (proxied === undefined) return; // not proxied after all
+  assertResourceTenant(auth, proxied, `agent ${id} not found`);
 }
 
 const SkillSchema = z.object({
@@ -151,7 +163,9 @@ export function handleCreateAgent(request: Request): Promise<Response> {
       if (proxyRes.ok) {
         try {
           const data = (await proxyRes.clone().json()) as { id: string };
-          markProxied(data.id, "agent");
+          // Stamp the caller's tenant so subsequent cross-tenant access
+          // attempts against this proxy-only resource are rejected.
+          markProxied(data.id, "agent", createTenantId);
         } catch { /* best-effort */ }
       }
       return proxyRes;
@@ -226,7 +240,10 @@ export function handleListAgents(request: Request): Promise<Response> {
 
 export function handleGetAgent(request: Request, id: string): Promise<Response> {
   return routeWrap(request, async ({ auth }) => {
-    if (isProxied(id)) return forwardToAnthropic(request, `/v1/agents/${id}`);
+    if (isProxied(id)) {
+      assertProxiedAgentTenant(auth, id);
+      return forwardToAnthropic(request, `/v1/agents/${id}`);
+    }
     const url = new URL(request.url);
     const versionParam = url.searchParams.get("version");
     const version = versionParam ? Number(versionParam) : undefined;
@@ -237,7 +254,10 @@ export function handleGetAgent(request: Request, id: string): Promise<Response> 
 
 export function handleUpdateAgent(request: Request, id: string): Promise<Response> {
   return routeWrap(request, async ({ auth }) => {
-    if (isProxied(id)) return forwardToAnthropic(request, `/v1/agents/${id}`);
+    if (isProxied(id)) {
+      assertProxiedAgentTenant(auth, id);
+      return forwardToAnthropic(request, `/v1/agents/${id}`);
+    }
     loadAgentForCaller(auth, id); // tenant guard
     const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
 
@@ -274,6 +294,7 @@ export function handleUpdateAgent(request: Request, id: string): Promise<Respons
 export function handleDeleteAgent(request: Request, id: string): Promise<Response> {
   return routeWrap(request, async ({ auth }) => {
     if (isProxied(id)) {
+      assertProxiedAgentTenant(auth, id);
       const res = await forwardToAnthropic(request, `/v1/agents/${id}`);
       if (res.ok) unmarkProxied(id);
       return res;

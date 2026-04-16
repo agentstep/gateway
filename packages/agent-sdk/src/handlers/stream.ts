@@ -3,7 +3,7 @@ import { authenticate } from "../auth/middleware";
 import { subscribe } from "../sessions/bus";
 import { getDb } from "../db/client";
 import { getSession } from "../db/sessions";
-import { isProxied } from "../db/proxy";
+import { isProxied, getProxiedTenantId } from "../db/proxy";
 import { resolveRemoteSessionId } from "../db/sync";
 import { forwardToAnthropic } from "../proxy/forward";
 import { toResponse, notFound } from "../errors";
@@ -16,11 +16,22 @@ export async function handleSessionStream(request: Request, sessionId: string): 
     const auth = await authenticate(request);
 
     // Tenant guard — cross-tenant SSE looks like 404, not 403.
+    // Two possible sources of truth:
+    //   - Local sessions row (sync-and-proxy or native)
+    //   - Proxy-only row (agent engine=anthropic, no local mirror)
+    // Check local first; fall through to the proxy table so pure-
+    // proxy sessions don't bypass tenancy.
     const tenantRow = getDb()
       .prepare(`SELECT tenant_id FROM sessions WHERE id = ?`)
       .get(sessionId) as { tenant_id: string | null } | undefined;
     if (tenantRow) {
       assertResourceTenant(auth, tenantRow.tenant_id, `session ${sessionId} not found`);
+    } else {
+      const proxyTenant = getProxiedTenantId(sessionId);
+      if (proxyTenant !== undefined) {
+        assertResourceTenant(auth, proxyTenant, `session ${sessionId} not found`);
+      }
+      // If neither exists, the downstream code will return a 404.
     }
 
     // Sync-and-proxy sessions have a local record — serve from local event bus.

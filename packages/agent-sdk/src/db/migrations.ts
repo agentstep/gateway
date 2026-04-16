@@ -531,4 +531,18 @@ export function runMigrations(db: InstanceType<typeof Database>): void {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_audit_tenant_time ON audit_log(tenant_id, created_at)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_audit_actor       ON audit_log(actor_key_id, created_at)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_audit_action_time ON audit_log(action, created_at)`);
+
+  // Proxy routing tenant column (v0.5 P1-2). Proxied resources with no
+  // local mirror row previously bypassed tenant checks entirely because
+  // the lookup key was absent from every tenant-aware table. Stamp the
+  // tenant at mark-time so pure-proxy sessions/agents/envs can still be
+  // access-controlled per-tenant. Pre-v0.5 rows stay null and resolve
+  // as global-admin-only.
+  const proxyCols = db
+    .prepare(`PRAGMA table_info(proxy_resources)`)
+    .all() as Array<{ name: string }>;
+  if (!proxyCols.some((c) => c.name === "tenant_id")) {
+    db.exec(`ALTER TABLE proxy_resources ADD COLUMN tenant_id TEXT`);
+  }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_proxy_tenant ON proxy_resources(tenant_id)`);
 }

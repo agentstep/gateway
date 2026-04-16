@@ -125,8 +125,20 @@ export function selectNextUpstreamKey(provider: string): { id: string; value: st
   db.prepare(`UPDATE upstream_keys SET last_used_at = ? WHERE id = ?`).run(nowMs(), row.id);
   try {
     return { id: row.id, value: decryptValue(row.value_encrypted) };
-  } catch {
-    // Corrupt ciphertext — disable the row so we don't keep hitting it.
+  } catch (err) {
+    // Corrupt ciphertext — disable the row so we don't keep hitting
+    // it. The usual cause is a rotated / changed VAULT_ENCRYPTION_KEY
+    // without re-encrypting existing rows: once the key changes, every
+    // pool row becomes "corrupt" simultaneously and the gateway
+    // appears to fail with "no upstream key available." Call that out
+    // loudly so the operator can correlate.
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(
+      `[upstream-keys] DISABLING ${row.id} (provider=${row.provider}, prefix=${row.prefix}) ` +
+      `— decryption failed (${msg}). ` +
+      `Most likely VAULT_ENCRYPTION_KEY changed since this row was written. ` +
+      `Check your .env / secrets, restore the prior VAULT_ENCRYPTION_KEY, or re-add pool keys with the new key.`,
+    );
     disableUpstreamKey(row.id);
     return null;
   }

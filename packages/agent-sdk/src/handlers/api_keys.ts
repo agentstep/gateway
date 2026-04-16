@@ -237,27 +237,43 @@ export function handleGetApiKeyActivity(
 
     const sessions = listSessionsByApiKey(id, { limit: 50 });
 
-    // Totals across all sessions (not just the returned 50) for this key.
+    // Totals across all sessions (not just the returned 50) for this
+    // key. Defense-in-depth tenant scope: today a key's sessions
+    // always belong to the key's own tenant (enforced at session
+    // create), but if that invariant ever slips we still refuse to
+    // leak another tenant's totals here.
     const db = getDb();
-    const totals = db
-      .prepare(
-        `SELECT COUNT(*)                         AS session_count,
-                COALESCE(SUM(usage_cost_usd), 0) AS cost_usd,
-                COALESCE(SUM(turn_count), 0)     AS turn_count
-           FROM sessions
-          WHERE api_key_id = ?`,
-      )
-      .get(id) as { session_count: number; cost_usd: number; turn_count: number };
+    const tenantId = tenantFilter(auth);
+    const totals = (tenantId != null
+      ? db.prepare(
+          `SELECT COUNT(*)                         AS session_count,
+                  COALESCE(SUM(usage_cost_usd), 0) AS cost_usd,
+                  COALESCE(SUM(turn_count), 0)     AS turn_count
+             FROM sessions
+            WHERE api_key_id = ? AND tenant_id = ?`,
+        ).get(id, tenantId)
+      : db.prepare(
+          `SELECT COUNT(*)                         AS session_count,
+                  COALESCE(SUM(usage_cost_usd), 0) AS cost_usd,
+                  COALESCE(SUM(turn_count), 0)     AS turn_count
+             FROM sessions
+            WHERE api_key_id = ?`,
+        ).get(id)) as { session_count: number; cost_usd: number; turn_count: number };
 
     // Error count via events table (consistent with handleGetMetrics).
-    const errorRow = db
-      .prepare(
-        `SELECT COUNT(*) AS error_count
-           FROM events e
-           JOIN sessions s ON s.id = e.session_id
-          WHERE s.api_key_id = ? AND e.type = 'session.error'`,
-      )
-      .get(id) as { error_count: number };
+    const errorRow = (tenantId != null
+      ? db.prepare(
+          `SELECT COUNT(*) AS error_count
+             FROM events e
+             JOIN sessions s ON s.id = e.session_id
+            WHERE s.api_key_id = ? AND s.tenant_id = ? AND e.type = 'session.error'`,
+        ).get(id, tenantId)
+      : db.prepare(
+          `SELECT COUNT(*) AS error_count
+             FROM events e
+             JOIN sessions s ON s.id = e.session_id
+            WHERE s.api_key_id = ? AND e.type = 'session.error'`,
+        ).get(id)) as { error_count: number };
 
     return jsonOk({
       id,

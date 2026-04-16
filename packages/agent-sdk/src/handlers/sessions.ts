@@ -15,7 +15,7 @@ import { getActor, dropActor } from "../sessions/actor";
 import { appendEvent, dropEmitter } from "../sessions/bus";
 import { interruptSession } from "../sessions/interrupt";
 import { releaseSession } from "../containers/lifecycle";
-import { isProxied, markProxied, unmarkProxied } from "../db/proxy";
+import { isProxied, markProxied, unmarkProxied, getProxiedTenantId } from "../db/proxy";
 import { forwardToAnthropic } from "../proxy/forward";
 import { syncAndCreateSession } from "../sync/anthropic";
 import { upsertSync, resolveRemoteSessionId } from "../db/sync";
@@ -52,6 +52,26 @@ function loadSessionForCaller(auth: AuthContext, id: string) {
   const session = getSession(id);
   if (!session) throw notFound(`session ${id} not found`);
   return session;
+}
+
+/**
+ * Enforce tenancy for proxied sessions. Two states:
+ *   - Local row present (sync-and-proxy): the local `sessions.tenant_id`
+ *     wins; `proxy_resources` is stamped to match.
+ *   - Local row absent (pure proxy): only `proxy_resources` has the
+ *     tenant id, so a cross-tenant probe for an id belonging to another
+ *     tenant must 404 here before we forward.
+ * Legacy proxy rows with null tenant resolve as global-admin-only.
+ */
+function assertProxiedSessionTenant(auth: AuthContext, id: string): void {
+  const local = getSessionTenantId(id);
+  if (local !== undefined) {
+    assertResourceTenant(auth, local, `session ${id} not found`);
+    return;
+  }
+  const proxied = getProxiedTenantId(id);
+  if (proxied === undefined) return; // not in either table — let caller 404
+  assertResourceTenant(auth, proxied, `session ${id} not found`);
 }
 
 const ALLOWED_STATUSES: SessionStatus[] = ["idle", "running", "rescheduling", "terminated"];
@@ -158,11 +178,19 @@ export function handleCreateSession(request: Request): Promise<Response> {
     const initialAgentId = typeof data.agent === "string" ? data.agent : data.agent.id;
 
     if (isProxied(initialAgentId)) {
+      // The proxied agent was stamped with a tenant at create-time;
+      // a tenant user must match to be allowed to create a session
+      // against it. Reject early so we don't leak the existence of
+      // agents in other tenants via the proxy.
+      const { getProxiedTenantId } = await import("../db/proxy");
+      const agentTenant = getProxiedTenantId(initialAgentId);
+      assertResourceTenant(auth, agentTenant ?? null, `agent not found: ${initialAgentId}`);
       const proxyRes = await forwardToAnthropic(request, "/v1/sessions", { body: rawBody });
       if (proxyRes.ok) {
         try {
           const data = (await proxyRes.clone().json()) as { id: string };
-          markProxied(data.id, "session");
+          // New session inherits the agent's tenant.
+          markProxied(data.id, "session", agentTenant ?? null);
         } catch { /* best-effort */ }
       }
       return proxyRes;
@@ -282,7 +310,10 @@ export function handleCreateSession(request: Request): Promise<Response> {
         });
 
         upsertSync(session.id, "session", remoteSessionId);
-        markProxied(session.id, "session");
+        // Sync-and-proxy sessions have a local row AND a proxy entry;
+        // stamp both with the same tenant so cross-tenant access
+        // attempts are rejected identically by either code path.
+        markProxied(session.id, "session", agentTenantId);
         getActor(session.id);
         return jsonOk(session, 201);
       }
@@ -313,12 +344,17 @@ export function handleCreateSession(request: Request): Promise<Response> {
     // Build the candidate chain: [primary, ...fallbacks-from-primary's-agent-row].
     // Cap at 3 hops total. Cycle-detect via visited (agent_id, env_id).
     //
-    // v0.5: tenant isolation. A fallback tuple pointing at an agent in a
-    // different tenant is silently skipped — we never step across tenant
-    // boundaries even if an operator mis-configured the list. The primary
-    // agent's tenant is the "anchor" for the entire chain; every fallback
-    // must share it. Cross-tenant tuples are logged to the attempted list
-    // so operators can see why a tuple was passed over.
+    // v0.5: tenant isolation. Fallback tuples must share the primary
+    // agent's tenant — otherwise the chain could silently step across
+    // tenant boundaries. We skip cross-tenant candidates (rather than
+    // 400 the whole request) so a single stale tuple doesn't break the
+    // primary path; each skip is recorded on `skippedCrossTenant` with
+    // a *specific* reason, so operators can tell "deleted" apart from
+    // "cross-tenant" when they debug mysterious fallback behaviour.
+    //
+    // Null-anchor rule: when the primary agent has no tenant (legacy
+    // pre-migration row), we forbid ALL fallback candidates with a
+    // non-null tenant — the chain must also be legacy-shaped.
     const MAX_HOPS = 3;
     const primary: FallbackTuple = {
       agent_id: initialAgentId,
@@ -330,17 +366,24 @@ export function handleCreateSession(request: Request): Promise<Response> {
     const skippedCrossTenant: Array<FallbackTuple & { reason: string }> = [];
     if (primaryAgent) {
       for (const fb of parseFallbackJson(primaryAgent.fallback_json ?? null)) {
-        // Refuse fallback candidates that cross the tenant boundary.
-        // Skipping beats failing loudly — a well-configured chain may
-        // intentionally include some tenant-neutral placeholder tuples
-        // and we don't want to abort the whole fallback for one bad row.
         const fbAgentTenant = getAgentTenantId(fb.agent_id);
         const fbEnvTenant = getEnvironmentTenantId(fb.environment_id);
-        if (anchorTenantId != null && fbAgentTenant !== anchorTenantId) {
+
+        // Distinguish "missing row" from "wrong tenant" so operator-
+        // visible error messages are actionable.
+        if (fbAgentTenant === undefined) {
+          skippedCrossTenant.push({ ...fb, reason: "fallback agent not found" });
+          continue;
+        }
+        if (fbEnvTenant === undefined) {
+          skippedCrossTenant.push({ ...fb, reason: "fallback environment not found" });
+          continue;
+        }
+        if (fbAgentTenant !== anchorTenantId) {
           skippedCrossTenant.push({ ...fb, reason: "fallback agent is in a different tenant" });
           continue;
         }
-        if (anchorTenantId != null && fbEnvTenant !== anchorTenantId) {
+        if (fbEnvTenant !== anchorTenantId) {
           skippedCrossTenant.push({ ...fb, reason: "fallback environment is in a different tenant" });
           continue;
         }
@@ -456,14 +499,10 @@ export function handleListSessions(request: Request): Promise<Response> {
 export function handleGetSession(request: Request, id: string): Promise<Response> {
   return routeWrap(request, async ({ auth }) => {
     if (isProxied(id)) {
+      assertProxiedSessionTenant(auth, id);
       // Sync-and-proxy sessions have a local record — return it
       const localSession = getSession(id);
-      if (localSession) {
-        // tenant guard still applies to local record
-        const tenantId = getSessionTenantId(id);
-        assertResourceTenant(auth, tenantId ?? null, `session ${id} not found`);
-        return jsonOk(localSession);
-      }
+      if (localSession) return jsonOk(localSession);
       // Pure proxy: forward to Anthropic
       return forwardToAnthropic(request, `/v1/sessions/${resolveRemoteSessionId(id)}`);
     }
@@ -473,7 +512,10 @@ export function handleGetSession(request: Request, id: string): Promise<Response
 
 export function handleUpdateSession(request: Request, id: string): Promise<Response> {
   return routeWrap(request, async ({ auth }) => {
-    if (isProxied(id)) return forwardToAnthropic(request, `/v1/sessions/${resolveRemoteSessionId(id)}`);
+    if (isProxied(id)) {
+      assertProxiedSessionTenant(auth, id);
+      return forwardToAnthropic(request, `/v1/sessions/${resolveRemoteSessionId(id)}`);
+    }
     loadSessionForCaller(auth, id); // tenant guard
     const body = await request.json().catch(() => null);
     const parsed = UpdateSchema.safeParse(body);
@@ -491,6 +533,7 @@ export function handleUpdateSession(request: Request, id: string): Promise<Respo
 export function handleDeleteSession(request: Request, id: string): Promise<Response> {
   return routeWrap(request, async ({ auth }) => {
     if (isProxied(id)) {
+      assertProxiedSessionTenant(auth, id);
       const res = await forwardToAnthropic(request, `/v1/sessions/${resolveRemoteSessionId(id)}`);
       if (res.ok) unmarkProxied(id);
       return res;
@@ -518,6 +561,7 @@ export function handleDeleteSession(request: Request, id: string): Promise<Respo
 export function handleArchiveSession(request: Request, id: string): Promise<Response> {
   return routeWrap(request, async ({ auth }) => {
     if (isProxied(id)) {
+      assertProxiedSessionTenant(auth, id);
       const res = await forwardToAnthropic(request, `/v1/sessions/${resolveRemoteSessionId(id)}/archive`);
       if (res.ok) unmarkProxied(id);
       return res;

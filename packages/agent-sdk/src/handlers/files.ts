@@ -106,13 +106,16 @@ export function handleListFiles(request: Request): Promise<Response> {
     const limit = Number(url.searchParams.get("limit") || "100");
     const scope_id = url.searchParams.get("scope_id") || undefined;
     if (scope_id) {
-      // Tenant-scoped listing — caller must own the session the files are
-      // attached to. Unscoped listings are global-admin-only.
+      // Tenant-scoped listing — caller must own the session the files
+      // are attached to. Unknown scope_id → 404 (matches the pattern
+      // used by every other get-by-id handler; "empty list for
+      // unknown id" would silently let typos pass). Unscoped listings
+      // are global-admin-only.
       const row = getDb()
         .prepare(`SELECT tenant_id FROM sessions WHERE id = ?`)
         .get(scope_id) as { tenant_id: string | null } | undefined;
-      if (!row) return jsonOk({ data: [] });
-      assertResourceTenant(auth, row.tenant_id, "files not found");
+      if (!row) throw notFound(`session not found: ${scope_id}`);
+      assertResourceTenant(auth, row.tenant_id, `session not found: ${scope_id}`);
     } else if (!auth.isGlobalAdmin) {
       // Tenant users can't fetch an unscoped file list. Force scope_id.
       throw badRequest("scope_id is required for tenant-scoped listings");

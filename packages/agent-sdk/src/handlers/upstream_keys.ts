@@ -1,5 +1,13 @@
 /**
- * /v1/upstream-keys — admin-only CRUD for the per-provider upstream key pool.
+ * /v1/upstream-keys — global-admin-only CRUD for the per-provider
+ * upstream key pool.
+ *
+ * The pool is a *global* resource (no tenant_id column). Every session
+ * from every tenant draws from it. Giving tenant admins write access
+ * lets one tenant disable/delete keys that other tenants are live on —
+ * an isolation break, not a scoping improvement. Reads are also
+ * global-admin-only because the provider + prefix list would let a
+ * tenant admin fingerprint the operator's broader setup.
  *
  * v0.5 provider set: "anthropic", "openai", "gemini". The resolver in
  * providers/upstream-keys.ts knows how to pull the right vault entry
@@ -8,7 +16,7 @@
 import { z } from "zod";
 import { routeWrap, jsonOk } from "../http";
 import { badRequest, notFound } from "../errors";
-import { requireAdmin } from "../auth/scope";
+import { requireGlobalAdmin } from "../auth/scope";
 import {
   addUpstreamKey,
   listUpstreamKeys,
@@ -32,7 +40,7 @@ const PatchBody = z.object({
 
 export function handleAddUpstreamKey(request: Request): Promise<Response> {
   return routeWrap(request, async ({ auth, request: req }) => {
-    requireAdmin(auth);
+    requireGlobalAdmin(auth);
     const body = await req.json().catch(() => null);
     const parsed = AddBody.safeParse(body);
     if (!parsed.success) {
@@ -45,6 +53,9 @@ export function handleAddUpstreamKey(request: Request): Promise<Response> {
         action: "upstream_keys.add",
         resource_type: "upstream_key",
         resource_id: added.id,
+        // Pool is global; audit entries are tenant_id=null so they land
+        // in the global-admin view, not in any tenant's audit slice.
+        tenant_id: null,
         metadata: { provider: added.provider, prefix: added.prefix },
       });
       return jsonOk(added, 201);
@@ -60,7 +71,7 @@ export function handleAddUpstreamKey(request: Request): Promise<Response> {
 
 export function handleListUpstreamKeys(request: Request): Promise<Response> {
   return routeWrap(request, async ({ auth, request: req }) => {
-    requireAdmin(auth);
+    requireGlobalAdmin(auth);
     const url = new URL(req.url);
     const provider = url.searchParams.get("provider") ?? undefined;
     return jsonOk({ data: listUpstreamKeys(provider) });
@@ -69,7 +80,7 @@ export function handleListUpstreamKeys(request: Request): Promise<Response> {
 
 export function handleGetUpstreamKey(request: Request, id: string): Promise<Response> {
   return routeWrap(request, async ({ auth }) => {
-    requireAdmin(auth);
+    requireGlobalAdmin(auth);
     const row = getUpstreamKey(id);
     if (!row) throw notFound(`upstream key ${id} not found`);
     return jsonOk(row);
@@ -79,7 +90,7 @@ export function handleGetUpstreamKey(request: Request, id: string): Promise<Resp
 /** Enable or disable a pool entry. Body: { disabled: true|false }. */
 export function handlePatchUpstreamKey(request: Request, id: string): Promise<Response> {
   return routeWrap(request, async ({ auth, request: req }) => {
-    requireAdmin(auth);
+    requireGlobalAdmin(auth);
     const body = await req.json().catch(() => null);
     const parsed = PatchBody.safeParse(body);
     if (!parsed.success) {
@@ -93,6 +104,7 @@ export function handlePatchUpstreamKey(request: Request, id: string): Promise<Re
       action: parsed.data.disabled ? "upstream_keys.disable" : "upstream_keys.enable",
       resource_type: "upstream_key",
       resource_id: id,
+      tenant_id: null,
       metadata: { provider: after?.provider },
     });
     return jsonOk(after);
@@ -101,7 +113,7 @@ export function handlePatchUpstreamKey(request: Request, id: string): Promise<Re
 
 export function handleDeleteUpstreamKey(request: Request, id: string): Promise<Response> {
   return routeWrap(request, async ({ auth }) => {
-    requireAdmin(auth);
+    requireGlobalAdmin(auth);
     const before = getUpstreamKey(id);
     const ok = deleteUpstreamKey(id);
     if (!ok) throw notFound(`upstream key ${id} not found`);
@@ -110,6 +122,7 @@ export function handleDeleteUpstreamKey(request: Request, id: string): Promise<R
       action: "upstream_keys.delete",
       resource_type: "upstream_key",
       resource_id: id,
+      tenant_id: null,
       metadata: before ? { provider: before.provider, prefix: before.prefix } : {},
     });
     return jsonOk({ ok: true, id });

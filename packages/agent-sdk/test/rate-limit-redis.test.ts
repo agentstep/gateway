@@ -96,14 +96,19 @@ describe("rate-limit Redis backend", () => {
     expect(fake.incrCalls).toBe(1);
   });
 
-  it("falls back to memory when ioredis isn't installed", async () => {
-    const mod = await import("../src/auth/rate_limit");
-    mod._setRedisClientForTesting("unavailable");
+  it("falls back to memory when ioredis isn't installed AND allow-fallback is set", async () => {
+    process.env.RATE_LIMIT_BACKEND_ALLOW_FALLBACK = "true";
+    try {
+      const mod = await import("../src/auth/rate_limit");
+      mod._setRedisClientForTesting("unavailable");
 
-    // Should still work via the memory path — refusal after the limit.
-    expect(await mod.checkAndBump("no-redis", 1)).toBeNull();
-    const retry = await mod.checkAndBump("no-redis", 1);
-    expect(retry).not.toBeNull();
+      // Should still work via the memory path — refusal after the limit.
+      expect(await mod.checkAndBump("no-redis", 1)).toBeNull();
+      const retry = await mod.checkAndBump("no-redis", 1);
+      expect(retry).not.toBeNull();
+    } finally {
+      delete process.env.RATE_LIMIT_BACKEND_ALLOW_FALLBACK;
+    }
   });
 
   it("null limit is always allowed regardless of backend", async () => {
@@ -116,6 +121,20 @@ describe("rate-limit Redis backend", () => {
     }
     // No Redis calls made — null shortcircuits before the backend lookup.
     expect(fake.incrCalls).toBe(0);
+  });
+
+  it("strict mode (no ALLOW_FALLBACK env) hard-fails when Redis can't be loaded", async () => {
+    // Simulate a boot where ioredis wasn't installed but ops asked for
+    // the redis backend. The first checkAndBump should reject so the
+    // misconfiguration surfaces immediately, not after days of silent
+    // over-allowance across replicas.
+    delete process.env.REDIS_URL;
+    const mod = await import("../src/auth/rate_limit");
+    // _setRedisClientForTesting also nukes the resolved-promise cache.
+    mod._setRedisClientForTesting(undefined);
+    await expect(mod.checkAndBump("strict-key", 1)).rejects.toThrow(
+      /RATE_LIMIT_BACKEND=redis/i,
+    );
   });
 
   it("memory backend is default when RATE_LIMIT_BACKEND is unset", async () => {

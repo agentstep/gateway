@@ -83,20 +83,26 @@ export function handlePatchTenant(request: Request, id: string): Promise<Respons
     if (!parsed.success) {
       throw badRequest(parsed.error.errors.map((e) => e.message).join("; "));
     }
+    let changed = false;
     if (parsed.data.name) {
       const ok = renameTenant(id, parsed.data.name);
       if (!ok) throw notFound(`tenant ${id} not found`);
+      changed = true;
     }
     const tenant = getTenant(id);
     if (!tenant) throw notFound(`tenant ${id} not found`);
-    recordAudit({
-      auth,
-      action: "tenants.update",
-      resource_type: "tenant",
-      resource_id: id,
-      tenant_id: id,
-      metadata: parsed.data.name ? { new_name: parsed.data.name } : {},
-    });
+    // Only audit when something actually changed — empty PATCHes
+    // shouldn't pollute the log with noise entries.
+    if (changed) {
+      recordAudit({
+        auth,
+        action: "tenants.update",
+        resource_type: "tenant",
+        resource_id: id,
+        tenant_id: id,
+        metadata: { new_name: parsed.data.name },
+      });
+    }
     return jsonOk(tenant);
   });
 }
