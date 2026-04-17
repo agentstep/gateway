@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { createRouter, createRoute, createRootRoute, redirect, Outlet, useRouterState } from "@tanstack/react-router";
+import { createRouter, createRoute, createRootRoute, redirect, Outlet, useRouterState, useNavigate } from "@tanstack/react-router";
 import { SkipForward } from "lucide-react";
 import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";
@@ -58,6 +58,7 @@ function RootLayout() {
           <SidebarTrigger className="-ml-1 text-muted-foreground" />
           <Separator orientation="vertical" className="mr-2 !self-center h-4" />
           <PageBreadcrumb />
+          <NavbarCenter />
           <SkipOnboardingButton />
         </header>
         <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
@@ -101,6 +102,49 @@ function PageBreadcrumb() {
         </BreadcrumbItem>
       </BreadcrumbList>
     </Breadcrumb>
+  );
+}
+
+/**
+ * Route-aware center slot in the navbar. Only renders content for
+ * routes that need sub-navigation (currently: /dashboard tabs).
+ * On all other routes this returns null — the header stays clean.
+ */
+function NavbarCenter() {
+  const routerState = useRouterState();
+  const path = routerState.location.pathname;
+  if (path !== "/dashboard") return null;
+  return <DashboardNavTabs />;
+}
+
+const DASHBOARD_TABS = [
+  { value: "agents", label: "Agent Activity" },
+  { value: "api", label: "API Throughput" },
+] as const;
+
+function DashboardNavTabs() {
+  const routerState = useRouterState();
+  const params = new URLSearchParams(routerState.location.searchStr);
+  const activeTab = params.get("tab") === "api" ? "api" : "agents";
+  const nav = useNavigate();
+  return (
+    <div className="flex-1 flex justify-center">
+      <div className="inline-flex items-center gap-0.5 rounded-lg bg-muted p-0.5">
+        {DASHBOARD_TABS.map((t) => (
+          <button
+            key={t.value}
+            onClick={() => nav({ to: "/dashboard", search: { tab: t.value } as never, replace: true })}
+            className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+              activeTab === t.value
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 

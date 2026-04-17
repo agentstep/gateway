@@ -11,9 +11,8 @@
  * links can be shared and browser back/forward works.
  */
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useAppStore } from "@/stores/app-store";
-import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useSearch } from "@tanstack/react-router";
 import { AgentActivityPanel } from "./AgentActivityPanel";
 import { ApiThroughputPanel } from "./ApiThroughputPanel";
 
@@ -28,49 +27,34 @@ export function DashboardPage() {
   const windowMinutes = useAppStore((s) => s.dashboardWindowMinutes);
   const setWindowMinutes = useAppStore((s) => s.setDashboardWindowMinutes);
   const { tab } = useSearch({ from: "/dashboard" }) as { tab: "agents" | "api" };
-  const navigate = useNavigate();
 
   return (
     <div className="flex-1 overflow-y-auto px-6 py-6">
-      <Tabs
-        value={tab}
-        onValueChange={(v) =>
-          navigate({ to: "/dashboard", search: { tab: v as "agents" | "api" }, replace: true })
-        }
-      >
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="text-xl font-semibold text-foreground">Analytics</h1>
-            <TabsList className="mt-2">
-              <TabsTrigger value="agents">Agent Activity</TabsTrigger>
-              <TabsTrigger value="api">API Throughput</TabsTrigger>
-            </TabsList>
-          </div>
-          <div className="flex items-center gap-1">
-            {WINDOWS.map((w) => (
-              <Button
-                key={w.minutes}
-                variant={windowMinutes === w.minutes ? "default" : "ghost"}
-                size="sm"
-                className="h-7 text-xs"
-                onClick={() => setWindowMinutes(w.minutes)}
-              >
-                {w.label}
-              </Button>
-            ))}
-            {tab === "api" && windowMinutes > 60 && (
-              <span className="ml-2 text-xs text-muted-foreground">(capped at 60 min)</span>
-            )}
-          </div>
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-xl font-semibold text-foreground">Analytics</h1>
+        <div className="flex items-center gap-1">
+          {WINDOWS.map((w) => (
+            <Button
+              key={w.minutes}
+              variant={windowMinutes === w.minutes ? "default" : "ghost"}
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => setWindowMinutes(w.minutes)}
+            >
+              {w.label}
+            </Button>
+          ))}
+          {tab === "api" && windowMinutes > 60 && (
+            <span className="ml-2 text-xs text-muted-foreground">(capped at 60 min)</span>
+          )}
         </div>
+      </div>
 
-        <TabsContent value="agents">
-          <AgentActivityPanel windowMinutes={windowMinutes} />
-        </TabsContent>
-        <TabsContent value="api">
-          <ApiThroughputPanel windowMinutes={windowMinutes} />
-        </TabsContent>
-      </Tabs>
+      {tab === "agents" ? (
+        <AgentActivityPanel windowMinutes={windowMinutes} />
+      ) : (
+        <ApiThroughputPanel windowMinutes={windowMinutes} />
+      )}
     </div>
   );
 }
