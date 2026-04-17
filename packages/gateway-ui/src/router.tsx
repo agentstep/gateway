@@ -286,9 +286,14 @@ const playgroundSessionRoute = createRoute({
   },
 });
 
+type DashboardSearch = { tab: "agents" | "api" };
+
 const dashboardRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/dashboard",
+  validateSearch: (search: Record<string, unknown>): DashboardSearch => ({
+    tab: search.tab === "api" ? "api" : "agents",
+  }),
   component: DashboardPage,
 });
 
