@@ -25,6 +25,7 @@ import {
 import { listSessionsByApiKey } from "../db/sessions";
 import { getDb } from "../db/client";
 import { recordAudit } from "../db/audit";
+import { requireFeature, hasFeature, COMMUNITY_LIMITS } from "../license";
 import type { AuthContext, KeyPermissions } from "../types";
 
 const ScopeSchema = z.object({
@@ -97,6 +98,14 @@ function validateKeyCreation(auth: AuthContext, permissions: KeyPermissions, ten
 export function handleCreateApiKey(request: Request): Promise<Response> {
   return routeWrap(request, async ({ auth, request: req }) => {
     requireAdmin(auth);
+
+    // Community tier: cap at 20 virtual keys. Enterprise: unlimited.
+    if (!hasFeature("unlimited_keys")) {
+      const existing = listApiKeys({ tenantFilter: tenantFilter(auth) });
+      if (existing.length >= COMMUNITY_LIMITS.maxKeys) {
+        requireFeature("unlimited_keys", `more than ${COMMUNITY_LIMITS.maxKeys} API keys`);
+      }
+    }
 
     const body = await req.json().catch(() => null);
     const parsed = CreateBody.safeParse(body);
@@ -232,6 +241,7 @@ export function handleGetApiKeyActivity(
   id: string,
 ): Promise<Response> {
   return routeWrap(request, async ({ auth }) => {
+    requireFeature("per_key_analytics", "per-key cost attribution");
     requireAdmin(auth);
     const row = loadKeyForCaller(auth, id);
 

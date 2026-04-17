@@ -29,6 +29,7 @@ import { getDb } from "../db/client";
 import { badRequest } from "../errors";
 import { snapshotApiMetrics } from "../observability/api-metrics";
 import { requireGlobalAdmin, tenantFilter } from "../auth/scope";
+import { requireFeature } from "../license";
 
 type GroupBy = "agent" | "environment" | "backend" | "hour" | "day" | "api_key" | "none";
 
@@ -350,6 +351,10 @@ export function handleGetMetrics(request: Request): Promise<Response> {
 
     // Time-series fast-path: group_by=api_key + time_bucket returns the
     // series form. Other combos fall through to the existing aggregation.
+    // Per-key analytics are an enterprise feature.
+    if (group === "api_key") {
+      requireFeature("per_key_analytics", "per-key analytics");
+    }
     if (group === "api_key" && timeBucket) {
       return handleKeyTimeSeries(db, from, to, timeBucket, tenantId);
     }

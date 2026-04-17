@@ -15,6 +15,7 @@ import { nowMs, toIso } from "../util/clock";
 import type {
   AuditLogEntry, AuditLogRow, AuditOutcome, AuthContext,
 } from "../types";
+import { hasFeature, COMMUNITY_LIMITS } from "../license";
 
 function hydrate(row: AuditLogRow): AuditLogEntry {
   let metadata: Record<string, unknown> | null = null;
@@ -139,6 +140,15 @@ export function listAudit(opts: ListAuditOpts): AuditLogEntry[] {
     clauses.push("created_at <= ?");
     params.push(opts.createdLte);
   }
+  // Community tier: 7-day retention on reads. Enterprise: unlimited.
+  // The data still accumulates (append-only); only the read window is
+  // capped. Upgrade → instant access to the full history.
+  if (!hasFeature("unlimited_audit") && opts.createdGte == null) {
+    const cutoff = nowMs() - COMMUNITY_LIMITS.auditRetentionMs;
+    clauses.push("created_at >= ?");
+    params.push(cutoff);
+  }
+
   if (opts.cursor) {
     // ULIDs sort by time within a single process, but two processes
     // writing in the same millisecond can produce out-of-order ids.

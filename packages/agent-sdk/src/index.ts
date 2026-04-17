@@ -121,6 +121,17 @@ export {
 export { recordAudit, listAudit } from "./db/audit";
 export type { AuditLogEntry, AuditOutcome } from "./types";
 
+// License (v0.5)
+export {
+  validateLicense,
+  isEnterprise,
+  hasFeature,
+  requireFeature,
+  getLicenseInfo,
+  COMMUNITY_LIMITS,
+  type Feature,
+} from "./license";
+
 // OpenAPI
 export { buildOpenApiDocument } from "./openapi/spec";
 

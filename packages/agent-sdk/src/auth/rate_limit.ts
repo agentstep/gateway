@@ -205,6 +205,15 @@ export async function checkAndBump(
   if (limitPerMinute == null || limitPerMinute <= 0) return null;
 
   if (getBackend() === "redis") {
+    // Redis backend requires enterprise license. Community tier gets
+    // in-memory only. When ops sets RATE_LIMIT_BACKEND=redis without
+    // a license, we silently degrade to memory (the boot-time
+    // validateBackend check already ensures ioredis + REDIS_URL are
+    // present; this is a separate "do you have the plan?" check).
+    const { hasFeature } = await import("../license");
+    if (!hasFeature("redis_rate_limit")) {
+      return memoryCheckAndBump(keyId, limitPerMinute);
+    }
     const client = await loadRedis();
     if (client !== "unavailable") {
       return redisCheckAndBump(client, keyId, limitPerMinute);

@@ -67,7 +67,11 @@ async function doInit(): Promise<void> {
   installPayloadRedactor(redactAppendInput);
   installOtlpExporter();
 
-  // 1d. Validate Redis rate-limit backend at boot. When
+  // 1d. Validate license key (community vs enterprise).
+  const { validateLicense } = await import("./license");
+  validateLicense();
+
+  // 1e. Validate Redis rate-limit backend at boot. When
   // RATE_LIMIT_BACKEND=redis and ioredis/REDIS_URL aren't available,
   // we fail here so the process never starts serving — instead of the
   // previous behavior where /api/health stayed green and every /v1

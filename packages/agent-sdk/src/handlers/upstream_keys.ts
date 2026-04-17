@@ -27,6 +27,7 @@ import {
 } from "../db/upstream_keys";
 import { SUPPORTED_PROVIDERS } from "../providers/upstream-keys";
 import { recordAudit } from "../db/audit";
+import { requireFeature } from "../license";
 
 const AddBody = z.object({
   provider: z.enum(SUPPORTED_PROVIDERS),
@@ -40,6 +41,7 @@ const PatchBody = z.object({
 
 export function handleAddUpstreamKey(request: Request): Promise<Response> {
   return routeWrap(request, async ({ auth, request: req }) => {
+    requireFeature("upstream_pool", "upstream key pool");
     requireGlobalAdmin(auth);
     const body = await req.json().catch(() => null);
     const parsed = AddBody.safeParse(body);
@@ -71,6 +73,7 @@ export function handleAddUpstreamKey(request: Request): Promise<Response> {
 
 export function handleListUpstreamKeys(request: Request): Promise<Response> {
   return routeWrap(request, async ({ auth, request: req }) => {
+    requireFeature("upstream_pool", "upstream key pool");
     requireGlobalAdmin(auth);
     const url = new URL(req.url);
     const provider = url.searchParams.get("provider") ?? undefined;
@@ -80,6 +83,7 @@ export function handleListUpstreamKeys(request: Request): Promise<Response> {
 
 export function handleGetUpstreamKey(request: Request, id: string): Promise<Response> {
   return routeWrap(request, async ({ auth }) => {
+    requireFeature("upstream_pool", "upstream key pool");
     requireGlobalAdmin(auth);
     const row = getUpstreamKey(id);
     if (!row) throw notFound(`upstream key ${id} not found`);
@@ -90,6 +94,7 @@ export function handleGetUpstreamKey(request: Request, id: string): Promise<Resp
 /** Enable or disable a pool entry. Body: { disabled: true|false }. */
 export function handlePatchUpstreamKey(request: Request, id: string): Promise<Response> {
   return routeWrap(request, async ({ auth, request: req }) => {
+    requireFeature("upstream_pool", "upstream key pool");
     requireGlobalAdmin(auth);
     const body = await req.json().catch(() => null);
     const parsed = PatchBody.safeParse(body);
@@ -113,6 +118,7 @@ export function handlePatchUpstreamKey(request: Request, id: string): Promise<Re
 
 export function handleDeleteUpstreamKey(request: Request, id: string): Promise<Response> {
   return routeWrap(request, async ({ auth }) => {
+    requireFeature("upstream_pool", "upstream key pool");
     requireGlobalAdmin(auth);
     const before = getUpstreamKey(id);
     const ok = deleteUpstreamKey(id);

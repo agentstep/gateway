@@ -18,6 +18,7 @@ import {
   renameTenant,
 } from "../db/tenants";
 import { recordAudit } from "../db/audit";
+import { requireFeature } from "../license";
 
 const CreateBody = z.object({
   name: z.string().min(1).max(200),
@@ -30,6 +31,7 @@ const PatchBody = z.object({
 
 export function handleCreateTenant(request: Request): Promise<Response> {
   return routeWrap(request, async ({ auth, request: req }) => {
+    requireFeature("tenancy", "multi-tenancy");
     requireGlobalAdmin(auth);
     const body = await req.json().catch(() => null);
     const parsed = CreateBody.safeParse(body);
@@ -59,6 +61,7 @@ export function handleCreateTenant(request: Request): Promise<Response> {
 
 export function handleListTenants(request: Request): Promise<Response> {
   return routeWrap(request, async ({ auth, request: req }) => {
+    requireFeature("tenancy", "multi-tenancy");
     requireGlobalAdmin(auth);
     const url = new URL(req.url);
     const includeArchived = url.searchParams.get("include_archived") === "true";
@@ -68,6 +71,7 @@ export function handleListTenants(request: Request): Promise<Response> {
 
 export function handleGetTenant(request: Request, id: string): Promise<Response> {
   return routeWrap(request, async ({ auth }) => {
+    requireFeature("tenancy", "multi-tenancy");
     requireGlobalAdmin(auth);
     const tenant = getTenant(id);
     if (!tenant) throw notFound(`tenant ${id} not found`);
@@ -77,6 +81,7 @@ export function handleGetTenant(request: Request, id: string): Promise<Response>
 
 export function handlePatchTenant(request: Request, id: string): Promise<Response> {
   return routeWrap(request, async ({ auth, request: req }) => {
+    requireFeature("tenancy", "multi-tenancy");
     requireGlobalAdmin(auth);
     const body = await req.json().catch(() => null);
     const parsed = PatchBody.safeParse(body);
@@ -109,6 +114,7 @@ export function handlePatchTenant(request: Request, id: string): Promise<Respons
 
 export function handleArchiveTenant(request: Request, id: string): Promise<Response> {
   return routeWrap(request, async ({ auth }) => {
+    requireFeature("tenancy", "multi-tenancy");
     requireGlobalAdmin(auth);
     const ok = archiveTenant(id);
     if (!ok) {

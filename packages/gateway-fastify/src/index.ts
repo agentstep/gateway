@@ -68,6 +68,7 @@ import {
   handleArchiveTenant,
   handleWhoami,
   handleListAudit,
+  handleGetLicense,
 } from "@agentstep/agent-sdk/handlers";
 
 /**
@@ -291,6 +292,9 @@ export function buildApp() {
 
   // ── Whoami (any authenticated caller) ───────────────────────────────
   route(app, "get", "/v1/whoami", handleWhoami);
+
+  // ── License (public — returns plan + feature list) ─────────────────
+  route(app, "get", "/v1/license", handleGetLicense);
 
   // ── Audit log (admin-only, tenant-scoped) ───────────────────────────
   route(app, "get", "/v1/audit-log", handleListAudit);

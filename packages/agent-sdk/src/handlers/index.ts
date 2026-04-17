@@ -22,3 +22,4 @@ export { handleAddUpstreamKey, handleListUpstreamKeys, handleGetUpstreamKey, han
 export { handleCreateTenant, handleListTenants, handleGetTenant, handlePatchTenant, handleArchiveTenant } from "./tenants";
 export { handleWhoami } from "./whoami";
 export { handleListAudit } from "./audit";
+export { handleGetLicense } from "./license";
