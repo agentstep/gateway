@@ -16,14 +16,32 @@ import { badRequest, notFound } from "../errors";
 import { getAgent } from "../db/agents";
 import { resolveAnthropicKey as resolveAnthropicKeyShared, reportUpstreamFailure, reportUpstreamSuccess } from "../providers/upstream-keys";
 import { assertResourceTenant } from "../auth/scope";
+import { getProxiedTenantId } from "../db/proxy";
 import type { AuthContext } from "../types";
 
+/**
+ * Tenant guard for session-scoped endpoints (events, resources).
+ * Checks the local `sessions` row first; falls through to
+ * `proxy_resources` for pure-proxy sessions (Anthropic engine, no
+ * local mirror). This two-source check must stay in sync with the
+ * pattern in stream.ts and sessions.ts.
+ */
 function assertSessionTenant(auth: AuthContext, sessionId: string): void {
   const row = getDb()
     .prepare(`SELECT tenant_id FROM sessions WHERE id = ?`)
     .get(sessionId) as { tenant_id: string | null } | undefined;
-  if (!row) throw notFound(`session ${sessionId} not found`);
-  assertResourceTenant(auth, row.tenant_id, `session ${sessionId} not found`);
+  if (row) {
+    assertResourceTenant(auth, row.tenant_id, `session ${sessionId} not found`);
+    return;
+  }
+  // No local row — check proxy_resources for pure-proxy sessions.
+  const proxyTenant = getProxiedTenantId(sessionId);
+  if (proxyTenant !== undefined) {
+    assertResourceTenant(auth, proxyTenant, `session ${sessionId} not found`);
+    return;
+  }
+  // Neither table has this id — let the downstream handler 404.
+  throw notFound(`session ${sessionId} not found`);
 }
 
 /**

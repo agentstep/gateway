@@ -118,6 +118,17 @@ async function loadRedis(): Promise<RedisClientLike | "unavailable"> {
       const mod = await import("ioredis" as string);
       const Ctor = (mod.default ?? mod.Redis) as new (url: string) => RedisClientLike;
       const client = new Ctor(url);
+      // ioredis emits 'error' on connection failures, auth rejections,
+      // etc. Without a listener Node's default is to throw an unhandled
+      // exception that can crash the process. Attach a drain so we just
+      // log — the per-request try/catch in redisCheckAndBump handles
+      // the actual fallback to memory.
+      const asEmitter = client as unknown as { on?: (evt: string, fn: (err: unknown) => void) => void };
+      if (typeof asEmitter.on === "function") {
+        asEmitter.on("error", (err: unknown) => {
+          console.warn("[rate_limit] redis client error:", err);
+        });
+      }
       g.__caRateLimitRedis = client;
       return client;
     } catch (err) {
@@ -211,6 +222,18 @@ export function resetRateLimits(): void {
 /** Test hook: inspect the counter for a key (or undefined if no window active). */
 export function peekRateLimit(keyId: string): Bucket | undefined {
   return buckets.get(keyId);
+}
+
+/**
+ * Boot-time preflight: eagerly resolve the Redis backend so misconfig
+ * fails the init promise (and prevents the server from starting)
+ * instead of 500-ing on the first request. Call from init.ts only.
+ *
+ * No-op when the backend isn't "redis".
+ */
+export async function validateBackend(): Promise<void> {
+  if (getBackend() !== "redis") return;
+  await loadRedis(); // throws on strict-fail
 }
 
 /** Test hook: override the resolved Redis client (or force "unavailable"). */

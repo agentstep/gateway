@@ -13,14 +13,23 @@ import { newId } from "../util/ids";
 import { nowMs, toIso } from "../util/clock";
 import { badRequest, notFound } from "../errors";
 import { assertResourceTenant } from "../auth/scope";
+import { getProxiedTenantId } from "../db/proxy";
 import type { AuthContext, SessionResource } from "../types";
 
 function assertSessionTenant(auth: AuthContext, sessionId: string): void {
   const row = getDb()
     .prepare(`SELECT tenant_id FROM sessions WHERE id = ?`)
     .get(sessionId) as { tenant_id: string | null } | undefined;
-  if (!row) throw notFound(`session not found: ${sessionId}`);
-  assertResourceTenant(auth, row.tenant_id, `session not found: ${sessionId}`);
+  if (row) {
+    assertResourceTenant(auth, row.tenant_id, `session not found: ${sessionId}`);
+    return;
+  }
+  const proxyTenant = getProxiedTenantId(sessionId);
+  if (proxyTenant !== undefined) {
+    assertResourceTenant(auth, proxyTenant, `session not found: ${sessionId}`);
+    return;
+  }
+  throw notFound(`session not found: ${sessionId}`);
 }
 
 const AddResourceSchema = z.object({

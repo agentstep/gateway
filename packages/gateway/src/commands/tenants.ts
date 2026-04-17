@@ -94,13 +94,14 @@ export function registerTenantCommands(parent: Command): void {
       await ensureInitialized();
 
       const counts = countNullTenantRows();
-      const total = counts.agents + counts.environments + counts.vaults + counts.sessions;
+      const total = counts.agents + counts.environments + counts.vaults + counts.sessions + counts.proxy_resources;
       console.log("");
       console.log("Null-tenant rows (would be migrated):");
-      console.log(`  agents:       ${counts.agents}`);
-      console.log(`  environments: ${counts.environments}`);
-      console.log(`  vaults:       ${counts.vaults}`);
-      console.log(`  sessions:     ${counts.sessions}`);
+      console.log(`  agents:           ${counts.agents}`);
+      console.log(`  environments:     ${counts.environments}`);
+      console.log(`  vaults:           ${counts.vaults}`);
+      console.log(`  sessions:         ${counts.sessions}`);
+      console.log(`  proxy_resources:  ${counts.proxy_resources}`);
       console.log("");
       if (counts.api_keys > 0) {
         console.log(`Also found ${counts.api_keys} null-tenant api_keys.`);
@@ -140,9 +141,10 @@ export function registerTenantCommands(parent: Command): void {
       const result = assignNullRowsToTenant(targetId);
       console.log("");
       console.log(`Migrated to ${target.id}:`);
-      console.log(`  agents:       ${result.agents}`);
-      console.log(`  environments: ${result.environments}`);
-      console.log(`  vaults:       ${result.vaults}`);
-      console.log(`  sessions:     ${result.sessions}`);
+      console.log(`  agents:           ${result.agents}`);
+      console.log(`  environments:     ${result.environments}`);
+      console.log(`  vaults:           ${result.vaults}`);
+      console.log(`  sessions:         ${result.sessions}`);
+      console.log(`  proxy_resources:  ${result.proxy_resources}`);
     });
 }

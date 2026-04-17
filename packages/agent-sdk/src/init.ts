@@ -67,7 +67,14 @@ async function doInit(): Promise<void> {
   installPayloadRedactor(redactAppendInput);
   installOtlpExporter();
 
-  // 1d. Shutdown handlers
+  // 1d. Validate Redis rate-limit backend at boot. When
+  // RATE_LIMIT_BACKEND=redis and ioredis/REDIS_URL aren't available,
+  // we fail here so the process never starts serving — instead of the
+  // previous behavior where /api/health stayed green and every /v1
+  // request returned 500.
+  await validateRateLimitBackend();
+
+  // 1e. Shutdown handlers
   installShutdownHandlers();
 
   // 2. Stale-session recovery
@@ -150,6 +157,26 @@ function seedDefaultApiKey(): void {
   } catch (err) {
     console.error("[init] failed to seed default API key:", err);
   }
+}
+
+/**
+ * Pre-flight: when RATE_LIMIT_BACKEND=redis, verify that ioredis is
+ * importable AND REDIS_URL is set *before* the first request arrives.
+ * Without this, the gateway boots green (health check passes) while
+ * every authenticated request 500s — the exact "looks healthy, isn't"
+ * pattern ops hates.
+ *
+ * On success, warm-connects the Redis client. On failure: either
+ * throws (boot fails) or degrades to memory when
+ * RATE_LIMIT_BACKEND_ALLOW_FALLBACK=true.
+ */
+async function validateRateLimitBackend(): Promise<void> {
+  const { validateBackend } = await import("./auth/rate_limit");
+  // Throws when RATE_LIMIT_BACKEND=redis but ioredis or REDIS_URL
+  // aren't available (strict default). The throw propagates out of
+  // doInit → ensureInitialized, which makes the first routeWrap call
+  // reject with a clear message. The server never serves a 200.
+  await validateBackend();
 }
 
 export async function recoverStaleSessions(): Promise<void> {

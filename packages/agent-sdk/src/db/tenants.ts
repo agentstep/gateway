@@ -95,14 +95,18 @@ export function renameTenant(id: string, name: string): boolean {
  * Runs in a single transaction so an abort leaves nothing half-migrated.
  * Does NOT touch api_keys — that's a separate step (the operator may
  * want different keys in different tenants).
+ *
+ * v0.5+: also covers `proxy_resources` so that v0.4 Anthropic-backend
+ * sessions/agents/envs survive the upgrade (the new tenant guard would
+ * otherwise 404 them for anyone who isn't a global admin).
  */
 export function assignNullRowsToTenant(
   tenantId: string,
-): Record<"agents" | "environments" | "vaults" | "sessions", number> {
+): Record<"agents" | "environments" | "vaults" | "sessions" | "proxy_resources", number> {
   const db = getDb();
-  const counts = { agents: 0, environments: 0, vaults: 0, sessions: 0 };
+  const counts = { agents: 0, environments: 0, vaults: 0, sessions: 0, proxy_resources: 0 };
   const tx = db.transaction(() => {
-    for (const table of ["agents", "environments", "vaults", "sessions"] as const) {
+    for (const table of ["agents", "environments", "vaults", "sessions", "proxy_resources"] as const) {
       const res = db
         .prepare(`UPDATE ${table} SET tenant_id = ? WHERE tenant_id IS NULL`)
         .run(tenantId);
@@ -115,16 +119,17 @@ export function assignNullRowsToTenant(
 
 /** Counts of null-tenant rows across the tenancy-scoped tables. */
 export function countNullTenantRows(): Record<
-  "agents" | "environments" | "vaults" | "sessions" | "api_keys",
+  "agents" | "environments" | "vaults" | "sessions" | "api_keys" | "proxy_resources",
   number
 > {
   const db = getDb();
   const c = (sql: string): number => (db.prepare(sql).get() as { n: number }).n;
   return {
-    agents:       c(`SELECT COUNT(*) AS n FROM agents       WHERE tenant_id IS NULL AND archived_at IS NULL`),
-    environments: c(`SELECT COUNT(*) AS n FROM environments WHERE tenant_id IS NULL AND archived_at IS NULL`),
-    vaults:       c(`SELECT COUNT(*) AS n FROM vaults       WHERE tenant_id IS NULL`),
-    sessions:     c(`SELECT COUNT(*) AS n FROM sessions     WHERE tenant_id IS NULL`),
-    api_keys:     c(`SELECT COUNT(*) AS n FROM api_keys     WHERE tenant_id IS NULL AND revoked_at IS NULL`),
+    agents:          c(`SELECT COUNT(*) AS n FROM agents           WHERE tenant_id IS NULL AND archived_at IS NULL`),
+    environments:    c(`SELECT COUNT(*) AS n FROM environments     WHERE tenant_id IS NULL AND archived_at IS NULL`),
+    vaults:          c(`SELECT COUNT(*) AS n FROM vaults           WHERE tenant_id IS NULL`),
+    sessions:        c(`SELECT COUNT(*) AS n FROM sessions         WHERE tenant_id IS NULL`),
+    api_keys:        c(`SELECT COUNT(*) AS n FROM api_keys         WHERE tenant_id IS NULL AND revoked_at IS NULL`),
+    proxy_resources: c(`SELECT COUNT(*) AS n FROM proxy_resources  WHERE tenant_id IS NULL`),
   };
 }
