@@ -272,7 +272,7 @@ app.delete("/v1/tenants/:id", (c) => handleArchiveTenant(c.req.raw, c.req.param(
 // ── SPA catch-all (must be last) ────────────────────────────────────────────
 app.get("*", (c) => {
   const path = c.req.path;
-  if (path.startsWith("/v1/") || path.startsWith("/api/")) {
+  if (path === "/v1" || path.startsWith("/v1/") || path === "/api" || path.startsWith("/api/")) {
     return c.json({ error: { type: "not_found_error", message: "Not found" } }, 404);
   }
   return serveUI(c);
