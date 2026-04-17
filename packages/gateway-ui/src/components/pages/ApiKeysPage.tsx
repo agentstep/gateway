@@ -13,7 +13,7 @@
  * non-admin SEED_API_KEY sees only the session-key card and a 403 on
  * the list (handled by `useApiKeys` via query error).
  */
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { Copy, Key, Check, Plus, Trash2, Eye, EyeOff, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -286,120 +286,125 @@ export function ApiKeysPage() {
   const adminForbidden = isError && /403|forbidden|admin permission/i.test(String(error));
 
   return (
-    <div className="flex-1 overflow-y-auto px-6 py-6 flex flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-foreground">API Keys</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Manage virtual keys: scope access to specific agents/environments/vaults, track per-key usage.
-        </p>
-      </div>
-
-      <SessionKeyCard />
-
-      {adminForbidden ? (
-        <div className="rounded-lg border border-border bg-card p-5">
-          <p className="text-sm text-muted-foreground">
-            Key management requires an admin key. The current session is using a non-admin key.
+    <div className="flex-1 min-h-0 overflow-y-auto">
+      <div className="max-w-5xl mx-auto px-6 py-6 flex flex-col gap-6">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight text-foreground">API Keys</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Manage virtual keys: scope access to specific agents/environments/vaults, track per-key usage.
           </p>
         </div>
-      ) : (
-        <>
-          <KeyCostOverTime />
 
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-medium text-foreground">Virtual keys</h2>
-            <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-              <DialogTrigger render={<Button size="sm"><Plus className="size-3.5 mr-1" />Create key</Button>} />
-              <CreateKeyDialog open={createOpen} onOpenChange={setCreateOpen} />
-            </Dialog>
+        <SessionKeyCard />
+
+        {adminForbidden ? (
+          <div className="rounded-lg border border-border bg-card p-5">
+            <p className="text-sm text-muted-foreground">
+              Key management requires an admin key. The current session is using a non-admin key.
+            </p>
           </div>
+        ) : (
+          <>
+            <KeyCostOverTime />
 
-          <div className="rounded-lg border border-border overflow-hidden mb-6">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Prefix</TableHead>
-                  <TableHead>Scope</TableHead>
-                  <TableHead>Created</TableHead>
-                  <TableHead className="w-[50px]"></TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {keys?.map((k) => (
-                  <>
-                    <TableRow
-                      key={k.id}
-                      className="cursor-pointer hover:bg-muted/50"
-                      onClick={() => setExpandedId(expandedId === k.id ? null : k.id)}
-                    >
-                      <TableCell className="font-medium">{k.name}</TableCell>
-                      <TableCell className="font-mono text-xs text-muted-foreground">{k.prefix}</TableCell>
-                      <TableCell>
-                        {k.permissions.admin ? (
-                          <Badge variant="outline" className="border-lime-400/20 bg-lime-400/10 text-lime-400 text-xs">admin</Badge>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">{scopeSummary(k.permissions)}</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-xs text-muted-foreground">{timeAgo(k.created_at)}</TableCell>
-                      <TableCell onClick={(e) => e.stopPropagation()}>
-                        <Button variant="ghost" size="icon" className="size-7 text-muted-foreground hover:text-destructive" onClick={() => setRevokeKey(k)}>
-                          <Trash2 className="size-3.5" />
-                        </Button>
-                      </TableCell>
+            {/* ── Virtual keys section ──────────────────────────────── */}
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <h2 className="text-sm font-medium text-foreground">Virtual keys</h2>
+                <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+                  <DialogTrigger render={<Button size="sm"><Plus className="size-3.5 mr-1" />Create key</Button>} />
+                  <CreateKeyDialog open={createOpen} onOpenChange={setCreateOpen} />
+                </Dialog>
+              </div>
+
+              <div className="rounded-lg border border-border overflow-hidden">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Prefix</TableHead>
+                      <TableHead>Scope</TableHead>
+                      <TableHead>Created</TableHead>
+                      <TableHead className="w-[50px]"></TableHead>
                     </TableRow>
-                    {expandedId === k.id && (
-                      <TableRow key={`${k.id}-detail`}>
-                        <TableCell colSpan={5} className="p-0">
-                          <KeyActivity keyId={k.id} />
+                  </TableHeader>
+                  <TableBody>
+                    {keys?.map((k) => (
+                      <Fragment key={k.id}>
+                        <TableRow
+                          className="cursor-pointer hover:bg-muted/50"
+                          onClick={() => setExpandedId(expandedId === k.id ? null : k.id)}
+                        >
+                          <TableCell className="font-medium">{k.name}</TableCell>
+                          <TableCell className="font-mono text-xs text-muted-foreground">{k.prefix}</TableCell>
+                          <TableCell>
+                            {k.permissions.admin ? (
+                              <Badge variant="outline" className="border-lime-400/20 bg-lime-400/10 text-lime-400 text-xs">admin</Badge>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">{scopeSummary(k.permissions)}</span>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-xs text-muted-foreground">{timeAgo(k.created_at)}</TableCell>
+                          <TableCell onClick={(e) => e.stopPropagation()}>
+                            <Button variant="ghost" size="icon" className="size-7 text-muted-foreground hover:text-destructive" onClick={() => setRevokeKey(k)}>
+                              <Trash2 className="size-3.5" />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                        {expandedId === k.id && (
+                          <TableRow>
+                            <TableCell colSpan={5} className="p-0">
+                              <KeyActivity keyId={k.id} />
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </Fragment>
+                    ))}
+                    {keys?.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={5} className="text-center text-sm text-muted-foreground py-8">
+                          No virtual keys yet. Click "Create key" to add one.
                         </TableCell>
                       </TableRow>
                     )}
-                  </>
-                ))}
-                {keys?.length === 0 && (
-                  <TableRow>
-                    <TableCell colSpan={5} className="text-center text-sm text-muted-foreground py-8">
-                      No virtual keys yet. Click "Create key" to add one.
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </div>
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
 
-          <UpstreamKeysSection />
-        </>
-      )}
+            {/* ── Upstream key pool section ─────────────────────────── */}
+            <UpstreamKeysSection />
+          </>
+        )}
 
-      <AlertDialog open={!!revokeKey} onOpenChange={(v) => !v && setRevokeKey(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Revoke "{revokeKey?.name}"?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Any client using this key will get 401 on their next request. This can't be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              onClick={() => {
-                if (revokeKey) {
-                  revoke.mutate(revokeKey.id, {
-                    onSuccess: () => toast.success(`Revoked "${revokeKey.name}"`),
-                    onError: (err) => toast.error(String(err)),
-                  });
-                  setRevokeKey(null);
-                }
-              }}
-            >
-              Revoke
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        <AlertDialog open={!!revokeKey} onOpenChange={(v) => !v && setRevokeKey(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Revoke &ldquo;{revokeKey?.name}&rdquo;?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Any client using this key will get 401 on their next request. This can&apos;t be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                variant="destructive"
+                onClick={() => {
+                  if (revokeKey) {
+                    revoke.mutate(revokeKey.id, {
+                      onSuccess: () => toast.success(`Revoked "${revokeKey.name}"`),
+                      onError: (err) => toast.error(String(err)),
+                    });
+                    setRevokeKey(null);
+                  }
+                }}
+              >
+                Revoke
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </div>
     </div>
   );
 }
