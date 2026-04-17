@@ -94,6 +94,14 @@ export function listFiles(opts?: { limit?: number; scope_id?: string }): FileRec
   return (rows as FileRow[]).map(hydrate);
 }
 
+export function updateFileStoragePath(id: string, storagePath: string): void {
+  const db = getDrizzle();
+  db.update(schema.files)
+    .set({ storage_path: storagePath })
+    .where(eq(schema.files.id, id))
+    .run();
+}
+
 export function deleteFileRecord(id: string): { id: string; type: string } | null {
   const db = getDrizzle();
   const row = getFile(id);

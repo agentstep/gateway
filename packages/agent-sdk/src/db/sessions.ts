@@ -257,6 +257,32 @@ export function listSessions(opts: {
   return rows.map(hydrateSession);
 }
 
+export function updateSessionResources(id: string, resourcesJson: string): void {
+  const db = getDrizzle();
+  db.update(schema.sessions)
+    .set({ resources_json: resourcesJson, updated_at: nowMs() })
+    .where(eq(schema.sessions.id, id))
+    .run();
+}
+
+export function listIdleSessions(sessionMaxAgeMs: number, now: number, limit: number): SessionRow[] {
+  const db = getDrizzle();
+  // COALESCE so sessions that never ran a turn (idle_since IS NULL) still
+  // age out from their created_at. LIMIT caps the worst case per sweep.
+  return db
+    .select()
+    .from(schema.sessions)
+    .where(
+      and(
+        eq(schema.sessions.status, "idle"),
+        isNull(schema.sessions.archived_at),
+        sql`COALESCE(${schema.sessions.idle_since}, ${schema.sessions.created_at}) + ${sessionMaxAgeMs} < ${now}`,
+      ),
+    )
+    .limit(limit)
+    .all() as SessionRow[];
+}
+
 export function setOutcomeCriteria(id: string, criteria: Record<string, unknown>): void {
   const db = getDrizzle();
   db.update(schema.sessions)
