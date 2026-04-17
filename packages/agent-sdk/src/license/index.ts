@@ -119,8 +119,17 @@ export function hasFeature(feature: Feature): boolean {
 /**
  * Throws 403 with a pricing link when the feature requires an
  * enterprise license. Call at the top of gated handlers.
+ *
+ * Kill switch: `DISABLE_EXPERIMENTAL_FEATURES=1` disables ALL gated
+ * features regardless of license. Use during incidents to fall back
+ * to community-tier behavior without redeploying. Works across all
+ * instances via container orchestration (env var, not per-instance DB).
  */
 export function requireFeature(feature: Feature, friendlyName?: string): void {
+  if (process.env.DISABLE_EXPERIMENTAL_FEATURES === "1") {
+    const name = friendlyName ?? feature.replace(/_/g, " ");
+    throw forbidden(`${name} is temporarily disabled (DISABLE_EXPERIMENTAL_FEATURES=1)`);
+  }
   if (hasFeature(feature)) return;
   const name = friendlyName ?? feature.replace(/_/g, " ");
   throw forbidden(
