@@ -108,7 +108,10 @@
     --destructive-foreground: 0 0% 98%;
     --border: 0 0% 14.9%;
     --input: 0 0% 27%;
-    --ring: 84 81% 55%;
+    /* Softer ring in dark mode — still lime-tinted but less intense
+       than the primary so focus outlines don't scream over the content.
+       Primary buttons keep the vivid lime via --primary. */
+    --ring: 84 40% 40%;
     --sidebar-background: 240 5.9% 10%;
     --sidebar-foreground: 240 4.8% 95.9%;
     --sidebar-primary: 84 81% 55%;
