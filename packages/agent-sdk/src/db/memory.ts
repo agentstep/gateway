@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { getDb } from "./client";
+import { eq, and, asc, desc, like, or } from "drizzle-orm";
+import { getDrizzle, schema } from "./drizzle";
 import { newId } from "../util/ids";
 import { nowMs, toIso } from "../util/clock";
 import type { MemoryStore, MemoryStoreRow, Memory, MemoryRow } from "../types";
@@ -33,86 +34,116 @@ function sha256(content: string): string {
 // ── Memory Stores ────────────────────────────────────────────────────────
 
 export function createMemoryStore(input: { name: string; description?: string | null }): MemoryStore {
-  const db = getDb();
+  const db = getDrizzle();
   const id = newId("ms");
   const now = nowMs();
-  db.prepare(
-    `INSERT INTO memory_stores (id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
-  ).run(id, input.name, input.description ?? null, now, now);
+  db.insert(schema.memoryStores)
+    .values({
+      id,
+      name: input.name,
+      description: input.description ?? null,
+      created_at: now,
+      updated_at: now,
+    })
+    .run();
   return getMemoryStore(id)!;
 }
 
 export function getMemoryStore(id: string): MemoryStore | null {
-  const db = getDb();
-  const row = db.prepare(`SELECT * FROM memory_stores WHERE id = ?`).get(id) as MemoryStoreRow | undefined;
-  return row ? hydrateStore(row) : null;
+  const db = getDrizzle();
+  const row = db.select().from(schema.memoryStores).where(eq(schema.memoryStores.id, id)).get();
+  return row ? hydrateStore(row as MemoryStoreRow) : null;
 }
 
 export function listMemoryStores(): MemoryStore[] {
-  const db = getDb();
-  const rows = db.prepare(`SELECT * FROM memory_stores ORDER BY created_at DESC`).all() as MemoryStoreRow[];
-  return rows.map(hydrateStore);
+  const db = getDrizzle();
+  const rows = db.select().from(schema.memoryStores).orderBy(desc(schema.memoryStores.created_at)).all();
+  return (rows as MemoryStoreRow[]).map(hydrateStore);
 }
 
 export function deleteMemoryStore(id: string): boolean {
-  const db = getDb();
-  const res = db.prepare(`DELETE FROM memory_stores WHERE id = ?`).run(id);
+  const db = getDrizzle();
+  const res = db.delete(schema.memoryStores).where(eq(schema.memoryStores.id, id)).run();
   return res.changes > 0;
 }
 
 // ── Memories ─────────────────────────────────────────────────────────────
 
 export function createOrUpsertMemory(storeId: string, path: string, content: string): Memory {
-  const db = getDb();
+  const db = getDrizzle();
   const hash = sha256(content);
   const now = nowMs();
   const id = newId("mem");
 
-  db.prepare(
-    `INSERT INTO memories (id, store_id, path, content, content_sha256, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(store_id, path) DO UPDATE SET content = excluded.content, content_sha256 = excluded.content_sha256, updated_at = excluded.updated_at`,
-  ).run(id, storeId, path, content, hash, now, now);
+  db.insert(schema.memories)
+    .values({
+      id,
+      store_id: storeId,
+      path,
+      content,
+      content_sha256: hash,
+      created_at: now,
+      updated_at: now,
+    })
+    .onConflictDoUpdate({
+      target: [schema.memories.store_id, schema.memories.path],
+      set: {
+        content,
+        content_sha256: hash,
+        updated_at: now,
+      },
+    })
+    .run();
 
   return getMemoryByPath(storeId, path)!;
 }
 
 export function getMemory(id: string): Memory | null {
-  const db = getDb();
-  const row = db.prepare(`SELECT * FROM memories WHERE id = ?`).get(id) as MemoryRow | undefined;
-  return row ? hydrateMemory(row) : null;
+  const db = getDrizzle();
+  const row = db.select().from(schema.memories).where(eq(schema.memories.id, id)).get();
+  return row ? hydrateMemory(row as MemoryRow) : null;
 }
 
 export function getMemoryByPath(storeId: string, path: string): Memory | null {
-  const db = getDb();
+  const db = getDrizzle();
   const row = db
-    .prepare(
-      `SELECT * FROM memories WHERE store_id = ? AND path = ?`,
-    )
-    .get(storeId, path) as MemoryRow | undefined;
-  return row ? hydrateMemory(row) : null;
+    .select()
+    .from(schema.memories)
+    .where(and(eq(schema.memories.store_id, storeId), eq(schema.memories.path, path)))
+    .get();
+  return row ? hydrateMemory(row as MemoryRow) : null;
 }
 
 export function listMemories(storeId: string): Memory[] {
-  const db = getDb();
+  const db = getDrizzle();
   const rows = db
-    .prepare(
-      `SELECT * FROM memories WHERE store_id = ? ORDER BY path ASC`,
-    )
-    .all(storeId) as MemoryRow[];
-  return rows.map(hydrateMemory);
+    .select()
+    .from(schema.memories)
+    .where(eq(schema.memories.store_id, storeId))
+    .orderBy(asc(schema.memories.path))
+    .all();
+  return (rows as MemoryRow[]).map(hydrateMemory);
 }
 
 export function searchMemories(storeId: string, query: string): Memory[] {
-  const db = getDb();
-  const escaped = query.replace(/%/g, '\\%').replace(/_/g, '\\_');
+  const db = getDrizzle();
+  const escaped = query.replace(/%/g, "\\%").replace(/_/g, "\\_");
   const pattern = `%${escaped}%`;
   const rows = db
-    .prepare(
-      `SELECT * FROM memories WHERE store_id = ? AND (path LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\') ORDER BY path ASC`,
+    .select()
+    .from(schema.memories)
+    .where(
+      and(
+        eq(schema.memories.store_id, storeId),
+        or(
+          like(schema.memories.path, pattern),
+          like(schema.memories.content, pattern),
+        ),
+      ),
     )
-    .all(storeId, pattern, pattern) as MemoryRow[];
-  return rows.map(hydrateMemory);
+    .orderBy(asc(schema.memories.path))
+    .all();
+  return (rows as MemoryRow[]).map(hydrateMemory);
 }
 
 export function updateMemory(
@@ -120,7 +151,7 @@ export function updateMemory(
   content: string,
   preconditionSha256?: string,
 ): { memory: Memory | null; conflict: boolean } {
-  const db = getDb();
+  const db = getDrizzle();
   const existing = getMemory(id);
   if (!existing) return { memory: null, conflict: false };
 
@@ -130,14 +161,15 @@ export function updateMemory(
 
   const hash = sha256(content);
   const now = nowMs();
-  db.prepare(
-    `UPDATE memories SET content = ?, content_sha256 = ?, updated_at = ? WHERE id = ?`,
-  ).run(content, hash, now, id);
+  db.update(schema.memories)
+    .set({ content, content_sha256: hash, updated_at: now })
+    .where(eq(schema.memories.id, id))
+    .run();
   return { memory: getMemory(id), conflict: false };
 }
 
 export function deleteMemory(id: string): boolean {
-  const db = getDb();
-  const res = db.prepare(`DELETE FROM memories WHERE id = ?`).run(id);
+  const db = getDrizzle();
+  const res = db.delete(schema.memories).where(eq(schema.memories.id, id)).run();
   return res.changes > 0;
 }
