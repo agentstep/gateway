@@ -50,6 +50,7 @@
   "dependencies": {
     "@asteasolutions/zod-to-openapi": "^7.3.4",
     "@sentry/node": "^10.48.0",
+    "drizzle-orm": "^0.45.2",
     "libsql": "^0.5.29",
     "ulid": "^2.3.0",
     "ws": "^8.18.0",
