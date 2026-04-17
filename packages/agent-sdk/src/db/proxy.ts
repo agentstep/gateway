@@ -8,30 +8,33 @@
  * requests for that ID auto-route without the client needing to specify
  * anything.
  */
-import { getDb } from "./client";
+import { eq } from "drizzle-orm";
+import { getDrizzle, schema } from "./drizzle";
 import { nowMs } from "../util/clock";
 
 export type ProxiedResourceType = "agent" | "environment" | "session";
 
 export function isProxied(id: string): boolean {
-  const db = getDb();
+  const db = getDrizzle();
   const row = db
-    .prepare(
-      `SELECT resource_id FROM proxy_resources WHERE resource_id = ?`,
-    )
-    .get(id) as { resource_id: string } | undefined;
+    .select({ resource_id: schema.proxyResources.resource_id })
+    .from(schema.proxyResources)
+    .where(eq(schema.proxyResources.resource_id, id))
+    .get();
   return !!row;
 }
 
 export function markProxied(id: string, type: ProxiedResourceType): void {
-  const db = getDb();
-  db.prepare(
-    `INSERT OR IGNORE INTO proxy_resources (resource_id, resource_type, created_at)
-     VALUES (?, ?, ?)`,
-  ).run(id, type, nowMs());
+  const db = getDrizzle();
+  db.insert(schema.proxyResources)
+    .values({ resource_id: id, resource_type: type, created_at: nowMs() })
+    .onConflictDoNothing()
+    .run();
 }
 
 export function unmarkProxied(id: string): void {
-  const db = getDb();
-  db.prepare(`DELETE FROM proxy_resources WHERE resource_id = ?`).run(id);
+  const db = getDrizzle();
+  db.delete(schema.proxyResources)
+    .where(eq(schema.proxyResources.resource_id, id))
+    .run();
 }
