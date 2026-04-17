@@ -384,6 +384,12 @@ export function runMigrations(db: InstanceType<typeof Database>): void {
     )
   `);
 
+  // v0.4 fallback_json on agents (cross-tenant fallback config)
+  const agentColsFallback = db.prepare("PRAGMA table_info(agents)").all() as Array<{ name: string }>;
+  if (!agentColsFallback.some((c) => c.name === "fallback_json")) {
+    db.exec(`ALTER TABLE agents ADD COLUMN fallback_json TEXT`);
+  }
+
   // v0.4 tenancy columns on api_keys
   const apiKeyCols = db.prepare("PRAGMA table_info(api_keys)").all() as Array<{ name: string }>;
   if (!apiKeyCols.some(c => c.name === "tenant_id")) {
