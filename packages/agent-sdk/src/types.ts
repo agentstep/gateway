@@ -324,6 +324,8 @@ export interface MemoryStoreRow {
   id: string;
   name: string;
   description: string | null;
+  /** v0.5: owning agent. Null for legacy (pre-v0.5) global stores. */
+  agent_id: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -332,6 +334,7 @@ export interface MemoryStore {
   id: string;
   name: string;
   description: string | null;
+  agent_id: string | null;
   created_at: string;
   updated_at: string;
 }

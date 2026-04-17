@@ -9,6 +9,7 @@ function hydrateStore(row: MemoryStoreRow): MemoryStore {
     id: row.id,
     name: row.name,
     description: row.description,
+    agent_id: row.agent_id,
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
   };
@@ -32,13 +33,17 @@ function sha256(content: string): string {
 
 // ── Memory Stores ────────────────────────────────────────────────────────
 
-export function createMemoryStore(input: { name: string; description?: string | null }): MemoryStore {
+export function createMemoryStore(input: {
+  name: string;
+  description?: string | null;
+  agent_id?: string | null;
+}): MemoryStore {
   const db = getDb();
   const id = newId("ms");
   const now = nowMs();
   db.prepare(
-    `INSERT INTO memory_stores (id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
-  ).run(id, input.name, input.description ?? null, now, now);
+    `INSERT INTO memory_stores (id, name, description, agent_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(id, input.name, input.description ?? null, input.agent_id ?? null, now, now);
   return getMemoryStore(id)!;
 }
 
@@ -48,9 +53,31 @@ export function getMemoryStore(id: string): MemoryStore | null {
   return row ? hydrateStore(row) : null;
 }
 
-export function listMemoryStores(): MemoryStore[] {
+export function listMemoryStores(opts: {
+  agent_id?: string;
+  /** v0.5 tenancy: filter by agent's tenant. Requires a JOIN. */
+  tenantFilter?: string | null;
+} = {}): MemoryStore[] {
   const db = getDb();
-  const rows = db.prepare(`SELECT * FROM memory_stores ORDER BY created_at DESC`).all() as MemoryStoreRow[];
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  if (opts.agent_id) {
+    clauses.push("ms.agent_id = ?");
+    params.push(opts.agent_id);
+  }
+  if (opts.tenantFilter != null) {
+    // Join through agents to check tenant. Stores without an agent
+    // (legacy null agent_id) are excluded from tenant-filtered queries.
+    clauses.push("a.tenant_id = ?");
+    params.push(opts.tenantFilter);
+  }
+  const join = opts.tenantFilter != null
+    ? "LEFT JOIN agents a ON a.id = ms.agent_id"
+    : "";
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  const rows = db
+    .prepare(`SELECT ms.* FROM memory_stores ms ${join} ${where} ORDER BY ms.created_at DESC`)
+    .all(...params) as MemoryStoreRow[];
   return rows.map(hydrateStore);
 }
 

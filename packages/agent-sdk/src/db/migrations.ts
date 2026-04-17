@@ -545,4 +545,15 @@ export function runMigrations(db: InstanceType<typeof Database>): void {
     db.exec(`ALTER TABLE proxy_resources ADD COLUMN tenant_id TEXT`);
   }
   db.exec(`CREATE INDEX IF NOT EXISTS idx_proxy_tenant ON proxy_resources(tenant_id)`);
+
+  // Memory store agent scoping (v0.5). Links a memory store to the
+  // agent that owns it. Pre-v0.5 stores have null agent_id and are
+  // accessible to global admins only. New stores require an agent_id.
+  const memStoreCols = db
+    .prepare(`PRAGMA table_info(memory_stores)`)
+    .all() as Array<{ name: string }>;
+  if (!memStoreCols.some((c) => c.name === "agent_id")) {
+    db.exec(`ALTER TABLE memory_stores ADD COLUMN agent_id TEXT`);
+  }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_stores_agent ON memory_stores(agent_id)`);
 }

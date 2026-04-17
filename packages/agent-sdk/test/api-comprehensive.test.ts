@@ -1298,31 +1298,49 @@ describe("Vaults", () => {
 describe("Memory Stores", () => {
   beforeEach(() => freshDbEnv());
 
+  /** Helper: create an agent to own memory stores (required since v0.5). */
+  async function memAgent(): Promise<string> {
+    const a = await createTestAgent({ name: `mem-agent-${Date.now()}` });
+    return a.id as string;
+  }
+
   it("creates memory store -> 201", async () => {
     await bootDb();
+    const agentId = await memAgent();
     const { handleCreateMemoryStore } = await import("../src/handlers/memory");
     const res = await handleCreateMemoryStore(
-      req("/v1/memory_stores", { body: { name: "my-store" } }),
+      req("/v1/memory_stores", { body: { name: "my-store", agent_id: agentId } }),
     );
     expect(res.status).toBe(201);
     const body = await res.json();
     expect(body.name).toBe("my-store");
+    expect(body.agent_id).toBe(agentId);
+  });
+
+  it("creates memory store without agent_id -> 400", async () => {
+    await bootDb();
+    const { handleCreateMemoryStore } = await import("../src/handlers/memory");
+    const res = await handleCreateMemoryStore(
+      req("/v1/memory_stores", { body: { name: "no-agent" } }),
+    );
+    expect(res.status).toBe(400);
   });
 
   it("creates memory store with empty name -> 400", async () => {
     await bootDb();
     const { handleCreateMemoryStore } = await import("../src/handlers/memory");
     const res = await handleCreateMemoryStore(
-      req("/v1/memory_stores", { body: { name: "" } }),
+      req("/v1/memory_stores", { body: { name: "", agent_id: "fake" } }),
     );
     expect(res.status).toBe(400);
   });
 
   it("creates memory store with description", async () => {
     await bootDb();
+    const agentId = await memAgent();
     const { handleCreateMemoryStore } = await import("../src/handlers/memory");
     const res = await handleCreateMemoryStore(
-      req("/v1/memory_stores", { body: { name: "with-desc", description: "A test store" } }),
+      req("/v1/memory_stores", { body: { name: "with-desc", description: "A test store", agent_id: agentId } }),
     );
     expect(res.status).toBe(201);
     const body = await res.json();
@@ -1331,9 +1349,10 @@ describe("Memory Stores", () => {
 
   it("lists memory stores -> returns array", async () => {
     await bootDb();
+    const agentId = await memAgent();
     const { handleCreateMemoryStore, handleListMemoryStores } = await import("../src/handlers/memory");
-    await handleCreateMemoryStore(req("/v1/memory_stores", { body: { name: "ms1" } }));
-    await handleCreateMemoryStore(req("/v1/memory_stores", { body: { name: "ms2" } }));
+    await handleCreateMemoryStore(req("/v1/memory_stores", { body: { name: "ms1", agent_id: agentId } }));
+    await handleCreateMemoryStore(req("/v1/memory_stores", { body: { name: "ms2", agent_id: agentId } }));
     const res = await handleListMemoryStores(req("/v1/memory_stores"));
     expect(res.status).toBe(200);
     const body = (await res.json()) as { data: unknown[] };
@@ -1342,9 +1361,10 @@ describe("Memory Stores", () => {
 
   it("gets memory store by ID -> 200", async () => {
     await bootDb();
+    const agentId = await memAgent();
     const { handleCreateMemoryStore, handleGetMemoryStore } = await import("../src/handlers/memory");
     const createRes = await handleCreateMemoryStore(
-      req("/v1/memory_stores", { body: { name: "getme" } }),
+      req("/v1/memory_stores", { body: { name: "getme", agent_id: agentId } }),
     );
     const store = await createRes.json();
     const res = await handleGetMemoryStore(req(`/v1/memory_stores/${store.id}`), store.id);
@@ -1355,6 +1375,7 @@ describe("Memory Stores", () => {
 
   it("gets non-existent memory store -> 404", async () => {
     await bootDb();
+    const agentId = await memAgent();
     const { handleGetMemoryStore } = await import("../src/handlers/memory");
     const res = await handleGetMemoryStore(req("/v1/memory_stores/nope"), "nope");
     expect(res.status).toBe(404);
@@ -1362,9 +1383,10 @@ describe("Memory Stores", () => {
 
   it("deletes memory store -> 200", async () => {
     await bootDb();
+    const agentId = await memAgent();
     const { handleCreateMemoryStore, handleDeleteMemoryStore } = await import("../src/handlers/memory");
     const createRes = await handleCreateMemoryStore(
-      req("/v1/memory_stores", { body: { name: "todelete" } }),
+      req("/v1/memory_stores", { body: { name: "todelete", agent_id: agentId } }),
     );
     const store = await createRes.json();
     const res = await handleDeleteMemoryStore(
@@ -1378,6 +1400,7 @@ describe("Memory Stores", () => {
 
   it("deletes non-existent memory store -> 404", async () => {
     await bootDb();
+    const agentId = await memAgent();
     const { handleDeleteMemoryStore } = await import("../src/handlers/memory");
     const res = await handleDeleteMemoryStore(
       req("/v1/memory_stores/ghost", { method: "DELETE" }),
@@ -1388,9 +1411,10 @@ describe("Memory Stores", () => {
 
   it("creates memory -> 201", async () => {
     await bootDb();
+    const agentId = await memAgent();
     const { handleCreateMemoryStore, handleCreateMemory } = await import("../src/handlers/memory");
     const createRes = await handleCreateMemoryStore(
-      req("/v1/memory_stores", { body: { name: "memstore" } }),
+      req("/v1/memory_stores", { body: { name: "memstore", agent_id: agentId } }),
     );
     const store = await createRes.json();
     const res = await handleCreateMemory(
@@ -1407,9 +1431,10 @@ describe("Memory Stores", () => {
 
   it("creates memory with empty path -> 400", async () => {
     await bootDb();
+    const agentId = await memAgent();
     const { handleCreateMemoryStore, handleCreateMemory } = await import("../src/handlers/memory");
     const createRes = await handleCreateMemoryStore(
-      req("/v1/memory_stores", { body: { name: "emptypath" } }),
+      req("/v1/memory_stores", { body: { name: "emptypath", agent_id: agentId } }),
     );
     const store = await createRes.json();
     const res = await handleCreateMemory(
@@ -1435,9 +1460,10 @@ describe("Memory Stores", () => {
 
   it("lists memories -> returns array", async () => {
     await bootDb();
+    const agentId = await memAgent();
     const { handleCreateMemoryStore, handleCreateMemory, handleListMemories } = await import("../src/handlers/memory");
     const createRes = await handleCreateMemoryStore(
-      req("/v1/memory_stores", { body: { name: "listmem" } }),
+      req("/v1/memory_stores", { body: { name: "listmem", agent_id: agentId } }),
     );
     const store = await createRes.json();
     await handleCreateMemory(
@@ -1456,9 +1482,10 @@ describe("Memory Stores", () => {
 
   it("gets memory by ID -> 200", async () => {
     await bootDb();
+    const agentId = await memAgent();
     const { handleCreateMemoryStore, handleCreateMemory, handleGetMemory } = await import("../src/handlers/memory");
     const storeRes = await handleCreateMemoryStore(
-      req("/v1/memory_stores", { body: { name: "getmem" } }),
+      req("/v1/memory_stores", { body: { name: "getmem", agent_id: agentId } }),
     );
     const store = await storeRes.json();
     const memRes = await handleCreateMemory(
@@ -1478,9 +1505,10 @@ describe("Memory Stores", () => {
 
   it("gets non-existent memory -> 404", async () => {
     await bootDb();
+    const agentId = await memAgent();
     const { handleCreateMemoryStore, handleGetMemory } = await import("../src/handlers/memory");
     const storeRes = await handleCreateMemoryStore(
-      req("/v1/memory_stores", { body: { name: "getmemnone" } }),
+      req("/v1/memory_stores", { body: { name: "getmemnone", agent_id: agentId } }),
     );
     const store = await storeRes.json();
     const res = await handleGetMemory(
@@ -1493,9 +1521,10 @@ describe("Memory Stores", () => {
 
   it("updates memory content -> 200", async () => {
     await bootDb();
+    const agentId = await memAgent();
     const { handleCreateMemoryStore, handleCreateMemory, handleUpdateMemory } = await import("../src/handlers/memory");
     const storeRes = await handleCreateMemoryStore(
-      req("/v1/memory_stores", { body: { name: "updmem" } }),
+      req("/v1/memory_stores", { body: { name: "updmem", agent_id: agentId } }),
     );
     const store = await storeRes.json();
     const memRes = await handleCreateMemory(
@@ -1518,9 +1547,10 @@ describe("Memory Stores", () => {
 
   it("update memory with wrong SHA -> 409", async () => {
     await bootDb();
+    const agentId = await memAgent();
     const { handleCreateMemoryStore, handleCreateMemory, handleUpdateMemory } = await import("../src/handlers/memory");
     const storeRes = await handleCreateMemoryStore(
-      req("/v1/memory_stores", { body: { name: "shamem" } }),
+      req("/v1/memory_stores", { body: { name: "shamem", agent_id: agentId } }),
     );
     const store = await storeRes.json();
     const memRes = await handleCreateMemory(
@@ -1541,9 +1571,10 @@ describe("Memory Stores", () => {
 
   it("deletes memory -> 200", async () => {
     await bootDb();
+    const agentId = await memAgent();
     const { handleCreateMemoryStore, handleCreateMemory, handleDeleteMemory } = await import("../src/handlers/memory");
     const storeRes = await handleCreateMemoryStore(
-      req("/v1/memory_stores", { body: { name: "delmem" } }),
+      req("/v1/memory_stores", { body: { name: "delmem", agent_id: agentId } }),
     );
     const store = await storeRes.json();
     const memRes = await handleCreateMemory(
@@ -1563,9 +1594,10 @@ describe("Memory Stores", () => {
 
   it("deletes non-existent memory -> 404", async () => {
     await bootDb();
+    const agentId = await memAgent();
     const { handleCreateMemoryStore, handleDeleteMemory } = await import("../src/handlers/memory");
     const storeRes = await handleCreateMemoryStore(
-      req("/v1/memory_stores", { body: { name: "delnomem" } }),
+      req("/v1/memory_stores", { body: { name: "delnomem", agent_id: agentId } }),
     );
     const store = await storeRes.json();
     const res = await handleDeleteMemory(
@@ -1578,9 +1610,10 @@ describe("Memory Stores", () => {
 
   it("memory has correct fields", async () => {
     await bootDb();
+    const agentId = await memAgent();
     const { handleCreateMemoryStore, handleCreateMemory } = await import("../src/handlers/memory");
     const storeRes = await handleCreateMemoryStore(
-      req("/v1/memory_stores", { body: { name: "fieldsmem" } }),
+      req("/v1/memory_stores", { body: { name: "fieldsmem", agent_id: agentId } }),
     );
     const store = await storeRes.json();
     const memRes = await handleCreateMemory(
@@ -1599,9 +1632,10 @@ describe("Memory Stores", () => {
 
   it("memory store has correct fields", async () => {
     await bootDb();
+    const agentId = await memAgent();
     const { handleCreateMemoryStore } = await import("../src/handlers/memory");
     const res = await handleCreateMemoryStore(
-      req("/v1/memory_stores", { body: { name: "fieldstore" } }),
+      req("/v1/memory_stores", { body: { name: "fieldstore", agent_id: agentId } }),
     );
     const body = await res.json();
     expect(body).toHaveProperty("id");
@@ -1613,9 +1647,10 @@ describe("Memory Stores", () => {
 
   it("upserts memory with same path (create or update)", async () => {
     await bootDb();
+    const agentId = await memAgent();
     const { handleCreateMemoryStore, handleCreateMemory, handleListMemories } = await import("../src/handlers/memory");
     const storeRes = await handleCreateMemoryStore(
-      req("/v1/memory_stores", { body: { name: "upsert" } }),
+      req("/v1/memory_stores", { body: { name: "upsert", agent_id: agentId } }),
     );
     const store = await storeRes.json();
     await handleCreateMemory(

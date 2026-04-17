@@ -190,9 +190,15 @@ async function createVault(agentId: string, name: string): Promise<Record<string
   return callHandler(handleCreateVault, "POST", "/v1/vaults", { agent_id: agentId, name });
 }
 
-async function createMemoryStore(name: string, description?: string): Promise<Record<string, unknown>> {
+async function createMemoryStore(name: string, description?: string, agentId?: string): Promise<Record<string, unknown>> {
+  // v0.5: memory stores require an agent_id. Create one if not provided.
+  let aid = agentId;
+  if (!aid) {
+    const agent = await createAgent(`mem-agent-${Date.now()}`);
+    aid = agent.id as string;
+  }
   const { handleCreateMemoryStore } = await import("../src/handlers/memory");
-  return callHandler(handleCreateMemoryStore, "POST", "/v1/memory_stores", { name, description });
+  return callHandler(handleCreateMemoryStore, "POST", "/v1/memory_stores", { name, description, agent_id: aid });
 }
 
 // ---------------------------------------------------------------------------
@@ -1043,14 +1049,16 @@ describe("Memory CLI Operations", () => {
 
   it("memory stores create returns store", async () => {
     await bootDb();
+    const agent = await createAgent("mem-cli-agent");
     const { handleCreateMemoryStore } = await import("../src/handlers/memory");
     const res = await handleCreateMemoryStore(
-      req("/v1/memory_stores", { body: { name: "cli-store" } }),
+      req("/v1/memory_stores", { body: { name: "cli-store", agent_id: agent.id } }),
     );
     expect(res.status).toBe(201);
-    const body = await res.json() as { name: string; id: string };
+    const body = await res.json() as { name: string; id: string; agent_id: string };
     expect(body.name).toBe("cli-store");
     expect(body.id).toBeTruthy();
+    expect(body.agent_id).toBe(agent.id);
   });
 
   it("memory stores list returns data", async () => {
