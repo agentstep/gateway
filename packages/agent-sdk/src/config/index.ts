@@ -3,7 +3,8 @@
  *
  * Inspired by 
  */
-import { getDb } from "../db/client";
+import { eq } from "drizzle-orm";
+import { getDrizzle, schema } from "../db/drizzle";
 import { nowMs } from "../util/clock";
 
 export interface Config {
@@ -39,13 +40,9 @@ const CACHE_MS = 30_000;
 
 export function readSetting(key: string): string | undefined {
   try {
-    const db = getDb();
-    const row = db
-      .prepare(
-        `SELECT value FROM settings WHERE key = ?`,
-      )
-      .get(key) as { value: string | null } | undefined;
-    return row?.value ?? undefined;
+    const db = getDrizzle();
+    const row = db.select().from(schema.settings).where(eq(schema.settings.key, key)).get();
+    return (row as { value: string | null } | undefined)?.value ?? undefined;
   } catch {
     return undefined;
   }
@@ -119,11 +116,12 @@ export function invalidateConfigCache(): void {
 }
 
 export function writeSetting(key: string, value: string): void {
-  const db = getDb();
+  const db = getDrizzle();
   const now = nowMs();
-  db.prepare(
-    `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-  ).run(key, value, now);
+  db.insert(schema.settings)
+    .values({ key, value, updated_at: now })
+    .onConflictDoUpdate({ target: schema.settings.key, set: { value, updated_at: now } })
+    .run();
   invalidateConfigCache();
 }
 
