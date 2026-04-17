@@ -1,4 +1,6 @@
+import { eq, and, gt, asc, desc, isNull } from "drizzle-orm";
 import { getDb } from "./client";
+import { getDrizzle, schema } from "./drizzle";
 import { newId } from "../util/ids";
 import { nowMs, toIso } from "../util/clock";
 import type { EventOrigin, EventRow, ManagedEvent } from "../types";
@@ -28,6 +30,9 @@ export interface AppendInput {
  * NOTE: this function does NOT emit on the bus. The caller (typically
  * `lib/sessions/bus.ts`) is responsible for post-commit fan-out, so that
  * the order "commit first, then emit" is guaranteed.
+ *
+ * Uses raw getDb() to preserve the IMMEDIATE transaction semantics required
+ * for the seq counter atomicity and idempotency-key deduplication.
  */
 export function appendEvent(sessionId: string, input: AppendInput): EventRow {
   const db = getDb();
@@ -105,6 +110,9 @@ export function appendEvent(sessionId: string, input: AppendInput): EventRow {
  * incremented in-memory across the batch — an earlier version re-read
  * `sessions.last_seq` for every row, which is O(N) SELECTs on the hot
  * NDJSON stream path.
+ *
+ * Uses raw getDb() to preserve the IMMEDIATE transaction semantics required
+ * for the seq counter atomicity and idempotency-key deduplication.
  */
 export function appendEventsBatch(sessionId: string, inputs: AppendInput[]): EventRow[] {
   const db = getDb();
@@ -190,8 +198,11 @@ export function appendEventsBatch(sessionId: string, inputs: AppendInput[]): Eve
 }
 
 export function markUserEventProcessed(eventId: string, when: number): void {
-  const db = getDb();
-  db.prepare(`UPDATE events SET processed_at = ? WHERE id = ?`).run(when, eventId);
+  const db = getDrizzle();
+  db.update(schema.events)
+    .set({ processed_at: when })
+    .where(eq(schema.events.id, eventId))
+    .run();
 }
 
 export function listEvents(
@@ -202,29 +213,43 @@ export function listEvents(
     afterSeq?: number;
   },
 ): EventRow[] {
-  const db = getDb();
+  const db = getDrizzle();
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 500);
-  const order = opts.order === "desc" ? "DESC" : "ASC";
+  const orderDir = opts.order === "desc" ? "desc" : "asc";
   const afterSeq = opts.afterSeq ?? 0;
 
+  const orderClause = orderDir === "desc" ? desc(schema.events.seq) : asc(schema.events.seq);
+
   return db
-    .prepare(
-      `SELECT * FROM events
-       WHERE session_id = ? AND seq > ?
-       ORDER BY seq ${order}
-       LIMIT ?`,
+    .select()
+    .from(schema.events)
+    .where(
+      and(
+        eq(schema.events.session_id, sessionId),
+        gt(schema.events.seq, afterSeq),
+      ),
     )
-    .all(sessionId, afterSeq, limit) as EventRow[];
+    .orderBy(orderClause)
+    .limit(limit)
+    .all() as EventRow[];
 }
 
 export function getLastUnprocessedUserMessage(sessionId: string): EventRow | null {
-  const db = getDb();
+  const db = getDrizzle();
   return (
     (db
-      .prepare(
-        `SELECT * FROM events WHERE session_id = ? AND type = 'user.message' AND processed_at IS NULL ORDER BY seq DESC LIMIT 1`,
+      .select()
+      .from(schema.events)
+      .where(
+        and(
+          eq(schema.events.session_id, sessionId),
+          eq(schema.events.type, "user.message"),
+          isNull(schema.events.processed_at),
+        ),
       )
-      .get(sessionId) as EventRow | undefined) ?? null
+      .orderBy(desc(schema.events.seq))
+      .limit(1)
+      .get() as EventRow | undefined) ?? null
   );
 }
 
@@ -235,15 +260,18 @@ export function getLastUnprocessedUserMessage(sessionId: string): EventRow | nul
  * single trace scan returns the full waterfall including spawned children.
  */
 export function listEventsByTrace(traceId: string, limit = 2000): EventRow[] {
-  const db = getDb();
+  const db = getDrizzle();
   return db
-    .prepare(
-      `SELECT * FROM events
-         WHERE trace_id = ?
-         ORDER BY received_at ASC, session_id ASC, seq ASC
-         LIMIT ?`,
+    .select()
+    .from(schema.events)
+    .where(eq(schema.events.trace_id, traceId))
+    .orderBy(
+      asc(schema.events.received_at),
+      asc(schema.events.session_id),
+      asc(schema.events.seq),
     )
-    .all(traceId, Math.min(Math.max(limit, 1), 10000)) as EventRow[];
+    .limit(Math.min(Math.max(limit, 1), 10000))
+    .all() as EventRow[];
 }
 
 export function rowToManagedEvent(row: EventRow): ManagedEvent {
