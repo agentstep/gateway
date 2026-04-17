@@ -7,7 +7,7 @@
 import { getDb } from "./client";
 import { nowMs } from "../util/clock";
 
-export type SyncResourceType = "agent" | "environment" | "vault" | "session";
+export type SyncResourceType = "agent" | "environment" | "vault" | "session" | "file";
 
 interface SyncRow {
   local_id: string;
@@ -45,6 +45,15 @@ export function upsertSync(
      ON CONFLICT(local_id, resource_type)
      DO UPDATE SET remote_id = excluded.remote_id, synced_at = excluded.synced_at, config_hash = excluded.config_hash`,
   ).run(localId, type, remoteId, nowMs(), configHash ?? null);
+}
+
+/** Reverse lookup: find the local ID for a given remote ID + type. */
+export function getLocalIdByRemote(remoteId: string, type: SyncResourceType): string | null {
+  const db = getDb();
+  const row = db
+    .prepare("SELECT local_id FROM anthropic_sync WHERE remote_id = ? AND resource_type = ?")
+    .get(remoteId, type) as { local_id: string } | undefined;
+  return row?.local_id ?? null;
 }
 
 export function removeSync(localId: string, type: SyncResourceType): void {

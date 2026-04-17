@@ -67,6 +67,11 @@ async function doInit(): Promise<void> {
   installPayloadRedactor(redactAppendInput);
   installOtlpExporter();
 
+  // 1c½. Anthropic file sync: when a proxied turn completes, fetch
+  // the file list from Anthropic and cache metadata locally.
+  const { installFileSyncHook } = await import("./sync/file-sync");
+  installFileSyncHook();
+
   // 1d. Validate license key (community vs enterprise).
   const { validateLicense } = await import("./license");
   validateLicense();

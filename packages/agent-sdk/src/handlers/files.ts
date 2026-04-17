@@ -140,6 +140,38 @@ export function handleGetFileContent(request: Request, fileId: string): Promise<
     if (!row) throw notFound(`file not found: ${fileId}`);
     assertFileTenantByScope(auth, row.scope_type, row.scope_id);
 
+    // Lazy content proxy for Anthropic-side files. The metadata was
+    // synced by file-sync.ts on turn completion; the content is fetched
+    // on demand here so we don't pre-download every output file.
+    if (row.storage_path.startsWith("remote:")) {
+      const remoteFileId = row.storage_path.slice(7);
+      const { resolveAnthropicKey } = await import("../providers/upstream-keys");
+      const resolved = resolveAnthropicKey({
+        sessionId: row.scope_id ?? undefined,
+      });
+      if (!resolved) throw notFound("file content unavailable (no API key)");
+
+      const upstream = await fetch(
+        `https://api.anthropic.com/v1/files/${remoteFileId}/content`,
+        {
+          headers: {
+            "x-api-key": resolved.value,
+            "anthropic-version": "2023-06-01",
+            "anthropic-beta": "managed-agents-2026-04-01,files-api-2025-04-14",
+          },
+          signal: AbortSignal.timeout(30_000),
+        },
+      );
+      if (!upstream.ok) throw notFound(`file content unavailable (upstream ${upstream.status})`);
+
+      return new Response(upstream.body, {
+        headers: {
+          "Content-Type": row.content_type,
+          "Content-Disposition": `attachment; filename="${row.filename}"`,
+        },
+      });
+    }
+
     const data = readFile(row.storage_path);
     return new Response(data, {
       headers: {

@@ -14,6 +14,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsi
 import { api } from "@/lib/api-client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { useLicense } from "@/hooks/use-license";
 
 interface Point {
   t: string;
@@ -83,6 +84,11 @@ export function KeyCostOverTime() {
   const [windowKey, setWindowKey] = useState<WindowKey>("7d");
   const { ms, defaultBucket } = WINDOWS[windowKey];
 
+  // Don't fire the query at all when per_key_analytics isn't available.
+  // This prevents 403 spam in the console on community tier.
+  const { data: lic } = useLicense();
+  const enabled = lic?.features.includes("per_key_analytics") ?? false;
+
   const { data, isError, error, isPending } = useQuery({
     queryKey: ["metrics", "api_key", windowKey],
     queryFn: async () => {
@@ -96,7 +102,10 @@ export function KeyCostOverTime() {
       return api<Response>(`/metrics?${params}`);
     },
     refetchInterval: 30_000,
+    enabled,
   });
+
+  if (!enabled) return null;
 
   // Hide the chart for non-admins (no metrics access).
   if (isError && /403|forbidden|admin/i.test(String(error))) return null;
