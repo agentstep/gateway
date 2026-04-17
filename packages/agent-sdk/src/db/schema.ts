@@ -8,13 +8,14 @@
  *
  * Tables are added incrementally as each db-layer file is migrated.
  */
-import { sqliteTable, text, integer, real } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, real, primaryKey } from "drizzle-orm/sqlite-core";
 
 // ── settings ──────────────────────────────────────────────────────────
 
 export const settings = sqliteTable("settings", {
   key: text("key").primaryKey(),
   value: text("value"),
+  type: text("type").notNull().default("text"),
   updated_at: integer("updated_at"),
 });
 
@@ -31,7 +32,7 @@ export const proxyResources = sqliteTable("proxy_resources", {
 export const apiKeys = sqliteTable("api_keys", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
-  hash: text("hash").notNull(),
+  hash: text("hash").notNull().unique(),
   prefix: text("prefix").notNull(),
   permissions_json: text("permissions_json").notNull().default("[]"),
   // v0.4 ALTER TABLE additions:
@@ -74,7 +75,9 @@ export const agentVersions = sqliteTable("agent_versions", {
   skills_json: text("skills_json").notNull().default("[]"),
   model_config_json: text("model_config_json").notNull().default("{}"),
   created_at: integer("created_at").notNull(),
-});
+}, (table) => [
+  primaryKey({ columns: [table.agent_id, table.version] }),
+]);
 
 // ── environments ──────────────────────────────────────────────────────
 
@@ -165,7 +168,9 @@ export const vaultEntries = sqliteTable("vault_entries", {
   key: text("key").notNull(),
   value: text("value").notNull(),
   updated_at: integer("updated_at").notNull(),
-});
+}, (table) => [
+  primaryKey({ columns: [table.vault_id, table.key] }),
+]);
 
 // ── memory_stores ─────────────────────────────────────────────────────
 
@@ -186,7 +191,7 @@ export const memories = sqliteTable("memories", {
   store_id: text("store_id").notNull(),
   path: text("path").notNull(),
   content: text("content").notNull(),
-  content_sha256: text("content_sha256"),
+  content_sha256: text("content_sha256").notNull(),
   metadata_json: text("metadata_json").notNull().default("{}"),
   created_at: integer("created_at").notNull(),
   updated_at: integer("updated_at").notNull(),
@@ -213,4 +218,6 @@ export const anthropicSync = sqliteTable("anthropic_sync", {
   remote_id: text("remote_id").notNull(),
   synced_at: integer("synced_at").notNull(),
   config_hash: text("config_hash"),
-});
+}, (table) => [
+  primaryKey({ columns: [table.local_id, table.resource_type] }),
+]);
