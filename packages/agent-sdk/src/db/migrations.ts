@@ -384,6 +384,12 @@ export function runMigrations(db: InstanceType<typeof Database>): void {
     )
   `);
 
+  // v0.4 api_key_id on sessions (tracks which key created the session)
+  const sessionColsApiKey = db.prepare("PRAGMA table_info(sessions)").all() as Array<{ name: string }>;
+  if (!sessionColsApiKey.some((c) => c.name === "api_key_id")) {
+    db.exec(`ALTER TABLE sessions ADD COLUMN api_key_id TEXT`);
+  }
+
   // v0.4 fallback_json on agents (cross-tenant fallback config)
   const agentColsFallback = db.prepare("PRAGMA table_info(agents)").all() as Array<{ name: string }>;
   if (!agentColsFallback.some((c) => c.name === "fallback_json")) {

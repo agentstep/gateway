@@ -1,4 +1,5 @@
-import { getDb } from "./client";
+import { eq, and, isNull, lt, gt, gte, lte, sql } from "drizzle-orm";
+import { getDrizzle, schema } from "./drizzle";
 import { newId } from "../util/ids";
 import { nowMs, toIso } from "../util/clock";
 import type { Session, SessionResource, SessionRow, SessionStatus } from "../types";
@@ -49,32 +50,26 @@ export function createSession(input: {
   parent_session_id?: string | null;
   thread_depth?: number;
 }): Session {
-  const db = getDb();
+  const db = getDrizzle();
   const id = newId("sess");
   const now = nowMs();
 
-  db.prepare(
-    `INSERT INTO sessions (
-       id, agent_id, agent_version, environment_id, status,
-       title, metadata_json, max_budget_usd, resources_json,
-       vault_ids_json, parent_session_id, thread_depth,
-       created_at, updated_at
-     ) VALUES (?, ?, ?, ?, 'idle', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
+  db.insert(schema.sessions).values({
     id,
-    input.agent_id,
-    input.agent_version,
-    input.environment_id,
-    input.title ?? null,
-    JSON.stringify(input.metadata ?? {}),
-    input.max_budget_usd ?? null,
-    input.resources ? JSON.stringify(input.resources) : null,
-    input.vault_ids ? JSON.stringify(input.vault_ids) : null,
-    input.parent_session_id ?? null,
-    input.thread_depth ?? 0,
-    now,
-    now,
-  );
+    agent_id: input.agent_id,
+    agent_version: input.agent_version,
+    environment_id: input.environment_id,
+    status: "idle",
+    title: input.title ?? null,
+    metadata_json: JSON.stringify(input.metadata ?? {}),
+    max_budget_usd: input.max_budget_usd ?? null,
+    resources_json: input.resources ? JSON.stringify(input.resources) : null,
+    vault_ids_json: input.vault_ids ? JSON.stringify(input.vault_ids) : null,
+    parent_session_id: input.parent_session_id ?? null,
+    thread_depth: input.thread_depth ?? 0,
+    created_at: now,
+    updated_at: now,
+  }).run();
 
   return getSession(id)!;
 }
@@ -85,11 +80,13 @@ export function getSession(id: string): Session | null {
 }
 
 export function getSessionRow(id: string): SessionRow | null {
-  const db = getDb();
+  const db = getDrizzle();
   return (
     (db
-      .prepare(`SELECT * FROM sessions WHERE id = ?`)
-      .get(id) as SessionRow | undefined) ?? null
+      .select()
+      .from(schema.sessions)
+      .where(eq(schema.sessions.id, id))
+      .get() as SessionRow | undefined) ?? null
   );
 }
 
@@ -98,17 +95,19 @@ export function updateSessionStatus(
   status: SessionStatus,
   stopReason?: string | null,
 ): void {
-  const db = getDb();
-  db.prepare(
-    `UPDATE sessions SET status = ?, stop_reason = ?, updated_at = ? WHERE id = ?`,
-  ).run(status, stopReason ?? null, nowMs(), id);
+  const db = getDrizzle();
+  db.update(schema.sessions)
+    .set({ status, stop_reason: stopReason ?? null, updated_at: nowMs() })
+    .where(eq(schema.sessions.id, id))
+    .run();
 }
 
 export function setSessionSprite(id: string, spriteName: string | null): void {
-  const db = getDb();
-  db.prepare(
-    `UPDATE sessions SET sprite_name = ?, updated_at = ? WHERE id = ?`,
-  ).run(spriteName, nowMs(), id);
+  const db = getDrizzle();
+  db.update(schema.sessions)
+    .set({ sprite_name: spriteName, updated_at: nowMs() })
+    .where(eq(schema.sessions.id, id))
+    .run();
 }
 
 /**
@@ -117,40 +116,45 @@ export function setSessionSprite(id: string, spriteName: string | null): void {
  * backend's session id (claude's `session_id`, opencode's `sessionID`).
  */
 export function setBackendSessionId(id: string, backendSessionId: string): void {
-  const db = getDb();
-  db.prepare(
-    `UPDATE sessions SET claude_session_id = ?, updated_at = ? WHERE id = ?`,
-  ).run(backendSessionId, nowMs(), id);
+  const db = getDrizzle();
+  db.update(schema.sessions)
+    .set({ claude_session_id: backendSessionId, updated_at: nowMs() })
+    .where(eq(schema.sessions.id, id))
+    .run();
 }
 
 export function setSessionProvider(id: string, providerName: string): void {
-  const db = getDb();
-  db.prepare(
-    `UPDATE sessions SET provider_name = ?, updated_at = ? WHERE id = ?`,
-  ).run(providerName, nowMs(), id);
+  const db = getDrizzle();
+  db.update(schema.sessions)
+    .set({ provider_name: providerName, updated_at: nowMs() })
+    .where(eq(schema.sessions.id, id))
+    .run();
 }
 
 export function setIdleSince(id: string, idleSince: number | null): void {
-  const db = getDb();
-  db.prepare(`UPDATE sessions SET idle_since = ? WHERE id = ?`).run(idleSince, id);
+  const db = getDrizzle();
+  db.update(schema.sessions)
+    .set({ idle_since: idleSince })
+    .where(eq(schema.sessions.id, id))
+    .run();
 }
 
 export function updateSessionMutable(
   id: string,
   input: { title?: string | null; metadata?: Record<string, unknown> },
 ): Session | null {
-  const db = getDb();
+  const db = getDrizzle();
   const existing = getSession(id);
   if (!existing) return null;
 
-  db.prepare(
-    `UPDATE sessions SET title = ?, metadata_json = ?, updated_at = ? WHERE id = ?`,
-  ).run(
-    input.title ?? existing.title,
-    JSON.stringify(input.metadata ?? existing.metadata),
-    nowMs(),
-    id,
-  );
+  db.update(schema.sessions)
+    .set({
+      title: input.title ?? existing.title,
+      metadata_json: JSON.stringify(input.metadata ?? existing.metadata),
+      updated_at: nowMs(),
+    })
+    .where(eq(schema.sessions.id, id))
+    .run();
 
   return getSession(id);
 }
@@ -168,40 +172,32 @@ export function bumpSessionStats(
   delta: { turn_count?: number; tool_calls_count?: number; duration_seconds?: number; active_seconds?: number },
   usage?: UsageDelta,
 ): void {
-  const db = getDb();
-  db.prepare(
-    `UPDATE sessions SET
-       turn_count                        = turn_count + ?,
-       tool_calls_count                  = tool_calls_count + ?,
-       active_seconds                    = active_seconds + ?,
-       duration_seconds                  = duration_seconds + ?,
-       usage_input_tokens                = usage_input_tokens + ?,
-       usage_output_tokens               = usage_output_tokens + ?,
-       usage_cache_read_input_tokens     = usage_cache_read_input_tokens + ?,
-       usage_cache_creation_input_tokens = usage_cache_creation_input_tokens + ?,
-       usage_cost_usd                    = usage_cost_usd + ?,
-       updated_at                        = ?
-     WHERE id = ?`,
-  ).run(
-    delta.turn_count ?? 0,
-    delta.tool_calls_count ?? 0,
-    delta.active_seconds ?? 0,
-    delta.duration_seconds ?? 0,
-    usage?.input_tokens ?? 0,
-    usage?.output_tokens ?? 0,
-    usage?.cache_read_input_tokens ?? 0,
-    usage?.cache_creation_input_tokens ?? 0,
-    usage?.cost_usd ?? 0,
-    nowMs(),
-    id,
-  );
+  const db = getDrizzle();
+  db.update(schema.sessions)
+    .set({
+      turn_count: sql`${schema.sessions.turn_count} + ${delta.turn_count ?? 0}`,
+      tool_calls_count: sql`${schema.sessions.tool_calls_count} + ${delta.tool_calls_count ?? 0}`,
+      active_seconds: sql`${schema.sessions.active_seconds} + ${delta.active_seconds ?? 0}`,
+      duration_seconds: sql`${schema.sessions.duration_seconds} + ${delta.duration_seconds ?? 0}`,
+      usage_input_tokens: sql`${schema.sessions.usage_input_tokens} + ${usage?.input_tokens ?? 0}`,
+      usage_output_tokens: sql`${schema.sessions.usage_output_tokens} + ${usage?.output_tokens ?? 0}`,
+      usage_cache_read_input_tokens: sql`${schema.sessions.usage_cache_read_input_tokens} + ${usage?.cache_read_input_tokens ?? 0}`,
+      usage_cache_creation_input_tokens: sql`${schema.sessions.usage_cache_creation_input_tokens} + ${usage?.cache_creation_input_tokens ?? 0}`,
+      usage_cost_usd: sql`${schema.sessions.usage_cost_usd} + ${usage?.cost_usd ?? 0}`,
+      updated_at: nowMs(),
+    })
+    .where(eq(schema.sessions.id, id))
+    .run();
 }
 
 export function archiveSession(id: string): boolean {
-  const db = getDb();
+  const db = getDrizzle();
+  const now = nowMs();
   const res = db
-    .prepare(`UPDATE sessions SET archived_at = ?, updated_at = ? WHERE id = ? AND archived_at IS NULL`)
-    .run(nowMs(), nowMs(), id);
+    .update(schema.sessions)
+    .set({ archived_at: now, updated_at: now })
+    .where(and(eq(schema.sessions.id, id), isNull(schema.sessions.archived_at)))
+    .run();
   return res.changes > 0;
 }
 
@@ -220,73 +216,53 @@ export function listSessions(opts: {
   createdLt?: number;
   createdLte?: number;
 }): Session[] {
-  const db = getDb();
+  const db = getDrizzle();
   const limit = Math.min(Math.max(opts.limit ?? 20, 1), 100);
-  const order = opts.order === "asc" ? "ASC" : "DESC";
+  const orderDir = opts.order === "asc" ? "asc" : "desc";
   const includeArchived = opts.includeArchived ?? false;
 
-  const clauses: string[] = [];
-  const params: unknown[] = [];
+  const conditions = [];
 
-  if (opts.agent_id) {
-    clauses.push("agent_id = ?");
-    params.push(opts.agent_id);
-  }
-  if (opts.agent_version != null) {
-    clauses.push("agent_version = ?");
-    params.push(opts.agent_version);
-  }
-  if (opts.environmentId) {
-    clauses.push("environment_id = ?");
-    params.push(opts.environmentId);
-  }
-  if (opts.parent_session_id) {
-    clauses.push("parent_session_id = ?");
-    params.push(opts.parent_session_id);
-  }
-  if (opts.status) {
-    clauses.push("status = ?");
-    params.push(opts.status);
-  }
-  if (!includeArchived) clauses.push("archived_at IS NULL");
-  if (opts.createdGt != null) {
-    clauses.push("created_at > ?");
-    params.push(opts.createdGt);
-  }
-  if (opts.createdGte != null) {
-    clauses.push("created_at >= ?");
-    params.push(opts.createdGte);
-  }
-  if (opts.createdLt != null) {
-    clauses.push("created_at < ?");
-    params.push(opts.createdLt);
-  }
-  if (opts.createdLte != null) {
-    clauses.push("created_at <= ?");
-    params.push(opts.createdLte);
-  }
+  if (opts.agent_id) conditions.push(eq(schema.sessions.agent_id, opts.agent_id));
+  if (opts.agent_version != null) conditions.push(eq(schema.sessions.agent_version, opts.agent_version));
+  if (opts.environmentId) conditions.push(eq(schema.sessions.environment_id, opts.environmentId));
+  if (opts.parent_session_id) conditions.push(eq(schema.sessions.parent_session_id, opts.parent_session_id));
+  if (opts.status) conditions.push(eq(schema.sessions.status, opts.status));
+  if (!includeArchived) conditions.push(isNull(schema.sessions.archived_at));
+  if (opts.createdGt != null) conditions.push(gt(schema.sessions.created_at, opts.createdGt));
+  if (opts.createdGte != null) conditions.push(gte(schema.sessions.created_at, opts.createdGte));
+  if (opts.createdLt != null) conditions.push(lt(schema.sessions.created_at, opts.createdLt));
+  if (opts.createdLte != null) conditions.push(lte(schema.sessions.created_at, opts.createdLte));
   if (opts.cursor) {
-    clauses.push(order === "DESC" ? "id < ?" : "id > ?");
-    params.push(opts.cursor);
+    conditions.push(
+      orderDir === "desc"
+        ? lt(schema.sessions.id, opts.cursor)
+        : gt(schema.sessions.id, opts.cursor),
+    );
   }
 
-  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-  const rows = db
-    .prepare(
-      `SELECT * FROM sessions ${where} ORDER BY id ${order} LIMIT ?`,
-    )
-    .all(...params, limit) as SessionRow[];
+  const where = conditions.length ? and(...conditions) : undefined;
+
+  const orderClause =
+    orderDir === "desc"
+      ? sql`${schema.sessions.id} DESC`
+      : sql`${schema.sessions.id} ASC`;
+
+  const rows = (
+    where
+      ? db.select().from(schema.sessions).where(where).orderBy(orderClause).limit(limit).all()
+      : db.select().from(schema.sessions).orderBy(orderClause).limit(limit).all()
+  ) as SessionRow[];
 
   return rows.map(hydrateSession);
 }
 
 export function setOutcomeCriteria(id: string, criteria: Record<string, unknown>): void {
-  const db = getDb();
-  db.prepare(`UPDATE sessions SET outcome_criteria_json = ?, updated_at = ? WHERE id = ?`).run(
-    JSON.stringify(criteria),
-    nowMs(),
-    id,
-  );
+  const db = getDrizzle();
+  db.update(schema.sessions)
+    .set({ outcome_criteria_json: JSON.stringify(criteria), updated_at: nowMs() })
+    .where(eq(schema.sessions.id, id))
+    .run();
 }
 
 export function getOutcomeCriteria(id: string): Record<string, unknown> | null {
