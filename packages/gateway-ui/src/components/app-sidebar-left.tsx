@@ -31,6 +31,7 @@ import {
   SidebarRail,
 } from "@/components/ui/sidebar";
 import { useWhoami } from "@/hooks/use-whoami";
+import { useLicense } from "@/hooks/use-license";
 
 const VERSION = "0.5.0";
 
@@ -93,13 +94,14 @@ function NavGroup({ title, items }: { title: string; items: NavItem[] }) {
 }
 
 /**
- * Overview nav; shows Tenants entry only for global admins. A tenant
- * user can still reach /tenants directly, but the page renders a
- * permission notice instead of the list.
+ * Overview nav; shows Tenants entry only when the feature is enabled
+ * (in the license) AND the caller is a global admin.
  */
 function OverviewNav() {
   const { data: me } = useWhoami();
-  const items = me?.is_global_admin
+  const { data: lic } = useLicense();
+  const tenancyEnabled = lic?.features.includes("tenancy");
+  const items = me?.is_global_admin && tenancyEnabled
     ? [...OVERVIEW_BASE, TENANTS_ITEM]
     : OVERVIEW_BASE;
   return <NavGroup title="Overview" items={items} />;

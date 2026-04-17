@@ -86,8 +86,11 @@ export function validateLicense(): void {
 
   // For now: any non-empty key = enterprise with all features.
   // v0.6 will decode the JWT and check plan/seats/expiry.
+  //
+  // Features NOT in this list are built but hidden — they 403 for
+  // everyone until moved here. To ship tenancy: add "tenancy" back.
   const allFeatures: Feature[] = [
-    "tenancy",
+    // "tenancy" — hidden for launch; ship when ready
     "budgets",
     "upstream_pool",
     "redis_rate_limit",
