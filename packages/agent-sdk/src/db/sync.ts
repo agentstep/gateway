@@ -4,7 +4,8 @@
  * Used by the sync-and-proxy flow: AgentStep manages config locally,
  * syncs to Anthropic at session start, then proxies execution traffic.
  */
-import { getDb } from "./client";
+import { eq, and } from "drizzle-orm";
+import { getDrizzle, schema } from "./drizzle";
 import { nowMs } from "../util/clock";
 
 export type SyncResourceType = "agent" | "environment" | "vault" | "session";
@@ -18,18 +19,33 @@ interface SyncRow {
 }
 
 export function getSyncedRemoteId(localId: string, type: SyncResourceType): string | null {
-  const db = getDb();
+  const db = getDrizzle();
   const row = db
-    .prepare("SELECT remote_id FROM anthropic_sync WHERE local_id = ? AND resource_type = ?")
-    .get(localId, type) as { remote_id: string } | undefined;
+    .select({ remote_id: schema.anthropicSync.remote_id })
+    .from(schema.anthropicSync)
+    .where(
+      and(
+        eq(schema.anthropicSync.local_id, localId),
+        eq(schema.anthropicSync.resource_type, type),
+      ),
+    )
+    .get();
   return row?.remote_id ?? null;
 }
 
 export function getSyncRow(localId: string, type: SyncResourceType): SyncRow | null {
-  const db = getDb();
-  return (db
-    .prepare("SELECT * FROM anthropic_sync WHERE local_id = ? AND resource_type = ?")
-    .get(localId, type) as SyncRow | undefined) ?? null;
+  const db = getDrizzle();
+  const row = db
+    .select()
+    .from(schema.anthropicSync)
+    .where(
+      and(
+        eq(schema.anthropicSync.local_id, localId),
+        eq(schema.anthropicSync.resource_type, type),
+      ),
+    )
+    .get();
+  return (row as SyncRow | undefined) ?? null;
 }
 
 export function upsertSync(
@@ -38,18 +54,36 @@ export function upsertSync(
   remoteId: string,
   configHash?: string,
 ): void {
-  const db = getDb();
-  db.prepare(
-    `INSERT INTO anthropic_sync (local_id, resource_type, remote_id, synced_at, config_hash)
-     VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(local_id, resource_type)
-     DO UPDATE SET remote_id = excluded.remote_id, synced_at = excluded.synced_at, config_hash = excluded.config_hash`,
-  ).run(localId, type, remoteId, nowMs(), configHash ?? null);
+  const db = getDrizzle();
+  db.insert(schema.anthropicSync)
+    .values({
+      local_id: localId,
+      resource_type: type,
+      remote_id: remoteId,
+      synced_at: nowMs(),
+      config_hash: configHash ?? null,
+    })
+    .onConflictDoUpdate({
+      target: [schema.anthropicSync.local_id, schema.anthropicSync.resource_type],
+      set: {
+        remote_id: remoteId,
+        synced_at: nowMs(),
+        config_hash: configHash ?? null,
+      },
+    })
+    .run();
 }
 
 export function removeSync(localId: string, type: SyncResourceType): void {
-  const db = getDb();
-  db.prepare("DELETE FROM anthropic_sync WHERE local_id = ? AND resource_type = ?").run(localId, type);
+  const db = getDrizzle();
+  db.delete(schema.anthropicSync)
+    .where(
+      and(
+        eq(schema.anthropicSync.local_id, localId),
+        eq(schema.anthropicSync.resource_type, type),
+      ),
+    )
+    .run();
 }
 
 /**
