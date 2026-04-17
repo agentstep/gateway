@@ -3,7 +3,8 @@
  *
  * Files are stored on disk (see files/storage.ts), metadata in SQLite.
  */
-import { getDb } from "./client";
+import { eq, desc } from "drizzle-orm";
+import { getDrizzle, schema } from "./drizzle";
 import { newId } from "../util/ids";
 import { nowMs, toIso } from "../util/clock";
 
@@ -50,13 +51,21 @@ export function createFile(input: {
   storage_path: string;
   scope?: FileScope;
 }): FileRecord {
-  const db = getDb();
+  const db = getDrizzle();
   const id = newId("file");
   const now = nowMs();
-  db.prepare(
-    `INSERT INTO files (id, filename, size, content_type, storage_path, scope_type, scope_id, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(id, input.filename, input.size, input.content_type, input.storage_path, input.scope?.type ?? null, input.scope?.id ?? null, now);
+  db.insert(schema.files)
+    .values({
+      id,
+      filename: input.filename,
+      size: input.size,
+      content_type: input.content_type,
+      storage_path: input.storage_path,
+      scope_type: input.scope?.type ?? null,
+      scope_id: input.scope?.id ?? null,
+      created_at: now,
+    })
+    .run();
   return {
     id, filename: input.filename, size: input.size, content_type: input.content_type,
     scope: input.scope ?? null, created_at: toIso(now),
@@ -64,9 +73,9 @@ export function createFile(input: {
 }
 
 export function getFile(id: string): FileRow | null {
-  const db = getDb();
-  const row = db.prepare(`SELECT * FROM files WHERE id = ?`).get(id) as FileRow | undefined;
-  return row ?? null;
+  const db = getDrizzle();
+  const row = db.select().from(schema.files).where(eq(schema.files.id, id)).get();
+  return (row as FileRow | undefined) ?? null;
 }
 
 export function getFileRecord(id: string): FileRecord | null {
@@ -75,20 +84,20 @@ export function getFileRecord(id: string): FileRecord | null {
 }
 
 export function listFiles(opts?: { limit?: number; scope_id?: string }): FileRecord[] {
-  const db = getDb();
+  const db = getDrizzle();
   const limit = opts?.limit ?? 100;
+  let query = db.select().from(schema.files).$dynamic();
   if (opts?.scope_id) {
-    const rows = db.prepare(`SELECT * FROM files WHERE scope_id = ? ORDER BY created_at DESC LIMIT ?`).all(opts.scope_id, limit) as FileRow[];
-    return rows.map(hydrate);
+    query = query.where(eq(schema.files.scope_id, opts.scope_id));
   }
-  const rows = db.prepare(`SELECT * FROM files ORDER BY created_at DESC LIMIT ?`).all(limit) as FileRow[];
-  return rows.map(hydrate);
+  const rows = query.orderBy(desc(schema.files.created_at)).limit(limit).all();
+  return (rows as FileRow[]).map(hydrate);
 }
 
 export function deleteFileRecord(id: string): { id: string; type: string } | null {
-  const db = getDb();
+  const db = getDrizzle();
   const row = getFile(id);
   if (!row) return null;
-  db.prepare(`DELETE FROM files WHERE id = ?`).run(id);
+  db.delete(schema.files).where(eq(schema.files.id, id)).run();
   return { id, type: "file_deleted" };
 }
