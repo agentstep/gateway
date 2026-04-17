@@ -8,7 +8,7 @@
  * DELETE /v1/files/:id    — delete file
  */
 import { routeWrap, jsonOk } from "../http";
-import { createFile, getFile, getFileRecord, listFiles, deleteFileRecord } from "../db/files";
+import { createFile, getFile, getFileRecord, listFiles, deleteFileRecord, updateFileStoragePath } from "../db/files";
 import { storeFile, readFile, deleteFile, getMaxFileSize } from "../files/storage";
 import { badRequest, notFound } from "../errors";
 
@@ -65,8 +65,7 @@ export function handleUploadFile(request: Request): Promise<Response> {
     const storagePath = storeFile(record.id, filename, data);
 
     // Update storage path in DB
-    const { getDb } = await import("../db/client");
-    getDb().prepare("UPDATE files SET storage_path = ? WHERE id = ?").run(storagePath, record.id);
+    updateFileStoragePath(record.id, storagePath);
 
     return jsonOk(record, 201);
   });

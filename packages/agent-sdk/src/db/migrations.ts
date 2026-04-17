@@ -383,4 +383,45 @@ export function runMigrations(db: InstanceType<typeof Database>): void {
       PRIMARY KEY (local_id, resource_type)
     )
   `);
+
+  // v0.4 api_key_id on sessions (tracks which key created the session)
+  const sessionColsApiKey = db.prepare("PRAGMA table_info(sessions)").all() as Array<{ name: string }>;
+  if (!sessionColsApiKey.some((c) => c.name === "api_key_id")) {
+    db.exec(`ALTER TABLE sessions ADD COLUMN api_key_id TEXT`);
+  }
+
+  // v0.4 fallback_json on agents (cross-tenant fallback config)
+  const agentColsFallback = db.prepare("PRAGMA table_info(agents)").all() as Array<{ name: string }>;
+  if (!agentColsFallback.some((c) => c.name === "fallback_json")) {
+    db.exec(`ALTER TABLE agents ADD COLUMN fallback_json TEXT`);
+  }
+
+  // v0.4 tenancy columns on api_keys
+  const apiKeyCols = db.prepare("PRAGMA table_info(api_keys)").all() as Array<{ name: string }>;
+  if (!apiKeyCols.some(c => c.name === "tenant_id")) {
+    db.exec("ALTER TABLE api_keys ADD COLUMN tenant_id TEXT");
+  }
+  if (!apiKeyCols.some(c => c.name === "budget_usd")) {
+    db.exec("ALTER TABLE api_keys ADD COLUMN budget_usd REAL");
+  }
+  if (!apiKeyCols.some(c => c.name === "rate_limit_rpm")) {
+    db.exec("ALTER TABLE api_keys ADD COLUMN rate_limit_rpm INTEGER");
+  }
+  if (!apiKeyCols.some(c => c.name === "spent_usd")) {
+    db.exec("ALTER TABLE api_keys ADD COLUMN spent_usd REAL NOT NULL DEFAULT 0");
+  }
+
+  // v0.4 extra columns on memory_stores + memories
+  const memStoreCols = db.prepare("PRAGMA table_info(memory_stores)").all() as Array<{ name: string }>;
+  if (!memStoreCols.some(c => c.name === "agent_id")) {
+    db.exec("ALTER TABLE memory_stores ADD COLUMN agent_id TEXT");
+  }
+  if (!memStoreCols.some(c => c.name === "metadata_json")) {
+    db.exec("ALTER TABLE memory_stores ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'");
+  }
+
+  const memoriesCols = db.prepare("PRAGMA table_info(memories)").all() as Array<{ name: string }>;
+  if (!memoriesCols.some(c => c.name === "metadata_json")) {
+    db.exec("ALTER TABLE memories ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'");
+  }
 }

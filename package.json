@@ -24,6 +24,7 @@
     "modal": "^0.7.4"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@vitest/coverage-v8": "^4.1.4"
   },
   "version": "0.3.8"

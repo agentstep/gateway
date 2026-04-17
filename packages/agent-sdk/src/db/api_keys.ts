@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
-import { getDb } from "./client";
+import { eq, and, desc, isNull } from "drizzle-orm";
+import { getDrizzle, schema } from "./drizzle";
 import { newId } from "../util/ids";
 import { nowMs } from "../util/clock";
 
@@ -26,53 +27,54 @@ export function createApiKey(input: {
   permissions?: string[];
   rawKey?: string;
 }): { key: string; id: string } {
-  const db = getDb();
+  const db = getDrizzle();
   const id = newId("key");
   const raw = input.rawKey || `ck_${crypto.randomBytes(24).toString("base64url")}`;
   const hash = hashKey(raw);
   const prefix = raw.slice(0, 8);
 
-  db.prepare(
-    `INSERT INTO api_keys (id, name, hash, prefix, permissions_json, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(
-    id,
-    input.name,
-    hash,
-    prefix,
-    JSON.stringify(input.permissions ?? ["*"]),
-    nowMs(),
-  );
+  db.insert(schema.apiKeys)
+    .values({
+      id,
+      name: input.name,
+      hash,
+      prefix,
+      permissions_json: JSON.stringify(input.permissions ?? ["*"]),
+      created_at: nowMs(),
+    })
+    .run();
 
   return { key: raw, id };
 }
 
 export function findByRawKey(raw: string): ApiKeyRow | null {
-  const db = getDb();
+  const db = getDrizzle();
   const hash = hashKey(raw);
-  return (
-    (db
-      .prepare(
-        `SELECT * FROM api_keys WHERE hash = ? AND revoked_at IS NULL`,
-      )
-      .get(hash) as ApiKeyRow | undefined) ?? null
-  );
+  const row = db
+    .select()
+    .from(schema.apiKeys)
+    .where(and(eq(schema.apiKeys.hash, hash), isNull(schema.apiKeys.revoked_at)))
+    .get();
+  return (row as ApiKeyRow | undefined) ?? null;
 }
 
 export function revokeApiKey(id: string): boolean {
-  const db = getDb();
+  const db = getDrizzle();
   const res = db
-    .prepare(`UPDATE api_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`)
-    .run(nowMs(), id);
+    .update(schema.apiKeys)
+    .set({ revoked_at: nowMs() })
+    .where(and(eq(schema.apiKeys.id, id), isNull(schema.apiKeys.revoked_at)))
+    .run();
   return res.changes > 0;
 }
 
 export function listApiKeys(): Array<Omit<ApiKeyRow, "hash">> {
-  const db = getDb();
+  const db = getDrizzle();
   const rows = db
-    .prepare(
-      `SELECT * FROM api_keys WHERE revoked_at IS NULL ORDER BY created_at DESC`,
-    )
+    .select()
+    .from(schema.apiKeys)
+    .where(isNull(schema.apiKeys.revoked_at))
+    .orderBy(desc(schema.apiKeys.created_at))
     .all() as ApiKeyRow[];
   return rows.map(({ hash: _hash, ...rest }) => rest);
 }
