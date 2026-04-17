@@ -54,11 +54,12 @@ function RootLayout() {
     <SidebarProvider>
       <AppSidebarLeft />
       <SidebarInset>
-        <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
+        <header className="relative flex h-12 shrink-0 items-center gap-2 border-b px-4">
           <SidebarTrigger className="-ml-1 text-muted-foreground" />
           <Separator orientation="vertical" className="mr-2 !self-center h-4" />
           <PageBreadcrumb />
           <NavbarCenter />
+          <div className="flex-1" />
           <SkipOnboardingButton />
         </header>
         <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
@@ -128,8 +129,8 @@ function DashboardNavTabs() {
   const activeTab = params.get("tab") === "api" ? "api" : "agents";
   const nav = useNavigate();
   return (
-    <div className="flex-1 flex justify-center">
-      <div className="inline-flex items-center gap-0.5 rounded-lg bg-muted p-0.5">
+    <div className="absolute inset-x-0 flex justify-center pointer-events-none">
+      <div className="inline-flex items-center gap-0.5 rounded-lg bg-muted p-0.5 pointer-events-auto">
         {DASHBOARD_TABS.map((t) => (
           <button
             key={t.value}
