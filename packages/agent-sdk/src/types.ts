@@ -252,6 +252,7 @@ export interface SessionResource {
 
 export interface Session {
   id: string;
+  type: "session";
   agent: { type: "agent"; id: string; version: number };
   environment_id: string;
   status: SessionStatus;
@@ -260,8 +261,8 @@ export interface Session {
   metadata: Record<string, unknown>;
   max_budget_usd: number | null;
   outcome: Record<string, unknown> | null;
-  resources: SessionResource[] | null;
-  vault_ids: string[] | null;
+  resources: SessionResource[];
+  vault_ids: string[];
   parent_session_id: string | null;
   thread_depth: number;
   stats: {

@@ -6,6 +6,7 @@ import type { Session, SessionResource, SessionRow, SessionStatus } from "../typ
 export function hydrateSession(row: SessionRow): Session {
   return {
     id: row.id,
+    type: "session" as const,
     agent: { type: "agent" as const, id: row.agent_id, version: row.agent_version },
     environment_id: row.environment_id,
     status: row.status,
@@ -14,8 +15,8 @@ export function hydrateSession(row: SessionRow): Session {
     metadata: JSON.parse(row.metadata_json) as Record<string, unknown>,
     max_budget_usd: row.max_budget_usd ?? null,
     outcome: row.outcome_criteria_json ? (JSON.parse(row.outcome_criteria_json) as Record<string, unknown>) : null,
-    resources: row.resources_json ? (JSON.parse(row.resources_json) as SessionResource[]) : null,
-    vault_ids: row.vault_ids_json ? (JSON.parse(row.vault_ids_json) as string[]) : null,
+    resources: row.resources_json ? (JSON.parse(row.resources_json) as SessionResource[]) : [],
+    vault_ids: row.vault_ids_json ? (JSON.parse(row.vault_ids_json) as string[]) : [],
     parent_session_id: row.parent_session_id ?? null,
     thread_depth: row.thread_depth ?? 0,
     stats: {
