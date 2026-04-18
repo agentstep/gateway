@@ -27,9 +27,8 @@ export function buildPiAuthEnv(): Record<string, string> {
  * (validateRuntime).
  */
 export function validatePiRuntime(): string | null {
-  const cfg = getConfig();
-  if (!cfg.anthropicApiKey && !cfg.openAiApiKey && !cfg.geminiApiKey) {
-    return "pi backend requires at least one of ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY to be set";
-  }
+  // Vault entries are injected by the driver AFTER buildTurn(), so
+  // getConfig() won't see vault-provided keys at this point. Return
+  // null and let the CLI surface the auth error in its NDJSON stream.
   return null;
 }

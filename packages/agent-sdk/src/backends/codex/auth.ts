@@ -27,9 +27,8 @@ export function buildCodexAuthEnv(): Record<string, string> {
  * (validateRuntime).
  */
 export function validateCodexRuntime(): string | null {
-  const cfg = getConfig();
-  if (!cfg.openAiApiKey) {
-    return "codex backend requires OPENAI_API_KEY to be set";
-  }
+  // Vault entries are injected by the driver AFTER buildTurn(), so
+  // getConfig() won't see vault-provided keys at this point. Return
+  // null and let the CLI surface the auth error in its NDJSON stream.
   return null;
 }
