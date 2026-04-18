@@ -53,10 +53,16 @@ function extractFilePaths(sessionId: string): string[] {
 
     let filePath: string | undefined;
     const toolName = payload.name;
-    if ((toolName === "Write" || toolName === "Edit" || toolName === "write_file" || toolName === "edit_file") && payload.input) {
+    // Claude: Write/Edit (file_path), Gemini: write_file/edit_file (file_path or path),
+    // Codex: file_edit (path), Pi: write/edit (path), OpenCode: apply_patch (check patchText)
+    const FILE_TOOLS = new Set(["Write", "Edit", "write_file", "edit_file", "file_edit", "write", "edit"]);
+    if (FILE_TOOLS.has(toolName ?? "") && payload.input) {
       filePath = (payload.input.file_path ?? payload.input.path) as string | undefined;
-    } else if (toolName === "file_edit" && payload.input) {
-      filePath = payload.input.path as string | undefined;
+    } else if (toolName === "apply_patch" && payload.input) {
+      // OpenCode apply_patch: extract path from patchText "*** Add File: /path" or "*** Update File: /path"
+      const patch = payload.input.patchText as string | undefined;
+      const match = patch?.match(/\*\*\* (?:Add|Update) File: (.+)/);
+      if (match) filePath = match[1].trim();
     }
 
     if (!filePath || typeof filePath !== "string" || filePath === "") continue;
