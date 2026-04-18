@@ -557,6 +557,18 @@ export function runMigrations(db: InstanceType<typeof Database>): void {
   }
   db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_stores_agent ON memory_stores(agent_id)`);
 
+  // Container file sync: container_path + content_hash on files
+  const filesColsSync = db.prepare("PRAGMA table_info(files)").all() as Array<{ name: string }>;
+  if (!filesColsSync.some(c => c.name === "container_path")) {
+    db.exec("ALTER TABLE files ADD COLUMN container_path TEXT");
+  }
+  if (!filesColsSync.some(c => c.name === "content_hash")) {
+    db.exec("ALTER TABLE files ADD COLUMN content_hash TEXT");
+  }
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_files_dedup ON files(scope_id, container_path, content_hash)`,
+  );
+
   // Vault credentials (Anthropic-compatible structured auth)
   db.exec(`
     CREATE TABLE IF NOT EXISTS vault_credentials (

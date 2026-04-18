@@ -24,6 +24,11 @@ export function ChatThread() {
 
   const messages = events?.filter((e) => MESSAGE_TYPES.has(e.type)) ?? [];
   const isRunning = session?.status === "running";
+  // Show typing indicator during environment setup (before status flips to running)
+  const lastEvent = events?.[events.length - 1];
+  const isSettingUp = lastEvent?.type === "span.environment_setup_start"
+    || (lastEvent?.type === "user.message" && session?.status !== "idle");
+  const showTyping = (isRunning || isSettingUp) && messages.length > 0;
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -52,7 +57,7 @@ export function ChatThread() {
           </div>
         )}
         {messages.map((event) => <MessageBubble key={event.id} event={event} />)}
-        {isRunning && messages.length > 0 && <TypingIndicator />}
+        {showTyping && <TypingIndicator />}
         <div ref={bottomRef} />
       </div>
     </div>

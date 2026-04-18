@@ -60,6 +60,7 @@ function RootLayout() {
           <PageBreadcrumb />
           <NavbarCenter />
           <div className="flex-1" />
+          <div id="navbar-actions" className="flex items-center gap-2" />
           <SkipOnboardingButton />
         </header>
         <div className="flex flex-1 flex-col min-h-0 overflow-hidden">

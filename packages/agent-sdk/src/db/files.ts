@@ -15,6 +15,8 @@ export interface FileRow {
   storage_path: string;
   scope_type: string | null;
   scope_id: string | null;
+  container_path: string | null;
+  content_hash: string | null;
   created_at: number;
 }
 
@@ -49,18 +51,28 @@ export function createFile(input: {
   content_type: string;
   storage_path: string;
   scope?: FileScope;
+  container_path?: string;
+  content_hash?: string;
 }): FileRecord {
   const db = getDb();
   const id = newId("file");
   const now = nowMs();
   db.prepare(
-    `INSERT INTO files (id, filename, size, content_type, storage_path, scope_type, scope_id, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(id, input.filename, input.size, input.content_type, input.storage_path, input.scope?.type ?? null, input.scope?.id ?? null, now);
+    `INSERT INTO files (id, filename, size, content_type, storage_path, scope_type, scope_id, container_path, content_hash, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(id, input.filename, input.size, input.content_type, input.storage_path, input.scope?.type ?? null, input.scope?.id ?? null, input.container_path ?? null, input.content_hash ?? null, now);
   return {
     id, filename: input.filename, size: input.size, content_type: input.content_type,
     scope: input.scope ?? null, created_at: toIso(now),
   };
+}
+
+export function findFileByContainerPath(scopeId: string, containerPath: string, contentHash: string): FileRow | null {
+  const db = getDb();
+  const row = db.prepare(
+    `SELECT * FROM files WHERE scope_id = ? AND container_path = ? AND content_hash = ?`,
+  ).get(scopeId, containerPath, contentHash) as FileRow | undefined;
+  return row ?? null;
 }
 
 export function getFile(id: string): FileRow | null {

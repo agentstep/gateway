@@ -45,6 +45,7 @@ import { shouldRetry, incrementRetry, resetRetry, retryDelay } from "./retry";
 import type { Agent } from "../types";
 import type { ContainerProvider } from "../providers/types";
 import { resolveToolset } from "./tools";
+import { isProxied } from "../db/proxy";
 import { ApiError } from "../errors";
 import { nowMs } from "../util/clock";
 import { injectMcpAuthHeaders } from "./mcp-auth";
@@ -296,6 +297,11 @@ export async function runTurn(
       turnBuild.env[entry.key] = entry.value;
     }
   }
+  // If vault provides OPENAI_API_KEY, also set CODEX_API_KEY so the codex
+  // backend picks it up (codex checks CODEX_API_KEY before OPENAI_API_KEY).
+  if (turnBuild.env.OPENAI_API_KEY && !turnBuild.env.CODEX_API_KEY) {
+    turnBuild.env.CODEX_API_KEY = turnBuild.env.OPENAI_API_KEY;
+  }
   // If vault provides CLAUDE_CODE_OAUTH_TOKEN, remove ANTHROPIC_API_KEY
   // so Claude Code uses the OAuth token (it prefers ANTHROPIC_API_KEY when both set)
   if (turnBuild.env.CLAUDE_CODE_OAUTH_TOKEN && turnBuild.env.ANTHROPIC_API_KEY) {
@@ -533,6 +539,26 @@ export async function runTurn(
     },
     result?.usage,
   );
+
+  // Container file sync: extract modified files before going idle.
+  // Must run before status_idle so the container is still alive.
+  const sessionRowForSync = getSessionRow(sessionId);
+  if (sessionRowForSync?.sprite_name && !isProxied(sessionId)) {
+    try {
+      const { syncContainerFiles } = await import("../sync/container-file-sync");
+      const syncResult = await syncContainerFiles({
+        sessionId,
+        spriteName: sessionRowForSync.sprite_name,
+        provider,
+        secrets,
+      });
+      if (syncResult.synced > 0) {
+        console.log(`[driver] synced ${syncResult.synced} files from container (${syncResult.skipped} skipped)`);
+      }
+    } catch (err) {
+      console.warn("[driver] container file sync failed:", err);
+    }
+  }
 
   const now = nowMs();
   const stopReason = result?.stopReason ?? "end_turn";

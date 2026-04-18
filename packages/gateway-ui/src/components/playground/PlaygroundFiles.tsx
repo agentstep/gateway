@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect } from "react";
-import { ChevronDown, Upload, Trash2, File as FileIcon, Loader2 } from "lucide-react";
+import { Upload, Trash2, File as FileIcon, Loader2, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
 import { useAppStore } from "@/stores/app-store";
+import { useSession } from "@/hooks/use-sessions";
 import { api } from "@/lib/api-client";
 import { toast } from "sonner";
 
@@ -34,23 +34,40 @@ export function PlaygroundFiles({ sessionId }: Props) {
   const [files, setFiles] = useState<SessionFile[]>([]);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const { data: session } = useSession(sessionId);
 
-  // Load existing session resources on mount / session change
+  // Load files from both session resources and the Files API.
+  // Re-fetches when the session goes idle (container file sync produces new files).
   useEffect(() => {
     if (!sessionId) { setFiles([]); return; }
-    api<{ data: SessionResource[] }>(`/sessions/${sessionId}/resources`)
-      .then(res => {
-        const fileResources = res.data.filter(r => r.type === "file" && r.file_id);
-        const loaded: SessionFile[] = fileResources.map(r => ({
-          id: r.file_id!,
-          filename: r.mount_path ?? r.file_id!,
-          size: 0,
-          resource_id: r.id,
-        }));
-        setFiles(loaded);
-      })
-      .catch(() => {});
-  }, [sessionId]);
+    const seenIds = new Set<string>();
+    const merged: SessionFile[] = [];
+
+    Promise.all([
+      // Session resources (uploaded/attached files)
+      api<{ data: SessionResource[] }>(`/sessions/${sessionId}/resources`)
+        .then(res => {
+          for (const r of res.data) {
+            if (r.type === "file" && r.file_id && !seenIds.has(r.file_id)) {
+              seenIds.add(r.file_id);
+              merged.push({ id: r.file_id, filename: r.mount_path ?? r.file_id, size: 0, resource_id: r.id });
+            }
+          }
+        })
+        .catch(() => {}),
+      // Files API (synced/proxied files scoped to this session)
+      api<{ data: Array<{ id: string; filename: string; size: number }> }>(`/files?scope_id=${sessionId}`)
+        .then(res => {
+          for (const f of res.data) {
+            if (!seenIds.has(f.id)) {
+              seenIds.add(f.id);
+              merged.push({ id: f.id, filename: f.filename, size: f.size });
+            }
+          }
+        })
+        .catch(() => {}),
+    ]).then(() => setFiles(merged));
+  }, [sessionId, session?.status]);
 
   async function handleUpload(file: globalThis.File) {
     if (!sessionId) return;
@@ -101,65 +118,82 @@ export function PlaygroundFiles({ sessionId }: Props) {
     }
   }
 
-  return (
-    <Collapsible>
-      <CollapsibleTrigger className="flex w-full items-center justify-between px-4 py-3 text-xs font-semibold uppercase tracking-widest text-muted-foreground hover:text-foreground transition-colors">
-        Files {files.length > 0 && <span className="font-mono text-[10px] font-normal">{files.length}</span>}
-        <ChevronDown className="size-3.5 transition-transform data-[panel-open]:rotate-180" />
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <div className="flex flex-col gap-2 px-4 pb-4">
-          {/* Upload button */}
-          <input
-            ref={fileInputRef}
-            type="file"
-            className="hidden"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) handleUpload(file);
-              e.target.value = "";
-            }}
-          />
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full h-7 text-xs"
-            disabled={!sessionId || uploading}
-            onClick={() => fileInputRef.current?.click()}
-          >
-            {uploading ? (
-              <><Loader2 className="size-3 mr-1.5 animate-spin" /> Uploading…</>
-            ) : (
-              <><Upload className="size-3 mr-1.5" /> Upload File</>
-            )}
-          </Button>
+  function handleDownload(file: SessionFile) {
+    const apiKey = useAppStore.getState().apiKey;
+    const url = `/v1/files/${file.id}/content`;
+    // Open in a new tab with the API key as a query param for simple auth
+    window.open(`${url}?x-api-key=${encodeURIComponent(apiKey)}`, "_blank");
+  }
 
-          {/* File list */}
-          {files.length > 0 ? (
-            <div className="flex flex-col gap-0.5">
-              {files.map(f => (
-                <div key={f.id} className="flex items-center justify-between py-1 group">
-                  <div className="flex items-center gap-1.5 min-w-0 mr-2">
-                    <FileIcon className="size-3 text-muted-foreground shrink-0" />
-                    <div className="flex flex-col min-w-0">
-                      <span className="text-xs text-foreground truncate">{f.filename}</span>
-                      {f.size > 0 && <span className="text-[10px] text-muted-foreground">{formatSize(f.size)}</span>}
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => handleRemove(f)}
-                    className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
-                  >
-                    <Trash2 className="size-3" />
-                  </button>
+  if (!sessionId) {
+    return (
+      <div className="flex items-center justify-center h-32">
+        <p className="text-xs text-muted-foreground/50">No session active</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-3 p-4">
+      {/* Upload button */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) handleUpload(file);
+          e.target.value = "";
+        }}
+      />
+      <Button
+        variant="outline"
+        size="sm"
+        className="w-full h-7 text-xs"
+        disabled={!sessionId || uploading}
+        onClick={() => fileInputRef.current?.click()}
+      >
+        {uploading ? (
+          <><Loader2 className="size-3 mr-1.5 animate-spin" /> Uploading…</>
+        ) : (
+          <><Upload className="size-3 mr-1.5" /> Upload File</>
+        )}
+      </Button>
+
+      {/* File list */}
+      {files.length > 0 ? (
+        <div className="flex flex-col gap-0.5">
+          {files.map(f => (
+            <div key={f.id} className="flex items-center justify-between py-1.5 group">
+              <div className="flex items-center gap-2 min-w-0 mr-2">
+                <FileIcon className="size-3.5 text-muted-foreground shrink-0" />
+                <div className="flex flex-col min-w-0">
+                  <span className="text-xs text-foreground truncate">{f.filename}</span>
+                  {f.size > 0 && <span className="font-mono text-[10px] text-muted-foreground">{formatSize(f.size)}</span>}
                 </div>
-              ))}
+              </div>
+              <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button
+                  onClick={() => handleDownload(f)}
+                  className="text-muted-foreground hover:text-foreground"
+                  title="Download"
+                >
+                  <Download className="size-3" />
+                </button>
+                <button
+                  onClick={() => handleRemove(f)}
+                  className="text-muted-foreground hover:text-destructive"
+                  title="Remove"
+                >
+                  <Trash2 className="size-3" />
+                </button>
+              </div>
             </div>
-          ) : (
-            <p className="text-[10px] text-muted-foreground">No files attached</p>
-          )}
+          ))}
         </div>
-      </CollapsibleContent>
-    </Collapsible>
+      ) : (
+        <p className="text-[10px] text-muted-foreground text-center py-4">No output files yet</p>
+      )}
+    </div>
   );
 }
