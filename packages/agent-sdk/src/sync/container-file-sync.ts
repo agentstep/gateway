@@ -59,10 +59,12 @@ function extractFilePaths(sessionId: string): string[] {
       filePath = payload.input.path as string | undefined;
     }
 
-    if (!filePath || typeof filePath !== "string") continue;
-    if (seen.has(filePath)) continue;
-    seen.add(filePath);
-    paths.push(filePath);
+    if (!filePath || typeof filePath !== "string" || filePath === "") continue;
+    // Resolve relative paths against /root (common container workdir)
+    const resolved = filePath.startsWith("/") ? filePath : `/root/${filePath}`;
+    if (seen.has(resolved)) continue;
+    seen.add(resolved);
+    paths.push(resolved);
   }
 
   return paths;
@@ -89,6 +91,34 @@ function isBinaryExtension(p: string): boolean {
 }
 
 /**
+ * Fallback file discovery: find recently modified files on the container.
+ * Uses `find -newer /proc/1/cmdline` to detect files changed since container start,
+ * then filters to common code/text directories.
+ */
+async function discoverChangedFiles(
+  spriteName: string,
+  provider: ContainerProvider,
+  secrets?: ProviderSecrets,
+): Promise<string[]> {
+  try {
+    // Find files modified after container start, in common writable dirs
+    const result = await provider.exec(
+      spriteName,
+      ["sh", "-c", [
+        "find /home /root /workspace /mnt /tmp",
+        "-maxdepth 5 -type f -newer /proc/1/cmdline",
+        "2>/dev/null | head -50",
+      ].join(" ")],
+      { secrets, timeoutMs: 10000 },
+    );
+    if (result.exit_code !== 0 || !result.stdout.trim()) return [];
+    return result.stdout.trim().split("\n").filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Sync modified files from a container back to the gateway file store.
  *
  * Called by the turn driver between `bumpSessionStats()` and
@@ -102,7 +132,13 @@ export async function syncContainerFiles(opts: {
 }): Promise<{ synced: number; skipped: number }> {
   const { sessionId, spriteName, provider, secrets } = opts;
 
-  const allPaths = extractFilePaths(sessionId);
+  let allPaths = extractFilePaths(sessionId);
+
+  // Fallback: if no structured paths found (e.g. Codex v0.120+ doesn't
+  // emit file paths), discover changed files via find -newer on the container.
+  if (allPaths.length === 0) {
+    allPaths = await discoverChangedFiles(spriteName, provider, secrets);
+  }
   if (allPaths.length === 0) return { synced: 0, skipped: 0 };
 
   // Filter paths
