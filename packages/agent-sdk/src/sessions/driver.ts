@@ -556,7 +556,7 @@ export async function runTurn(
         console.log(`[driver] synced ${syncResult.synced} files from container (${syncResult.skipped} skipped)`);
       }
     } catch (err) {
-      console.warn("[driver] container file sync failed:", err);
+      console.warn("[driver] container file sync failed:", (err as Error)?.stack ?? err);
     }
   }
 

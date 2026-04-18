@@ -101,13 +101,20 @@ async function discoverChangedFiles(
   secrets?: ProviderSecrets,
 ): Promise<string[]> {
   try {
-    // Find files modified after container start, in common writable dirs
+    // Find user-created files in common writable dirs.
+    // Use -mmin -30 (modified in last 30 min) as a portable heuristic
+    // since /proc/1/cmdline doesn't exist on macOS containers.
     const result = await provider.exec(
       spriteName,
       ["sh", "-c", [
-        "find /home /root /workspace /mnt /tmp",
-        "-maxdepth 5 -type f -newer /proc/1/cmdline",
-        "2>/dev/null | head -50",
+        "find /home /root /workspace /mnt",
+        "-maxdepth 4 -type f -mmin -30 -size +0c",
+        "! -path '*/.git/*' ! -path '*/node_modules/*' ! -path '*/.npm/*'",
+        "! -path '*/.config/*' ! -path '*/.local/*' ! -path '*/.cache/*'",
+        "! -path '*/cache/*' ! -path '*-debug-*.log'",
+        "! -name '.*' ! -name '*.sqlite' ! -name '*.sqlite-*'",
+        "! -name 'installation_id' ! -name 'plugins.sha'",
+        "2>/dev/null | head -30",
       ].join(" ")],
       { secrets, timeoutMs: 10000 },
     );
