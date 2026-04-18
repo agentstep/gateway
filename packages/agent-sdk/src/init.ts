@@ -12,6 +12,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { readEnvValue, upsertEnvLine } from "./util/env";
 import { getDb } from "./db/client";
 import { createApiKey, listApiKeys } from "./db/api_keys";
 import { getConfig } from "./config";
@@ -56,6 +57,20 @@ async function doInit(): Promise<void> {
   // if the row is already there.
   const { seedDefaultTenant } = await import("./db/tenants");
   seedDefaultTenant();
+
+  // 1a½. Boot-time .env health check — warn about duplicate keys.
+  try {
+    const { findDuplicateKeys } = await import("./util/env");
+    const envPath = path.resolve(process.cwd(), ".env");
+    const dupes = findDuplicateKeys(envPath);
+    if (dupes.length > 0) {
+      console.warn(
+        `[init] WARNING: duplicate keys in .env: ${dupes.join(", ")}. ` +
+        `dotenv uses the LAST value — earlier entries are silently ignored. ` +
+        `Remove duplicates to prevent confusion.`,
+      );
+    }
+  } catch { /* non-fatal */ }
 
   // 1b. Auto-seed a default API key if none exist
   seedDefaultApiKey();
@@ -136,32 +151,35 @@ function seedDefaultApiKey(): void {
     const keys = listApiKeys();
     if (keys.length > 0) return;
 
-    // If SEED_API_KEY is set (e.g. via Secret Manager in Cloud Run),
-    // use it instead of generating a random key.
-    const seedKey = process.env.SEED_API_KEY;
+    const envPath = path.resolve(process.cwd(), ".env");
+
+    // Check process.env first, then read .env directly (dotenv may
+    // not have loaded yet). This prevents generating a new key when
+    // .env already has one — the root cause of the duplicate-line bug.
+    let seedKey = process.env.SEED_API_KEY;
+    if (!seedKey) {
+      // readEnvValue imported at top of file
+      seedKey = readEnvValue(envPath, "SEED_API_KEY");
+      if (seedKey) process.env.SEED_API_KEY = seedKey;
+    }
+
     if (seedKey) {
       const { id } = createApiKey({ name: "default", permissions: ["*"], rawKey: seedKey });
       console.log(`[init] created API key from SEED_API_KEY (id: ${id})`);
       return;
     }
 
+    // Neither process.env nor .env has a seed key — generate one.
     const { key, id } = createApiKey({ name: "default", permissions: ["*"] });
 
-    // Write the key to .env so it survives restarts and isn't lost
-    const envPath = path.resolve(process.cwd(), ".env");
-    if (!fs.existsSync(envPath)) {
-      fs.writeFileSync(envPath, `SEED_API_KEY=${key}\n`, "utf-8");
-      console.log(`[init] created default API key and wrote to ${envPath}`);
-    } else {
-      // .env exists but had no SEED_API_KEY — append it
-      fs.appendFileSync(envPath, `\nSEED_API_KEY=${key}\n`, "utf-8");
-      console.log(`[init] created default API key and appended to ${envPath}`);
-    }
-    // Also set in process.env so CLI can pick it up immediately
+    // Write to .env via upsert (safe: replaces if exists, appends if not,
+    // never creates duplicates).
+    // upsertEnvLine imported at top of file
+    upsertEnvLine(envPath, "SEED_API_KEY", key);
+    console.log(`[init] created default API key and wrote to ${envPath}`);
+
     process.env.SEED_API_KEY = key;
     console.log(`  id:  ${id}`);
-    // Don't log the raw key — it's now persisted to .env. Logging it here
-    // writes it into docker/journalctl/pm2 output unnecessarily.
     console.log(`  key: (written to .env — see SEED_API_KEY)`);
   } catch (err) {
     console.error("[init] failed to seed default API key:", err);
