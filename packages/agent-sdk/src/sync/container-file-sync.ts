@@ -53,8 +53,8 @@ function extractFilePaths(sessionId: string): string[] {
 
     let filePath: string | undefined;
     const toolName = payload.name;
-    if ((toolName === "Write" || toolName === "Edit") && payload.input) {
-      filePath = payload.input.file_path as string | undefined;
+    if ((toolName === "Write" || toolName === "Edit" || toolName === "write_file" || toolName === "edit_file") && payload.input) {
+      filePath = (payload.input.file_path ?? payload.input.path) as string | undefined;
     } else if (toolName === "file_edit" && payload.input) {
       filePath = payload.input.path as string | undefined;
     }
