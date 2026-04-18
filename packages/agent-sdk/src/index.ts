@@ -90,6 +90,7 @@ export { getActor, dropActor } from "./sessions/actor";
 export { interruptSession } from "./sessions/interrupt";
 export { runTurn, writePermissionResponse } from "./sessions/driver";
 export { injectMcpAuthHeaders } from "./sessions/mcp-auth";
+export { loadSessionSecrets } from "./sessions/secrets";
 
 // Queue
 export { enqueueTurn } from "./queue";

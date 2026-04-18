@@ -37,7 +37,7 @@ import * as pool from "../containers/pool";
 import { resolveBackend } from "../backends/registry";
 import { resolveContainerProvider } from "../providers/registry";
 import { BLOCKED_ENV_KEYS } from "../providers/resolve-secrets";
-import { listEntries as listVaultEntries } from "../db/vaults";
+import { loadSessionSecrets } from "./secrets";
 import { parseNDJSONLines } from "../backends/shared/ndjson";
 import type { TranslatedEvent } from "../backends/shared/translator-types";
 import { classifyError, buildErrorPayload } from "./errors";
@@ -102,13 +102,12 @@ export async function runTurn(
 
   const backend = resolveBackend(agent.engine);
 
-  // Load all vault entries once — reused for runtime validation bypass,
-  // MCP auth header injection, and env var injection.
+  // Load all vault entries + credentials once — reused for runtime validation
+  // bypass, MCP auth header injection, and env var injection.
   const vaultEntries: Array<{ key: string; value: string }> = [];
   if (session.vault_ids && session.vault_ids.length > 0) {
-    for (const vid of session.vault_ids) {
-      vaultEntries.push(...listVaultEntries(vid));
-    }
+    const secrets = loadSessionSecrets(session.vault_ids);
+    vaultEntries.push(...secrets.map(s => ({ key: s.key, value: s.value })));
   }
   const hasVaultKeys = vaultEntries.length > 0;
 

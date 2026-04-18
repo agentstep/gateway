@@ -21,7 +21,7 @@ function getAgentTenantId(id: string): string | null | undefined {
   return row?.tenant_id;
 }
 
-function loadVaultForCaller(auth: AuthContext, id: string) {
+export function loadVaultForCaller(auth: AuthContext, id: string) {
   const tenantId = getVaultTenantId(id);
   if (tenantId === undefined) throw notFound(`vault not found: ${id}`);
   assertResourceTenant(auth, tenantId, `vault not found: ${id}`);

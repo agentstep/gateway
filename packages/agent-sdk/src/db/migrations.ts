@@ -556,4 +556,20 @@ export function runMigrations(db: InstanceType<typeof Database>): void {
     db.exec(`ALTER TABLE memory_stores ADD COLUMN agent_id TEXT`);
   }
   db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_stores_agent ON memory_stores(agent_id)`);
+
+  // Vault credentials (Anthropic-compatible structured auth)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS vault_credentials (
+      id TEXT PRIMARY KEY,
+      vault_id TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      auth_type TEXT NOT NULL DEFAULT 'static_bearer',
+      auth_token_encrypted TEXT NOT NULL,
+      mcp_server_url TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (vault_id) REFERENCES vaults(id) ON DELETE CASCADE,
+      UNIQUE(vault_id, display_name)
+    )
+  `);
 }

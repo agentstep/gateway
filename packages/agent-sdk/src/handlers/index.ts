@@ -4,6 +4,7 @@ export { handleCreateSession, handleListSessions, handleGetSession, handleUpdate
 export { handlePostEvents, handleListEvents } from "./events";
 export { handleSessionStream } from "./stream";
 export { handleCreateVault, handleListVaults, handleGetVault, handleDeleteVault, handleListEntries, handleGetEntry, handlePutEntry, handleDeleteEntry } from "./vaults";
+export { handleCreateCredential, handleListCredentials, handleGetCredential, handleUpdateCredential, handleDeleteCredential } from "./credentials";
 export { handleBatch } from "./batch";
 export { handleListThreads } from "./threads";
 export { handleCreateMemoryStore, handleListMemoryStores, handleGetMemoryStore, handleDeleteMemoryStore, handleCreateMemory, handleListMemories, handleGetMemory, handleUpdateMemory, handleDeleteMemory } from "./memory";

@@ -317,6 +317,33 @@ export interface VaultEntry {
 }
 
 // ---------------------------------------------------------------------------
+// Vault Credentials (Anthropic-compatible)
+// ---------------------------------------------------------------------------
+
+export interface VaultCredentialRow {
+  id: string;
+  vault_id: string;
+  display_name: string;
+  auth_type: string;
+  auth_token_encrypted: string;
+  mcp_server_url: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface VaultCredential {
+  id: string;
+  vault_id: string;
+  display_name: string;
+  auth: {
+    type: string;
+    mcp_server_url: string | null;
+  };
+  created_at: string;
+  updated_at: string;
+}
+
+// ---------------------------------------------------------------------------
 // Memory Stores
 // ---------------------------------------------------------------------------
 

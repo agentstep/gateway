@@ -89,6 +89,11 @@ import {
   handleWhoami,
   handleListAudit,
   handleGetLicense,
+  handleCreateCredential,
+  handleListCredentials,
+  handleGetCredential,
+  handleUpdateCredential,
+  handleDeleteCredential,
 } from "@agentstep/agent-sdk/handlers";
 
 const app = new Hono();
@@ -194,6 +199,15 @@ app.post("/v1/vaults", (c) => handleCreateVault(c.req.raw));
 app.get("/v1/vaults", (c) => handleListVaults(c.req.raw));
 app.get("/v1/vaults/:id", (c) => handleGetVault(c.req.raw, c.req.param("id")));
 app.delete("/v1/vaults/:id", (c) => handleDeleteVault(c.req.raw, c.req.param("id")));
+
+// Vault credentials (Anthropic-compatible) — registered BEFORE :key routes
+app.post("/v1/vaults/:id/credentials", (c) => handleCreateCredential(c.req.raw, c.req.param("id")));
+app.get("/v1/vaults/:id/credentials", (c) => handleListCredentials(c.req.raw, c.req.param("id")));
+app.get("/v1/vaults/:id/credentials/:credId", (c) => handleGetCredential(c.req.raw, c.req.param("id"), c.req.param("credId")));
+app.post("/v1/vaults/:id/credentials/:credId", (c) => handleUpdateCredential(c.req.raw, c.req.param("id"), c.req.param("credId")));
+app.delete("/v1/vaults/:id/credentials/:credId", (c) => handleDeleteCredential(c.req.raw, c.req.param("id"), c.req.param("credId")));
+
+// Vault entries
 app.get("/v1/vaults/:id/entries", (c) => handleListEntries(c.req.raw, c.req.param("id")));
 app.get("/v1/vaults/:id/entries/:key", (c) => handleGetEntry(c.req.raw, c.req.param("id"), c.req.param("key")));
 app.put("/v1/vaults/:id/entries/:key", (c) => handlePutEntry(c.req.raw, c.req.param("id"), c.req.param("key")));

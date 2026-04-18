@@ -69,6 +69,11 @@ import {
   handleWhoami,
   handleListAudit,
   handleGetLicense,
+  handleCreateCredential,
+  handleListCredentials,
+  handleGetCredential,
+  handleUpdateCredential,
+  handleDeleteCredential,
 } from "@agentstep/agent-sdk/handlers";
 
 /**
@@ -231,6 +236,24 @@ export function buildApp() {
   route(app, "get", "/v1/vaults", handleListVaults);
   route(app, "get", "/v1/vaults/:id", handleGetVault, "id");
   route(app, "delete", "/v1/vaults/:id", handleDeleteVault, "id");
+
+  // Vault credentials (Anthropic-compatible) — registered BEFORE :key routes
+  route(app, "post", "/v1/vaults/:id/credentials", handleCreateCredential, "id");
+  route(app, "get", "/v1/vaults/:id/credentials", handleListCredentials, "id");
+  app.get("/v1/vaults/:id/credentials/:credId", async (req, reply) => {
+    const { id, credId } = req.params as { id: string; credId: string };
+    await sendWebResponse(reply, await handleGetCredential(toWebRequest(req), id, credId));
+  });
+  app.post("/v1/vaults/:id/credentials/:credId", async (req, reply) => {
+    const { id, credId } = req.params as { id: string; credId: string };
+    await sendWebResponse(reply, await handleUpdateCredential(toWebRequest(req), id, credId));
+  });
+  app.delete("/v1/vaults/:id/credentials/:credId", async (req, reply) => {
+    const { id, credId } = req.params as { id: string; credId: string };
+    await sendWebResponse(reply, await handleDeleteCredential(toWebRequest(req), id, credId));
+  });
+
+  // Vault entries
   route(app, "get", "/v1/vaults/:id/entries", handleListEntries, "id");
   route(app, "get", "/v1/vaults/:id/entries/:key", handleGetEntry, "id", "key");
   route(app, "put", "/v1/vaults/:id/entries/:key", handlePutEntry, "id", "key");
