@@ -370,7 +370,7 @@ export function PlaygroundPage({ sessionId: initialSessionId }: { sessionId?: st
       {/* Center panel — Chat + Events below */}
       <div className="flex flex-1 flex-col min-h-0 min-w-0 overflow-hidden bg-background">
         {/* Chat fills remaining space */}
-        <div className="flex-1 min-h-0">
+        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
           <ChatThread />
         </div>
         <div className="shrink-0 border-t border-border">
