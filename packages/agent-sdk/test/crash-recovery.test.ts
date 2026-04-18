@@ -90,8 +90,8 @@ describe("crash recovery", () => {
     };
     expect(errorPayload.error.type).toBe("server_restart");
 
-    const idlePayload = JSON.parse(events[1].payload_json) as { stop_reason: string };
-    expect(idlePayload.stop_reason).toBe("error");
+    const idlePayload = JSON.parse(events[1].payload_json) as { stop_reason: { type: string } };
+    expect(idlePayload.stop_reason).toEqual({ type: "error" });
   });
 
   it("no-op when there are no running sessions", async () => {

@@ -304,17 +304,17 @@ describe("handleGetMetrics", () => {
     // status_idle events for stop-reason distribution
     appendEvent("sess_m1", {
       type: "session.status_idle",
-      payload: { stop_reason: "end_turn" },
+      payload: { stop_reason: { type: "end_turn" } },
       origin: "server",
     });
     appendEvent("sess_m1", {
       type: "session.status_idle",
-      payload: { stop_reason: "end_turn" },
+      payload: { stop_reason: { type: "end_turn" } },
       origin: "server",
     });
     appendEvent("sess_m2", {
       type: "session.status_idle",
-      payload: { stop_reason: "error" },
+      payload: { stop_reason: { type: "error" } },
       origin: "server",
     });
     // tool_call_end with duration for percentile check

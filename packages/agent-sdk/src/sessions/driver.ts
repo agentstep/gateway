@@ -54,6 +54,20 @@ import {
   PERMISSION_BRIDGE_RESPONSE_PATH,
 } from "../backends/claude/permission-hook";
 
+/**
+ * Format stop_reason as an object for API responses.
+ * DB columns continue to store the plain string; only event payloads use the object shape.
+ */
+function formatStopReason(reason: string, eventIds?: string[]): Record<string, unknown> {
+  if (reason === "custom_tool_call" && eventIds?.length) {
+    return { type: "requires_action", event_ids: eventIds };
+  }
+  if (reason === "custom_tool_call") {
+    return { type: "requires_action" };
+  }
+  return { type: reason };
+}
+
 export async function runTurn(
   sessionId: string,
   inputs: TurnInput[],
@@ -95,7 +109,7 @@ export async function runTurn(
   const agent = getAgent(session.agent.id, session.agent.version);
   if (!agent) {
     emit("session.error", { error: { type: "server_error", message: "agent not found" } });
-    emit("session.status_idle", { stop_reason: "error" });
+    emit("session.status_idle", { stop_reason: formatStopReason("error") });
     updateSessionStatus(sessionId, "idle", "error");
     return;
   }
@@ -120,7 +134,7 @@ export async function runTurn(
     const runtimeErr = backend.validateRuntime?.();
     if (runtimeErr) {
       emit("session.error", { error: { type: "invalid_request_error", message: runtimeErr } });
-      emit("session.status_idle", { stop_reason: "error" });
+      emit("session.status_idle", { stop_reason: formatStopReason("error") });
       updateSessionStatus(sessionId, "idle", "error");
       return;
     }
@@ -139,7 +153,7 @@ export async function runTurn(
         message: `usage $${budgetRow.usage_cost_usd.toFixed(4)} >= session budget $${budgetRow.max_budget_usd.toFixed(4)}`,
       },
     });
-    emit("session.status_idle", { stop_reason: "error" });
+    emit("session.status_idle", { stop_reason: formatStopReason("error") });
     updateSessionStatus(sessionId, "idle", "error");
     return;
   }
@@ -154,7 +168,7 @@ export async function runTurn(
           message: `api key "${key.name}" spent $${(key.spent_usd ?? 0).toFixed(4)} >= budget $${key.budget_usd.toFixed(4)}`,
         },
       });
-      emit("session.status_idle", { stop_reason: "error" });
+      emit("session.status_idle", { stop_reason: formatStopReason("error") });
       updateSessionStatus(sessionId, "idle", "error");
       return;
     }
@@ -205,7 +219,7 @@ export async function runTurn(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     emit("session.error", { error: { type: "server_error", message: `container creation failed: ${msg}` } });
-    emit("session.status_idle", { stop_reason: "error" });
+    emit("session.status_idle", { stop_reason: formatStopReason("error") });
     updateSessionStatus(sessionId, "idle", "error");
     return;
   }
@@ -259,7 +273,7 @@ export async function runTurn(
     // span in the trace.
     emit("span.model_request_end", { model: agent.model, model_usage: null, status: "error" });
     emit("session.error", { error: { type, message: msg } });
-    emit("session.status_idle", { stop_reason: "error" });
+    emit("session.status_idle", { stop_reason: formatStopReason("error") });
     updateSessionStatus(sessionId, "idle", "error");
     return;
   }
@@ -368,7 +382,7 @@ export async function runTurn(
     // Close the open turn span before returning — see buildTurn catch above.
     emit("span.model_request_end", { model: agent.model, model_usage: null, status: "error" });
     emit("session.error", { error: { type: "server_error", message: `exec failed: ${msg}` } });
-    emit("session.status_idle", { stop_reason: "error" });
+    emit("session.status_idle", { stop_reason: formatStopReason("error") });
     updateSessionStatus(sessionId, "idle", "error");
     return;
   }
@@ -477,7 +491,7 @@ export async function runTurn(
       emit("span.model_request_end", { model: agent.model, model_usage: null, status: "error" });
       const retryStatus = classified.retryable ? "exhausted" : "terminal";
       emit("session.error", { error: buildErrorPayload(classified, retryStatus) });
-      emit("session.status_idle", { stop_reason: "error" });
+      emit("session.status_idle", { stop_reason: formatStopReason("error") });
       updateSessionStatus(sessionId, "idle", "error");
       runtime.inFlightRuns.delete(sessionId);
       return;
@@ -496,7 +510,7 @@ export async function runTurn(
       model_usage: partial?.usage ?? null,
       status: "interrupted",
     });
-    emit("session.status_idle", { stop_reason: "interrupted" });
+    emit("session.status_idle", { stop_reason: formatStopReason("interrupted") });
     updateSessionStatus(sessionId, "idle", "interrupted");
     setIdleSince(sessionId, nowMs());
     scheduleDrain(sessionId);
@@ -527,6 +541,11 @@ export async function runTurn(
   // spawn_agent, intercept and delegate to the thread orchestrator. The result
   // is written back as a tool result and the turn is re-run automatically.
   if (stopReason === "custom_tool_call") {
+    // Collect event IDs of pending custom tool use events for the stop_reason payload
+    const customToolEventIds = listEvents(sessionId, { limit: 20, order: "desc" })
+      .filter(e => e.type === "agent.custom_tool_use")
+      .map(e => e.id);
+
     const serverToolResult = await handleServerSideTool(sessionId, agent, trace);
     if (serverToolResult) {
       // spawn_agent was handled — the thread orchestrator already wrote the
@@ -536,7 +555,7 @@ export async function runTurn(
         { model: agent.model, model_usage: result?.usage ?? null, status: "ok" },
         { at: now },
       );
-      emit("session.status_idle", { stop_reason: "custom_tool_call" }, { at: now });
+      emit("session.status_idle", { stop_reason: formatStopReason("custom_tool_call", customToolEventIds) }, { at: now });
       updateSessionStatus(sessionId, "idle", "custom_tool_call");
 
       // Write the spawn result as response.json into the container
@@ -579,7 +598,13 @@ export async function runTurn(
     { model: agent.model, model_usage: result?.usage ?? null, status: "ok" },
     { at: now },
   );
-  emit("session.status_idle", { stop_reason: stopReason }, { at: now });
+  // For custom_tool_call that wasn't handled server-side, collect event IDs for the stop_reason
+  const finalEventIds = stopReason === "custom_tool_call"
+    ? listEvents(sessionId, { limit: 20, order: "desc" })
+        .filter(e => e.type === "agent.custom_tool_use")
+        .map(e => e.id)
+    : undefined;
+  emit("session.status_idle", { stop_reason: formatStopReason(stopReason, finalEventIds) }, { at: now });
   updateSessionStatus(sessionId, "idle", stopReason);
   resetRetry(sessionId); // Clear retry counter on successful completion
   console.log(`[driver] ${sessionId} turn complete: stop_reason=${stopReason}`);

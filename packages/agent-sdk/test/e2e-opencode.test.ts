@@ -145,8 +145,8 @@ describe("e2e opencode round-trip (fake exec)", () => {
     expect(types1).toContain("session.status_idle");
 
     const idleEvent1 = events1.filter((e) => e.type === "session.status_idle").at(-1);
-    const idlePayload1 = JSON.parse(idleEvent1!.payload_json) as { stop_reason: string };
-    expect(idlePayload1.stop_reason).toBe("end_turn");
+    const idlePayload1 = JSON.parse(idleEvent1!.payload_json) as { stop_reason: { type: string } };
+    expect(idlePayload1.stop_reason).toEqual({ type: "end_turn" });
 
     const agentMessage = events1.find((e) => e.type === "agent.message");
     const agentPayload = JSON.parse(agentMessage!.payload_json) as {
@@ -240,7 +240,7 @@ describe("e2e opencode round-trip (fake exec)", () => {
     expect(errPayload.error.message).toContain("custom_tool_result");
 
     const finalIdle = events.filter((e) => e.type === "session.status_idle").at(-1);
-    const idlePayload = JSON.parse(finalIdle!.payload_json) as { stop_reason: string };
-    expect(idlePayload.stop_reason).toBe("error");
+    const idlePayload = JSON.parse(finalIdle!.payload_json) as { stop_reason: { type: string } };
+    expect(idlePayload.stop_reason).toEqual({ type: "error" });
   });
 });

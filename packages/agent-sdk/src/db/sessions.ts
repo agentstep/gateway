@@ -6,7 +6,7 @@ import type { Session, SessionResource, SessionRow, SessionStatus } from "../typ
 export function hydrateSession(row: SessionRow): Session {
   return {
     id: row.id,
-    agent: { id: row.agent_id, version: row.agent_version },
+    agent: { type: "agent" as const, id: row.agent_id, version: row.agent_version },
     environment_id: row.environment_id,
     status: row.status,
     stop_reason: row.stop_reason,

@@ -374,7 +374,7 @@ export function handlePostEvents(request: Request, sessionId: string): Promise<R
       }
     }
 
-    return jsonOk({ events: appended.rows.map(rowToManagedEvent) });
+    return jsonOk({ data: appended.rows.map(rowToManagedEvent) });
   });
 }
 

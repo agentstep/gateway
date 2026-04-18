@@ -15,6 +15,7 @@ function hydrateVault(row: VaultRow): Vault {
     id: row.id,
     agent_id: row.agent_id,
     name: row.name,
+    display_name: row.name,
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
   };

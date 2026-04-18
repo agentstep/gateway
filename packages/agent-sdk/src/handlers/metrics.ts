@@ -437,12 +437,14 @@ export function handleGetMetrics(request: Request): Promise<Response> {
     }
 
     // ── Stop-reason distribution ───────────────────────────────────────────
-    // CAREFUL: `sessions.stop_reason` is an existing column, so `GROUP BY
-    // stop_reason` (using our SELECT alias) resolves to the table column,
-    // not the json_extract expression. Use the expression directly.
+    // stop_reason is now an object { type: "..." } in the event payload.
+    // Use COALESCE to handle both new (object) and legacy (string) formats.
     const stopRows = db
       .prepare(
-        `SELECT json_extract(e.payload_json, '$.stop_reason') AS stop_reason_value,
+        `SELECT COALESCE(
+                  json_extract(e.payload_json, '$.stop_reason.type'),
+                  json_extract(e.payload_json, '$.stop_reason')
+                ) AS stop_reason_value,
                 COUNT(*) AS count
          FROM events e
          JOIN sessions s ON s.id = e.session_id
@@ -451,7 +453,10 @@ export function handleGetMetrics(request: Request): Promise<Response> {
            ${agentId ? "AND s.agent_id = ?" : ""}
            ${environmentId ? "AND s.environment_id = ?" : ""}
            ${tenantId != null ? "AND s.tenant_id = ?" : ""}
-         GROUP BY json_extract(e.payload_json, '$.stop_reason')`,
+         GROUP BY COALESCE(
+                    json_extract(e.payload_json, '$.stop_reason.type'),
+                    json_extract(e.payload_json, '$.stop_reason')
+                  )`,
       )
       .all(
         ...[

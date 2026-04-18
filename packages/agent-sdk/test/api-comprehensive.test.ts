@@ -783,9 +783,9 @@ describe("Events", () => {
       session.id as string,
     );
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { events: Array<{ type: string }> };
-    expect(body.events.length).toBe(1);
-    expect(body.events[0].type).toBe("user.message");
+    const body = (await res.json()) as { data: Array<{ type: string }> };
+    expect(body.data.length).toBe(1);
+    expect(body.data[0].type).toBe("user.message");
   });
 
   it("posts to non-existent session -> 404", async () => {
@@ -991,8 +991,8 @@ describe("Events", () => {
       session.id as string,
     );
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { events: Array<{ type: string }> };
-    expect(body.events[0].type).toBe("user.interrupt");
+    const body = (await res.json()) as { data: Array<{ type: string }> };
+    expect(body.data[0].type).toBe("user.interrupt");
   });
 
   it("posts multiple events in batch", async () => {
@@ -1013,8 +1013,8 @@ describe("Events", () => {
       session.id as string,
     );
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { events: unknown[] };
-    expect(body.events.length).toBe(2);
+    const body = (await res.json()) as { data: unknown[] };
+    expect(body.data.length).toBe(2);
   });
 
   it("list events for non-existent session -> 404", async () => {

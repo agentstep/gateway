@@ -89,6 +89,8 @@ import {
   handleWhoami,
   handleListAudit,
   handleGetLicense,
+  handleCreateSkill,
+  handleDeleteSkill,
   handleCreateCredential,
   handleListCredentials,
   handleGetCredential,
@@ -237,7 +239,9 @@ app.get("/v1/skills/stats", (c) => handleGetSkillsStats(c.req.raw));
 app.get("/v1/skills/sources", (c) => handleGetSkillsSources(c.req.raw));
 app.get("/v1/skills/index", (c) => handleGetSkillsIndex(c.req.raw));
 app.get("/v1/skills/feed", (c) => handleGetSkillsFeed(c.req.raw));
+app.post("/v1/skills", (c) => handleCreateSkill(c.req.raw));
 app.get("/v1/skills", (c) => handleSearchSkills(c.req.raw));
+app.delete("/v1/skills/:id", (c) => handleDeleteSkill(c.req.raw, c.req.param("id")));
 
 // ── Batch ────────────────────────────────────────────────────────────────
 app.post("/v1/batch", (c) => handleBatch(c.req.raw));

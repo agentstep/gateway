@@ -42,9 +42,13 @@ function maskValue(value: string): string {
 
 const CreateVaultSchema = z.object({
   agent_id: z.string().min(1),
-  name: z.string().min(1),
+  name: z.string().min(1).optional(),
+  /** Anthropic-compatible alias for `name`. */
+  display_name: z.string().min(1).optional(),
   /** v0.5: required for global admin, ignored for tenant users. */
   tenant_id: z.string().optional(),
+}).refine(data => data.name || data.display_name, {
+  message: "Either name or display_name is required",
 });
 
 const PutEntrySchema = z.object({
@@ -76,18 +80,21 @@ export function handleCreateVault(request: Request): Promise<Response> {
       );
     }
 
+    // Resolve name from either field (name takes precedence)
+    const vaultName = (parsed.data.name ?? parsed.data.display_name)!;
+
     // Check for duplicate vault name on same agent
     const existing = listVaults({ agent_id: parsed.data.agent_id, tenantFilter: tenantFilter(auth) });
-    if (existing.some(v => v.name === parsed.data.name)) {
-      throw conflict(`Vault "${parsed.data.name}" already exists for this agent`);
+    if (existing.some(v => v.name === vaultName)) {
+      throw conflict(`Vault "${vaultName}" already exists for this agent`);
     }
 
     const vault = createVault({
       agent_id: parsed.data.agent_id,
-      name: parsed.data.name,
+      name: vaultName,
       tenant_id: createTenantId,
     });
-    return jsonOk(vault, 201);
+    return jsonOk({ ...vault, display_name: vault.name }, 201);
   });
 }
 

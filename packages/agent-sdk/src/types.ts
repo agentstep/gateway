@@ -252,7 +252,7 @@ export interface SessionResource {
 
 export interface Session {
   id: string;
-  agent: { id: string; version: number };
+  agent: { type: "agent"; id: string; version: number };
   environment_id: string;
   status: SessionStatus;
   stop_reason: string | null;
@@ -300,6 +300,8 @@ export interface Vault {
   id: string;
   agent_id: string;
   name: string;
+  /** Anthropic-compatible alias for `name`. */
+  display_name: string;
   created_at: string;
   updated_at: string;
 }

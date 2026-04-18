@@ -298,7 +298,7 @@ export async function recoverStaleSessions(): Promise<void> {
       });
       appendEvent(row.id, {
         type: "session.status_idle",
-        payload: { stop_reason: "error" },
+        payload: { stop_reason: { type: "error" } },
         origin: "server",
         processedAt: nowMs(),
       });

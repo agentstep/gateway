@@ -271,8 +271,8 @@ describe("Quickstart Flow", () => {
       { events: [{ type: "user.message", content: [{ type: "text", text: "Hello agent!" }] }] },
       session.id as string,
     );
-    expect(result.events.length).toBe(1);
-    expect(result.events[0].type).toBe("user.message");
+    expect(result.data.length).toBe(1);
+    expect(result.data[0].type).toBe("user.message");
   });
 
   it("quickstart with different engine (codex)", async () => {
@@ -352,16 +352,16 @@ describe("Quickstart Flow", () => {
     const session = await createSession(agent.id as string, env.id as string);
 
     const { handlePostEvents } = await import("../src/handlers/events");
-    const result = await callHandler<{ events: Array<{ type: string; content?: unknown }> }>(
+    const result = await callHandler<{ data: Array<{ type: string; content?: unknown }> }>(
       handlePostEvents,
       "POST",
       `/v1/sessions/${session.id}/events`,
       { events: [{ type: "user.message", content: [{ type: "text", text: "hi" }] }] },
       session.id as string,
     );
-    expect(result.events).toBeDefined();
-    expect(result.events.length).toBeGreaterThanOrEqual(1);
-    expect(result.events[0].type).toBe("user.message");
+    expect(result.data).toBeDefined();
+    expect(result.data.length).toBeGreaterThanOrEqual(1);
+    expect(result.data[0].type).toBe("user.message");
   });
 
   it("list events returns posted message", async () => {
@@ -778,15 +778,15 @@ describe("Event CLI Operations", () => {
     const env = await createEnv({ name: "SendEvtEnv" });
     const session = await createSession(agent.id as string, env.id as string);
     const { handlePostEvents } = await import("../src/handlers/events");
-    const result = await callHandler<{ events: Array<{ type: string }> }>(
+    const result = await callHandler<{ data: Array<{ type: string }> }>(
       handlePostEvents,
       "POST",
       `/v1/sessions/${session.id}/events`,
       { events: [{ type: "user.message", content: [{ type: "text", text: "hello CLI" }] }] },
       session.id as string,
     );
-    expect(result.events.length).toBe(1);
-    expect(result.events[0].type).toBe("user.message");
+    expect(result.data.length).toBe(1);
+    expect(result.data[0].type).toBe("user.message");
   });
 
   it("events list returns events with seq", async () => {
@@ -849,14 +849,14 @@ describe("Event CLI Operations", () => {
     const env = await createEnv({ name: "InterruptEnv" });
     const session = await createSession(agent.id as string, env.id as string);
     const { handlePostEvents } = await import("../src/handlers/events");
-    const result = await callHandler<{ events: Array<{ type: string }> }>(
+    const result = await callHandler<{ data: Array<{ type: string }> }>(
       handlePostEvents,
       "POST",
       `/v1/sessions/${session.id}/events`,
       { events: [{ type: "user.interrupt" }] },
       session.id as string,
     );
-    expect(result.events[0].type).toBe("user.interrupt");
+    expect(result.data[0].type).toBe("user.interrupt");
   });
 
   it("events send multiple events", async () => {
@@ -865,7 +865,7 @@ describe("Event CLI Operations", () => {
     const env = await createEnv({ name: "MultiEvtEnv" });
     const session = await createSession(agent.id as string, env.id as string);
     const { handlePostEvents } = await import("../src/handlers/events");
-    const result = await callHandler<{ events: unknown[] }>(
+    const result = await callHandler<{ data: unknown[] }>(
       handlePostEvents,
       "POST",
       `/v1/sessions/${session.id}/events`,
@@ -877,7 +877,7 @@ describe("Event CLI Operations", () => {
       },
       session.id as string,
     );
-    expect(result.events.length).toBe(2);
+    expect(result.data.length).toBe(2);
   });
 
   it("events idempotency deduplication", async () => {

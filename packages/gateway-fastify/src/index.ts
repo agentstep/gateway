@@ -69,6 +69,8 @@ import {
   handleWhoami,
   handleListAudit,
   handleGetLicense,
+  handleCreateSkill,
+  handleDeleteSkill,
   handleCreateCredential,
   handleListCredentials,
   handleGetCredential,
@@ -269,6 +271,10 @@ export function buildApp() {
   route(app, "get", "/v1/memory_stores/:id/memories/:memId", handleGetMemory, "id", "memId");
   route(app, "patch", "/v1/memory_stores/:id/memories/:memId", handleUpdateMemory, "id", "memId");
   route(app, "delete", "/v1/memory_stores/:id/memories/:memId", handleDeleteMemory, "id", "memId");
+
+  // ── Skills (stub endpoints) ────────────────────────────────────────────
+  route(app, "post", "/v1/skills", handleCreateSkill);
+  route(app, "delete", "/v1/skills/:id", handleDeleteSkill, "id");
 
   // ── Batch ────────────────────────────────────────────────────────────
   route(app, "post", "/v1/batch", handleBatch);
