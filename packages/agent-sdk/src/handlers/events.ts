@@ -396,7 +396,7 @@ export function handleListEvents(request: Request, sessionId: string): Promise<R
     const url = new URL(request.url);
     const limit = Number(url.searchParams.get("limit") ?? "50");
     const order = (url.searchParams.get("order") === "desc" ? "desc" : "asc") as "asc" | "desc";
-    const afterSeq = Number(url.searchParams.get("after_seq") ?? "0");
+    const afterSeq = Number(url.searchParams.get("after_seq") ?? url.searchParams.get("page") ?? "0");
 
     const rows = listEvents(sessionId, { limit, order, afterSeq });
     return jsonOk({
