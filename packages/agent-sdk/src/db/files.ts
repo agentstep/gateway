@@ -89,8 +89,20 @@ export function getFileRecord(id: string): FileRecord | null {
 export function listFiles(opts?: { limit?: number; scope_id?: string }): FileRecord[] {
   const db = getDb();
   const limit = opts?.limit ?? 100;
+  // Deduplicate container-synced files: for files with the same container_path
+  // in the same scope, only return the latest version (highest created_at).
+  // Files without container_path (uploaded files) are always included.
   if (opts?.scope_id) {
-    const rows = db.prepare(`SELECT * FROM files WHERE scope_id = ? ORDER BY created_at DESC LIMIT ?`).all(opts.scope_id, limit) as FileRow[];
+    const rows = db.prepare(`
+      SELECT f.* FROM files f
+      LEFT JOIN files f2
+        ON f.scope_id = f2.scope_id
+        AND f.container_path = f2.container_path
+        AND f.container_path IS NOT NULL
+        AND f2.created_at > f.created_at
+      WHERE f.scope_id = ? AND f2.id IS NULL
+      ORDER BY f.created_at DESC LIMIT ?
+    `).all(opts.scope_id, limit) as FileRow[];
     return rows.map(hydrate);
   }
   const rows = db.prepare(`SELECT * FROM files ORDER BY created_at DESC LIMIT ?`).all(limit) as FileRow[];
