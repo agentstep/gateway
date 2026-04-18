@@ -29,8 +29,10 @@ export function StepSecrets({ engine, model, provider, agentId, agentName, hasEx
   const [vaultName, setVaultName] = useState(defaultVaultName);
   const { data: vaults } = useVaults();
 
-  // Filter vaults to only those owned by this agent (enforced server-side too)
-  const ownedVaults = agentId ? (vaults ?? []).filter(v => v.agent_id === agentId) : (vaults ?? []);
+  // Filter vaults to only those owned by this agent. When creating a
+  // new agent (agentId is null), there are no owned vaults — show empty
+  // so the user doesn't accidentally pick a vault from another agent.
+  const ownedVaults = agentId ? (vaults ?? []).filter(v => v.agent_id === agentId) : [];
 
   // Deduplicate by name — keep the most recent (first in list, API returns desc)
   const seen = new Set<string>();
