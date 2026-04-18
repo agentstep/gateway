@@ -13,8 +13,9 @@
 import { onAfterCommit } from "../sessions/bus";
 import { isProxied } from "../db/proxy";
 import { getSession } from "../db/sessions";
+import { getDb } from "../db/client";
 import { createFile } from "../db/files";
-import { resolveRemoteSessionId, getLocalIdByRemote, upsertSync } from "../db/sync";
+import { resolveRemoteSessionId } from "../db/sync";
 import { resolveAnthropicKey } from "../providers/upstream-keys";
 
 const ANTHROPIC_API = "https://api.anthropic.com";
@@ -62,19 +63,24 @@ async function syncRemoteFiles(sessionId: string): Promise<void> {
   const files = body.data;
   if (!files || files.length === 0) return;
 
+  const db = getDb();
   for (const f of files) {
-    // Dedup: skip if we already synced this Anthropic file ID
-    if (getLocalIdByRemote(f.id, "file")) continue;
+    // Dedup: skip if we already have a file row with this remote ID
+    // in the storage_path. Simpler than using anthropic_sync (which
+    // has a CHECK constraint that doesn't include 'file' on existing DBs).
+    const storagePath = `remote:${f.id}`;
+    const existing = db
+      .prepare(`SELECT id FROM files WHERE storage_path = ?`)
+      .get(storagePath) as { id: string } | undefined;
+    if (existing) continue;
 
-    const localFile = createFile({
+    createFile({
       filename: f.filename ?? "output",
       size: f.size ?? 0,
       content_type: f.mime_type ?? f.content_type ?? "application/octet-stream",
-      storage_path: `remote:${f.id}`,
+      storage_path: storagePath,
       scope: { type: "session", id: sessionId },
     });
-
-    upsertSync(localFile.id, "file", f.id);
   }
 }
 
