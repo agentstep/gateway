@@ -91,7 +91,13 @@ function buildTurn(input: BuildTurnInput): BuildTurnResult {
 function validateRuntime(): string | null {
   const cfg = getConfig();
   if (!cfg.anthropicApiKey && !cfg.claudeToken) {
-    return "claude backend requires ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN to be set";
+    // Don't fail here — the session's vault entries may provide
+    // ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN at turn time.
+    // The driver injects vault entries AFTER buildTurn(), so they're
+    // not visible to getConfig() yet. Return null to allow the turn
+    // to proceed; if no key is found at exec time, the Claude CLI
+    // itself will surface the auth error in the NDJSON stream.
+    return null;
   }
   return null;
 }
