@@ -2,7 +2,7 @@ export { handleCreateAgent, handleListAgents, handleGetAgent, handleUpdateAgent,
 export { handleCreateEnvironment, handleListEnvironments, handleGetEnvironment, handleUpdateEnvironment, handleDeleteEnvironment, handleArchiveEnvironment } from "./environments";
 export { handleCreateSession, handleListSessions, handleGetSession, handleUpdateSession, handleDeleteSession, handleArchiveSession } from "./sessions";
 export { handlePostEvents, handleListEvents } from "./events";
-export { handleSessionStream } from "./stream";
+export { handleSessionStream, prepareSessionStream } from "./stream";
 export { handleCreateVault, handleListVaults, handleGetVault, handleDeleteVault, handleListEntries, handleGetEntry, handlePutEntry, handleDeleteEntry } from "./vaults";
 export { handleCreateCredential, handleListCredentials, handleGetCredential, handleUpdateCredential, handleDeleteCredential } from "./credentials";
 export { handleBatch } from "./batch";

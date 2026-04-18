@@ -179,7 +179,52 @@ app.post("/v1/sessions/:id/events", (c) => handlePostEvents(c.req.raw, c.req.par
 app.get("/v1/sessions/:id/events", (c) => handleListEvents(c.req.raw, c.req.param("id")));
 
 // ── Stream (SSE) ─────────────────────────────────────────────────────────
-app.get("/v1/sessions/:id/events/stream", (c) => handleSessionStream(c.req.raw, c.req.param("id")));
+// Uses Hono's streamSSE helper instead of raw Response for Node.js compat.
+// @hono/node-server buffers raw ReadableStream responses; streamSSE flushes
+// each chunk immediately which SSE requires.
+import { streamSSE } from "hono/streaming";
+import { prepareSessionStream } from "@agentstep/agent-sdk/handlers";
+app.get("/v1/sessions/:id/events/stream", async (c) => {
+  const sessionId = c.req.param("id");
+  const prepared = await prepareSessionStream(c.req.raw, sessionId);
+
+  // If prepareSessionStream returned a Response (error or proxy forward), return it directly
+  if (prepared instanceof Response) return prepared;
+
+  const { afterSeq, subscribeFn } = prepared;
+  return streamSSE(c, async (stream) => {
+    // Queue for events from the subscribe callback (fires sync for backlog)
+    const pending: Array<{ seq: number; type: string; data: string }> = [];
+    let draining = false;
+
+    const drain = async () => {
+      if (draining) return;
+      draining = true;
+      while (pending.length > 0) {
+        const evt = pending.shift()!;
+        await stream.writeSSE({ id: String(evt.seq), event: evt.type, data: evt.data });
+      }
+      draining = false;
+    };
+
+    const sub = subscribeFn(afterSeq, (evt) => {
+      pending.push({ seq: evt.seq, type: evt.type, data: JSON.stringify(evt) });
+      drain().catch(() => {});
+    });
+
+    // Drain any backlog events written synchronously during subscribe
+    await drain();
+
+    stream.onAbort(() => { sub.unsubscribe(); });
+
+    // Hold the stream open — streamSSE closes when callback returns
+    while (!c.req.raw.signal.aborted) {
+      await stream.sleep(15000);
+      await stream.writeSSE({ data: JSON.stringify({ type: "ping" }), event: "ping" }).catch(() => {});
+    }
+    sub.unsubscribe();
+  });
+});
 
 // ── Session Resources ───────────────────────────────────────────────────
 app.post("/v1/sessions/:id/resources", (c) => handleAddResource(c.req.raw, c.req.param("id")));
