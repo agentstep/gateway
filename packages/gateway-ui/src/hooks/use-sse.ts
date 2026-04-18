@@ -21,7 +21,7 @@ export function useSSE(sessionId: string | null) {
       abortRef.current = ctrl;
 
       const apiKey = useAppStore.getState().apiKey;
-      const url = `/v1/sessions/${sessionId}/stream?after_seq=${seqRef.current}`;
+      const url = `/v1/sessions/${sessionId}/events/stream?after_seq=${seqRef.current}`;
 
       fetch(url, {
         signal: ctrl.signal,

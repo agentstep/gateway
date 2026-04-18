@@ -228,8 +228,6 @@ export function buildApp() {
   route(app, "get", "/v1/sessions/:id/events", handleListEvents, "id");
 
   // ── Stream (SSE) ─────────────────────────────────────────────────────
-  route(app, "get", "/v1/sessions/:id/stream", handleSessionStream, "id");
-  // Anthropic SDK calls /events/stream — alias to the same handler
   route(app, "get", "/v1/sessions/:id/events/stream", handleSessionStream, "id");
 
   // ── Threads ──────────────────────────────────────────────────────────
