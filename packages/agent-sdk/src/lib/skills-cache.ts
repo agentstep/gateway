@@ -228,7 +228,27 @@ export interface SearchResult {
 
 export async function searchSkills(opts: SearchOptions): Promise<SearchResult> {
   const index = await getIndex();
-  let items = index.items;
+  let items: IndexSkill[] = index.items;
+
+  // Fallback: if the index is empty, build searchable items from the feed
+  if (items.length === 0) {
+    const feed = await getFeed();
+    const seen = new Set<string>();
+    const fromFeed: IndexSkill[] = [];
+    for (const list of [feed.topAllTime, feed.topTrending, feed.topHot]) {
+      for (const s of list) {
+        if (seen.has(s.id)) continue;
+        seen.add(s.id);
+        fromFeed.push({
+          id: s.id, providerId: s.providerId, source: s.source,
+          skillId: s.id, title: s.title, link: s.link,
+          installsAllTime: s.installs, installsTrending: s.installs, installsHot: s.installs,
+          firstSeenAt: "", description: s.description,
+        });
+      }
+    }
+    items = fromFeed;
+  }
 
   // Filter
   if (opts.q) {
@@ -252,7 +272,7 @@ export async function searchSkills(opts: SearchOptions): Promise<SearchResult> {
   // Sort — use pre-sorted views when no filters applied (fast path)
   const sort = opts.sort ?? "allTime";
   const hasFilters = opts.q || opts.owner || opts.source || opts.repo;
-  if (!hasFilters && sortedViews) {
+  if (!hasFilters && sortedViews && index.items.length > 0) {
     items = sortedViews[sort];
   } else {
     if (sort === "trending") items = [...items].sort((a, b) => b.installsTrending - a.installsTrending);
