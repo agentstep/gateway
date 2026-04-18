@@ -180,6 +180,8 @@ app.get("/v1/sessions/:id/events", (c) => handleListEvents(c.req.raw, c.req.para
 
 // ── Stream (SSE) ─────────────────────────────────────────────────────────
 app.get("/v1/sessions/:id/stream", (c) => handleSessionStream(c.req.raw, c.req.param("id")));
+// Anthropic SDK calls /events/stream — alias to the same handler
+app.get("/v1/sessions/:id/events/stream", (c) => handleSessionStream(c.req.raw, c.req.param("id")));
 
 // ── Session Resources ───────────────────────────────────────────────────
 app.post("/v1/sessions/:id/resources", (c) => handleAddResource(c.req.raw, c.req.param("id")));
