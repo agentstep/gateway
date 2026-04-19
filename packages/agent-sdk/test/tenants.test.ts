@@ -100,8 +100,17 @@ describe("assignNullRowsToTenant (migrate-legacy semantics)", () => {
     seedDefaultTenant();
     const t2 = createTenant({ name: "other" });
 
-    // Pre-0.5 style rows: all tenant_id = NULL
-    const agent = createAgent({ name: "legacy-agent", model: "claude-sonnet-4-6" });
+    // Pre-0.5 style rows: all tenant_id = NULL. Use raw SQL because
+    // createAgent() now defaults tenant_id to DEFAULT_TENANT_ID via ??.
+    const agentId = newId("agent");
+    const now = Date.now();
+    db.prepare(
+      `INSERT INTO agents (id, current_version, name, tenant_id, created_at, updated_at) VALUES (?, 1, ?, NULL, ?, ?)`,
+    ).run(agentId, "legacy-agent", now, now);
+    db.prepare(
+      `INSERT INTO agent_versions (agent_id, version, model, tools_json, mcp_servers_json, created_at) VALUES (?, 1, ?, '[]', '{}', ?)`,
+    ).run(agentId, "claude-sonnet-4-6", now);
+    const agent = { id: agentId };
     const envId = newId("env");
     db.prepare(
       `INSERT INTO environments (id, name, config_json, state, created_at) VALUES (?, ?, ?, 'ready', ?)`,

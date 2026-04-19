@@ -1,3 +1,4 @@
+import { DEFAULT_TENANT_ID } from "./tenants";
 import { eq, and, isNull, lt, gt, asc, desc, sql } from "drizzle-orm";
 import { getDrizzle, schema } from "./drizzle";
 import { newId } from "../util/ids";
@@ -65,7 +66,7 @@ export function createAgent(input: {
       id,
       current_version: 1,
       name: input.name,
-      tenant_id: input.tenant_id ?? null,
+      tenant_id: input.tenant_id ?? DEFAULT_TENANT_ID,
       created_at: now,
       updated_at: now,
     }).run();

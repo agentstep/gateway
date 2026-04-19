@@ -282,10 +282,21 @@ export function handleCreateSession(request: Request): Promise<Response> {
         const { resolveAnthropicKey } = await import("../providers/upstream-keys");
         const resolved = resolveAnthropicKey({ vaultIds: data.vault_ids ?? undefined });
         if (!resolved) {
-          // Check if an OAuth token was found but silently rejected
+          // Check if an OAuth token was found but silently rejected —
+          // inspect vault entries, config cascade, and CLAUDE_CODE_OAUTH_TOKEN.
           const { getConfig } = await import("../config");
+          const { listEntries } = await import("../db/vaults");
           const cfg = getConfig();
-          const hasOAuth = cfg.anthropicApiKey?.startsWith("sk-ant-oat") || cfg.claudeToken;
+          let hasOAuth = cfg.anthropicApiKey?.startsWith("sk-ant-oat") || !!cfg.claudeToken;
+          if (!hasOAuth && data.vault_ids?.length) {
+            for (const vid of data.vault_ids) {
+              const entries = listEntries(vid);
+              if (entries.some(e => e.key === "ANTHROPIC_API_KEY" && e.value.startsWith("sk-ant-oat"))) {
+                hasOAuth = true;
+                break;
+              }
+            }
+          }
           throw badRequest(
             hasOAuth
               ? "OAuth tokens (sk-ant-oat*) are not supported by the anthropic provider. " +

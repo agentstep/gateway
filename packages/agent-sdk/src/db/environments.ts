@@ -1,3 +1,4 @@
+import { DEFAULT_TENANT_ID } from "./tenants";
 import { eq, and, isNull, lt, gt, sql } from "drizzle-orm";
 import { getDrizzle, schema } from "./drizzle";
 import { newId } from "../util/ids";
@@ -36,7 +37,7 @@ export function createEnvironment(input: {
     description: input.description ?? null,
     config_json: JSON.stringify(input.config),
     metadata_json: JSON.stringify(input.metadata ?? {}),
-    tenant_id: input.tenant_id ?? null,
+    tenant_id: input.tenant_id ?? DEFAULT_TENANT_ID,
     state: "preparing",
     created_at: now,
   }).run();

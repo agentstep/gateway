@@ -1,3 +1,4 @@
+import { DEFAULT_TENANT_ID } from "./tenants";
 /**
  * Vault persistence: SQLite-backed key-value stores scoped to agents.
  *
@@ -36,7 +37,7 @@ export function createVault(input: {
     id,
     agent_id: input.agent_id,
     name: input.name,
-    tenant_id: input.tenant_id ?? null,
+    tenant_id: input.tenant_id ?? DEFAULT_TENANT_ID,
     created_at: now,
     updated_at: now,
   }).run();

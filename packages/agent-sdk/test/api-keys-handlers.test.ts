@@ -26,6 +26,7 @@ function freshDbEnv(): void {
     __caSweeperHandle?: unknown;
     __caActors?: unknown;
     __caDrizzle?: unknown;
+    __caLicense?: unknown;
   };
   delete g.__caDb;
   delete g.__caDrizzle;
@@ -39,6 +40,7 @@ function freshDbEnv(): void {
     delete g.__caSweeperHandle;
   }
   delete g.__caActors;
+  delete g.__caLicense;
 }
 
 async function bootDb(): Promise<{ adminKey: string; adminId: string }> {
@@ -285,7 +287,7 @@ describe("Per-key cost dashboard (PR2)", () => {
     const db = getDb();
     const envId = newId("env");
     db.prepare(
-      `INSERT INTO environments (id, name, config_json, state, created_at) VALUES (?, ?, ?, 'ready', ?)`,
+      `INSERT INTO environments (id, name, config_json, state, tenant_id, created_at) VALUES (?, ?, ?, 'ready', 'tenant_default', ?)`,
     ).run(envId, "env-test", JSON.stringify({ type: "cloud", provider: "docker" }), Date.now());
 
     const res = await handleCreateSession(req("/v1/sessions", {
@@ -301,6 +303,10 @@ describe("Per-key cost dashboard (PR2)", () => {
 
   it("GET /v1/metrics?group_by=api_key attributes session costs to the owning key", async () => {
     const { adminKey, adminId } = await bootDb();
+    const { ensureInitialized } = await import("../src/init");
+    await ensureInitialized();
+    const { _setLicenseForTesting } = await import("../src/license");
+    _setLicenseForTesting("enterprise");
     const { getDb } = await import("../src/db/client");
     const { newId } = await import("../src/util/ids");
     const { createAgent } = await import("../src/db/agents");
@@ -310,7 +316,7 @@ describe("Per-key cost dashboard (PR2)", () => {
     const agent = createAgent({ name: "metrics-test", model: "claude-sonnet-4-6" });
     const envId = newId("env");
     db.prepare(
-      `INSERT INTO environments (id, name, config_json, state, created_at) VALUES (?, ?, ?, 'ready', ?)`,
+      `INSERT INTO environments (id, name, config_json, state, tenant_id, created_at) VALUES (?, ?, ?, 'ready', 'tenant_default', ?)`,
     ).run(envId, "env-metrics", JSON.stringify({ type: "cloud", provider: "docker" }), Date.now());
 
     // Seed two sessions: one with api_key_id = adminId, one with null (legacy).
@@ -339,6 +345,10 @@ describe("Per-key cost dashboard (PR2)", () => {
 
   it("GET /v1/api-keys/:id/activity returns sessions + totals for the key", async () => {
     const { adminKey, adminId } = await bootDb();
+    const { ensureInitialized } = await import("../src/init");
+    await ensureInitialized();
+    const { _setLicenseForTesting } = await import("../src/license");
+    _setLicenseForTesting("enterprise");
     const { getDb } = await import("../src/db/client");
     const { newId } = await import("../src/util/ids");
     const { createAgent } = await import("../src/db/agents");
@@ -349,7 +359,7 @@ describe("Per-key cost dashboard (PR2)", () => {
     const agent = createAgent({ name: "activity-test", model: "claude-sonnet-4-6" });
     const envId = newId("env");
     db.prepare(
-      `INSERT INTO environments (id, name, config_json, state, created_at) VALUES (?, ?, ?, 'ready', ?)`,
+      `INSERT INTO environments (id, name, config_json, state, tenant_id, created_at) VALUES (?, ?, ?, 'ready', 'tenant_default', ?)`,
     ).run(envId, "env-activity", JSON.stringify({ type: "cloud", provider: "docker" }), now);
 
     // Two sessions for the admin key
@@ -398,6 +408,10 @@ describe("Metrics time-series per key (PR2.5)", () => {
 
   async function seedForTimeSeries(): Promise<{ adminKey: string; adminId: string; agentId: string; envId: string }> {
     const { adminKey, adminId } = await bootDb();
+    const { ensureInitialized } = await import("../src/init");
+    await ensureInitialized();
+    const { _setLicenseForTesting } = await import("../src/license");
+    _setLicenseForTesting("enterprise");
     const { createAgent } = await import("../src/db/agents");
     const { getDb } = await import("../src/db/client");
     const { newId } = await import("../src/util/ids");
@@ -405,7 +419,7 @@ describe("Metrics time-series per key (PR2.5)", () => {
     const agent = createAgent({ name: "ts-test", model: "claude-sonnet-4-6" });
     const envId = newId("env");
     db.prepare(
-      `INSERT INTO environments (id, name, config_json, state, created_at) VALUES (?, ?, ?, 'ready', ?)`,
+      `INSERT INTO environments (id, name, config_json, state, tenant_id, created_at) VALUES (?, ?, ?, 'ready', 'tenant_default', ?)`,
     ).run(envId, "env-ts", JSON.stringify({ type: "cloud", provider: "docker" }), Date.now());
     return { adminKey, adminId, agentId: agent.id, envId };
   }
@@ -470,7 +484,7 @@ describe("Metrics time-series per key (PR2.5)", () => {
     const agent = createAgent({ name: "topN", model: "claude-sonnet-4-6" });
     const envId = newId("env");
     db.prepare(
-      `INSERT INTO environments (id, name, config_json, state, created_at) VALUES (?, ?, ?, 'ready', ?)`,
+      `INSERT INTO environments (id, name, config_json, state, tenant_id, created_at) VALUES (?, ?, ?, 'ready', 'tenant_default', ?)`,
     ).run(envId, "env-topN", JSON.stringify({ type: "cloud", provider: "docker" }), now);
 
     for (let i = 0; i < 12; i++) {
@@ -612,7 +626,7 @@ describe("Per-key budget enforcement (PR3)", () => {
     const agent = createAgent({ name: "bump-test", model: "claude-sonnet-4-6" });
     const envId = newId("env");
     db.prepare(
-      `INSERT INTO environments (id, name, config_json, state, created_at) VALUES (?, ?, ?, 'ready', ?)`,
+      `INSERT INTO environments (id, name, config_json, state, tenant_id, created_at) VALUES (?, ?, ?, 'ready', 'tenant_default', ?)`,
     ).run(envId, "env-bump", JSON.stringify({ type: "cloud", provider: "docker" }), Date.now());
 
     const session = createSession({
@@ -643,7 +657,7 @@ describe("Per-key budget enforcement (PR3)", () => {
     const agent = createAgent({ name: "zero-cost", model: "claude-sonnet-4-6" });
     const envId = newId("env");
     db.prepare(
-      `INSERT INTO environments (id, name, config_json, state, created_at) VALUES (?, ?, ?, 'ready', ?)`,
+      `INSERT INTO environments (id, name, config_json, state, tenant_id, created_at) VALUES (?, ?, ?, 'ready', 'tenant_default', ?)`,
     ).run(envId, "env-zero", JSON.stringify({ type: "cloud", provider: "docker" }), Date.now());
 
     const session = createSession({ agent_id: agent.id, agent_version: 1, environment_id: envId, api_key_id: adminId });
@@ -669,7 +683,7 @@ describe("Session fallback (PR3)", () => {
     }
     const envId = newId("env");
     db.prepare(
-      `INSERT INTO environments (id, name, config_json, state, state_message, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO environments (id, name, config_json, state, state_message, tenant_id, created_at) VALUES (?, ?, ?, ?, ?, 'tenant_default', ?)`,
     ).run(
       envId,
       `env-${name}`,
@@ -760,6 +774,7 @@ describe("Session fallback (PR3)", () => {
         admin: false,
         scope: { agents: ["different_agent"], environments: ["*"], vaults: ["*"] },
       },
+      tenantId: "tenant_default",
       rawKey: "ck_scoped_nofallback_12345",
     });
 
