@@ -43,17 +43,19 @@ function StatusBadge({ status }: { status: string }) {
 function ConfigPanel({ sessionId, onSessionCreated }: ConfigPanelProps) {
   const { data: agents } = useAgents();
   const { data: environments } = useEnvironments();
-  const { data: vaults } = useVaults();
   const { data: session } = useSession(sessionId);
   const createSession = useCreateSession();
-
-  const readyEnvironments = environments?.filter(
-    (e) => e.state === "ready" || e.state === "active" || e.state === "idle"
-  ) ?? [];
 
   const [agentId, setAgentId] = useState("");
   const [environmentId, setEnvironmentId] = useState("");
   const [vaultId, setVaultId] = useState("__none__");
+
+  // Only show vaults belonging to the selected agent
+  const { data: vaults } = useVaults(agentId || undefined);
+
+  const readyEnvironments = environments?.filter(
+    (e) => e.state === "ready" || e.state === "active" || e.state === "idle"
+  ) ?? [];
 
   useEffect(() => {
     if (session && agents) {
@@ -148,7 +150,7 @@ function ConfigPanel({ sessionId, onSessionCreated }: ConfigPanelProps) {
                 <Label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
                   <Bot className="size-3" /> Agent
                 </Label>
-                <Select value={agentId} onValueChange={(v: string | null) => { if (v) setAgentId(v); }}>
+                <Select value={agentId} onValueChange={(v: string | null) => { if (v) { setAgentId(v); setVaultId("__none__"); } }}>
                   <SelectTrigger className="h-8 w-full text-xs text-foreground">
                     <span className="truncate">{currentAgent?.name ?? "Select agent…"}</span>
                   </SelectTrigger>
