@@ -37,10 +37,16 @@ const MAX_FILES_PER_SYNC = 20;
  *   - Claude: tool name `Write` or `Edit` with `input.file_path`
  *   - Codex:  tool name `file_edit` with `input.path`
  */
-function extractFilePaths(sessionId: string): string[] {
+interface ExtractResult {
+  paths: string[];
+  sawFileTools: boolean;
+}
+
+function extractFilePaths(sessionId: string): ExtractResult {
   const events = listEvents(sessionId, { limit: 500, order: "desc" });
   const seen = new Set<string>();
   const paths: string[] = [];
+  let sawFileTools = false;
 
   for (const evt of events) {
     if (evt.type !== "agent.tool_use") continue;
@@ -57,8 +63,10 @@ function extractFilePaths(sessionId: string): string[] {
     // Codex: file_edit (path), Pi: write/edit (path), OpenCode: apply_patch (check patchText)
     const FILE_TOOLS = new Set(["Write", "Edit", "write_file", "edit_file", "file_edit", "write", "edit"]);
     if (FILE_TOOLS.has(toolName ?? "") && payload.input) {
+      sawFileTools = true;
       filePath = (payload.input.file_path ?? payload.input.path) as string | undefined;
     } else if (toolName === "apply_patch" && payload.input) {
+      sawFileTools = true;
       // OpenCode apply_patch: extract path from patchText "*** Add File: /path" or "*** Update File: /path"
       const patch = payload.input.patchText as string | undefined;
       const match = patch?.match(/\*\*\* (?:Add|Update) File: (.+)/);
@@ -73,7 +81,7 @@ function extractFilePaths(sessionId: string): string[] {
     paths.push(resolved);
   }
 
-  return paths;
+  return { paths, sawFileTools };
 }
 
 /**
@@ -145,11 +153,14 @@ export async function syncContainerFiles(opts: {
 }): Promise<{ synced: number; skipped: number }> {
   const { sessionId, spriteName, provider, secrets } = opts;
 
-  let allPaths = extractFilePaths(sessionId);
+  const extracted = extractFilePaths(sessionId);
+  let allPaths = extracted.paths;
 
-  // Fallback: if no structured paths found (e.g. Codex v0.120+ doesn't
-  // emit file paths), discover changed files via find -newer on the container.
-  if (allPaths.length === 0) {
+  // Fallback: if file tools were used but paths were empty (e.g. Codex
+  // v0.120+ emits file_edit with empty path), discover changed files on
+  // the container. Only runs when file tools were actually invoked —
+  // prevents syncing stale files from reused containers.
+  if (allPaths.length === 0 && extracted.sawFileTools) {
     allPaths = await discoverChangedFiles(spriteName, provider, secrets);
   }
   if (allPaths.length === 0) return { synced: 0, skipped: 0 };
