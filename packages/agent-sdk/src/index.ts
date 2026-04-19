@@ -45,6 +45,7 @@ export { pushPendingUserInput, type TurnInput } from "./state";
 
 // DB
 export { getDb, closeDb } from "./db/client";
+export { getDrizzle } from "./db/drizzle";
 export { createApiKey, listApiKeys } from "./db/api_keys";
 export {
   DEFAULT_TENANT_ID,

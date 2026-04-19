@@ -26,8 +26,10 @@ function freshDbEnv(): void {
     __caRuntime?: unknown;
     __caSweeperHandle?: unknown;
     __caActors?: unknown;
+    __caDrizzle?: unknown;
   };
   delete g.__caDb;
+  delete g.__caDrizzle;
   delete g.__caInitialized;
   delete g.__caInitPromise;
   delete g.__caBusEmitters;

@@ -555,7 +555,16 @@ export function runMigrations(db: InstanceType<typeof Database>): void {
   if (!memStoreCols.some((c) => c.name === "agent_id")) {
     db.exec(`ALTER TABLE memory_stores ADD COLUMN agent_id TEXT`);
   }
+  if (!memStoreCols.some(c => c.name === "metadata_json")) {
+    db.exec("ALTER TABLE memory_stores ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'");
+  }
   db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_stores_agent ON memory_stores(agent_id)`);
+
+  // v0.4 extra columns on memories
+  const memoriesCols = db.prepare("PRAGMA table_info(memories)").all() as Array<{ name: string }>;
+  if (!memoriesCols.some(c => c.name === "metadata_json")) {
+    db.exec("ALTER TABLE memories ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'");
+  }
 
   // Container file sync: container_path + content_hash on files
   const filesColsSync = db.prepare("PRAGMA table_info(files)").all() as Array<{ name: string }>;

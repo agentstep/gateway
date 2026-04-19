@@ -25,6 +25,7 @@ function freshDbEnv(): void {
   process.env.DATABASE_PATH = path.join(dir, "test.db");
   const g = globalThis as typeof globalThis & {
     __caDb?: unknown;
+    __caDrizzle?: unknown;
     __caInitialized?: unknown;
     __caInitPromise?: unknown;
     __caBusEmitters?: unknown;
@@ -34,6 +35,7 @@ function freshDbEnv(): void {
     __caActors?: unknown;
   };
   delete g.__caDb;
+  delete g.__caDrizzle;
   delete g.__caInitialized;
   delete g.__caInitPromise;
   delete g.__caBusEmitters;

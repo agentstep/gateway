@@ -25,7 +25,7 @@
  *   }
  */
 import { routeWrap, jsonOk } from "../http";
-import { getDb } from "../db/client";
+import { getDb } from "../db/client"; // raw SQL holdout: 4 queries use dynamic GROUP BY expressions and runtime-built SQL fragments that cannot be expressed as Drizzle sql`` templates without sql.raw() on every identifier — kept as-is for safety and readability.
 import { badRequest } from "../errors";
 import { snapshotApiMetrics } from "../observability/api-metrics";
 import { requireGlobalAdmin, tenantFilter } from "../auth/scope";

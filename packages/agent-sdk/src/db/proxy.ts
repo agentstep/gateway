@@ -13,18 +13,19 @@
  * Legacy rows written before v0.5 have null here; they're treated as
  * global-admin-only for safety.
  */
-import { getDb } from "./client";
+import { eq } from "drizzle-orm";
+import { getDrizzle, schema } from "./drizzle";
 import { nowMs } from "../util/clock";
 
 export type ProxiedResourceType = "agent" | "environment" | "session";
 
 export function isProxied(id: string): boolean {
-  const db = getDb();
+  const db = getDrizzle();
   const row = db
-    .prepare(
-      `SELECT resource_id FROM proxy_resources WHERE resource_id = ?`,
-    )
-    .get(id) as { resource_id: string } | undefined;
+    .select({ resource_id: schema.proxyResources.resource_id })
+    .from(schema.proxyResources)
+    .where(eq(schema.proxyResources.resource_id, id))
+    .get();
   return !!row;
 }
 
@@ -35,11 +36,14 @@ export function isProxied(id: string): boolean {
  *   - string      → the tenant id
  */
 export function getProxiedTenantId(id: string): string | null | undefined {
-  const db = getDb();
+  const db = getDrizzle();
   const row = db
-    .prepare(`SELECT tenant_id FROM proxy_resources WHERE resource_id = ?`)
-    .get(id) as { tenant_id: string | null } | undefined;
-  return row?.tenant_id;
+    .select({ tenant_id: schema.proxyResources.tenant_id })
+    .from(schema.proxyResources)
+    .where(eq(schema.proxyResources.resource_id, id))
+    .get();
+  if (!row) return undefined;
+  return row.tenant_id;
 }
 
 export function markProxied(
@@ -47,14 +51,16 @@ export function markProxied(
   type: ProxiedResourceType,
   tenantId: string | null = null,
 ): void {
-  const db = getDb();
-  db.prepare(
-    `INSERT OR IGNORE INTO proxy_resources (resource_id, resource_type, tenant_id, created_at)
-     VALUES (?, ?, ?, ?)`,
-  ).run(id, type, tenantId, nowMs());
+  const db = getDrizzle();
+  db.insert(schema.proxyResources)
+    .values({ resource_id: id, resource_type: type, tenant_id: tenantId, created_at: nowMs() })
+    .onConflictDoNothing()
+    .run();
 }
 
 export function unmarkProxied(id: string): void {
-  const db = getDb();
-  db.prepare(`DELETE FROM proxy_resources WHERE resource_id = ?`).run(id);
+  const db = getDrizzle();
+  db.delete(schema.proxyResources)
+    .where(eq(schema.proxyResources.resource_id, id))
+    .run();
 }

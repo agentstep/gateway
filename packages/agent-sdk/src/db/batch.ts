@@ -2,7 +2,7 @@
  * Batch operations: execute multiple resource mutations in a single
  * SQLite transaction. All operations succeed or all fail.
  */
-import { getDb } from "./client";
+import { getDrizzle } from "./drizzle";
 import { createAgent, archiveAgent } from "./agents";
 import { createEnvironment, deleteEnvironment } from "./environments";
 import { createSession } from "./sessions";
@@ -27,7 +27,7 @@ export interface BatchResult {
  * for the failed operation.
  */
 export function executeBatch(operations: BatchOp[]): BatchResult[] {
-  const db = getDb();
+  const db = getDrizzle();
 
   return db.transaction(() => {
     const results: BatchResult[] = [];
@@ -44,7 +44,7 @@ export function executeBatch(operations: BatchOp[]): BatchResult[] {
     }
 
     return results;
-  })();
+  });
 }
 
 export class BatchError extends Error {

@@ -7,8 +7,8 @@
  */
 import { z } from "zod";
 import { routeWrap, jsonOk } from "../http";
-import { getSession } from "../db/sessions";
 import { getDb } from "../db/client";
+import { getSession, updateSessionResources } from "../db/sessions";
 import { newId } from "../util/ids";
 import { nowMs, toIso } from "../util/clock";
 import { badRequest, notFound } from "../errors";
@@ -58,9 +58,7 @@ export function handleAddResource(request: Request, sessionId: string): Promise<
     resources.push(resource);
 
     // Update session resources
-    const db = getDb();
-    db.prepare("UPDATE sessions SET resources_json = ? WHERE id = ?")
-      .run(JSON.stringify(resources), sessionId);
+    updateSessionResources(sessionId, JSON.stringify(resources));
 
     return jsonOk({
       id: `res_${resources.length - 1}`,
@@ -100,9 +98,7 @@ export function handleDeleteResource(request: Request, sessionId: string, resour
     }
 
     resources.splice(idx, 1);
-    const db = getDb();
-    db.prepare("UPDATE sessions SET resources_json = ? WHERE id = ?")
-      .run(JSON.stringify(resources), sessionId);
+    updateSessionResources(sessionId, JSON.stringify(resources));
 
     return jsonOk({ id: resourceIndex, type: "session_resource_deleted" });
   });

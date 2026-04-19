@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
-import { getDb } from "./client";
+import { eq, and, desc, isNull, sql } from "drizzle-orm";
+import { getDrizzle, schema } from "./drizzle";
 import { newId } from "../util/ids";
 import { nowMs } from "../util/clock";
 import type { KeyPermissions, KeyScope } from "../types";
@@ -83,7 +84,7 @@ export function createApiKey(input: {
   rateLimitRpm?: number | null;
   rawKey?: string;
 }): { key: string; id: string } {
-  const db = getDb();
+  const db = getDrizzle();
   const id = newId("key");
   const raw = input.rawKey || `ck_${crypto.randomBytes(24).toString("base64url")}`;
   const hash = hashKey(raw);
@@ -98,20 +99,20 @@ export function createApiKey(input: {
       ? JSON.stringify(input.permissions)            // legacy string array
       : JSON.stringify(input.permissions);           // new object shape
 
-  db.prepare(
-    `INSERT INTO api_keys (id, name, hash, prefix, permissions_json, tenant_id, budget_usd, rate_limit_rpm, spent_usd, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
-  ).run(
-    id,
-    input.name,
-    hash,
-    prefix,
-    permissionsJson,
-    input.tenantId ?? null,
-    input.budgetUsd ?? null,
-    input.rateLimitRpm ?? null,
-    nowMs(),
-  );
+  db.insert(schema.apiKeys)
+    .values({
+      id,
+      name: input.name,
+      hash,
+      prefix,
+      permissions_json: permissionsJson,
+      tenant_id: input.tenantId ?? null,
+      budget_usd: input.budgetUsd ?? null,
+      rate_limit_rpm: input.rateLimitRpm ?? null,
+      spent_usd: 0,
+      created_at: nowMs(),
+    })
+    .run();
 
   return { key: raw, id };
 }
@@ -125,14 +126,20 @@ export function createApiKey(input: {
  */
 export function bumpKeySpent(keyId: string | null | undefined, deltaUsd: number): void {
   if (!keyId || !Number.isFinite(deltaUsd) || deltaUsd === 0) return;
-  const db = getDb();
-  db.prepare(`UPDATE api_keys SET spent_usd = spent_usd + ? WHERE id = ?`).run(deltaUsd, keyId);
+  const db = getDrizzle();
+  db.update(schema.apiKeys)
+    .set({ spent_usd: sql`${schema.apiKeys.spent_usd} + ${deltaUsd}` })
+    .where(eq(schema.apiKeys.id, keyId))
+    .run();
 }
 
 /** Admin: reset a key's running total to zero (e.g. monthly reset). */
 export function resetKeySpent(keyId: string): boolean {
-  const db = getDb();
-  const res = db.prepare(`UPDATE api_keys SET spent_usd = 0 WHERE id = ?`).run(keyId);
+  const db = getDrizzle();
+  const res = db.update(schema.apiKeys)
+    .set({ spent_usd: 0 })
+    .where(eq(schema.apiKeys.id, keyId))
+    .run();
   return res.changes > 0;
 }
 
@@ -141,58 +148,61 @@ export function updateApiKeyLimits(
   id: string,
   limits: { budgetUsd?: number | null; rateLimitRpm?: number | null },
 ): boolean {
-  const db = getDb();
-  const parts: string[] = [];
-  const args: Array<number | null> = [];
+  const db = getDrizzle();
+  const updates: Record<string, unknown> = {};
   if ("budgetUsd" in limits) {
-    parts.push("budget_usd = ?");
-    args.push(limits.budgetUsd ?? null);
+    updates.budget_usd = limits.budgetUsd ?? null;
   }
   if ("rateLimitRpm" in limits) {
-    parts.push("rate_limit_rpm = ?");
-    args.push(limits.rateLimitRpm ?? null);
+    updates.rate_limit_rpm = limits.rateLimitRpm ?? null;
   }
-  if (parts.length === 0) return false;
+  if (Object.keys(updates).length === 0) return false;
   const res = db
-    .prepare(`UPDATE api_keys SET ${parts.join(", ")} WHERE id = ? AND revoked_at IS NULL`)
-    .run(...args, id);
+    .update(schema.apiKeys)
+    .set(updates)
+    .where(and(eq(schema.apiKeys.id, id), isNull(schema.apiKeys.revoked_at)))
+    .run();
   return res.changes > 0;
 }
 
 export function findByRawKey(raw: string): ApiKeyRow | null {
-  const db = getDb();
+  const db = getDrizzle();
   const hash = hashKey(raw);
-  return (
-    (db
-      .prepare(
-        `SELECT * FROM api_keys WHERE hash = ? AND revoked_at IS NULL`,
-      )
-      .get(hash) as ApiKeyRow | undefined) ?? null
-  );
+  const row = db
+    .select()
+    .from(schema.apiKeys)
+    .where(and(eq(schema.apiKeys.hash, hash), isNull(schema.apiKeys.revoked_at)))
+    .get();
+  return (row as ApiKeyRow | undefined) ?? null;
 }
 
 export function getApiKeyById(id: string): ApiKeyRow | null {
-  const db = getDb();
-  return (
-    (db
-      .prepare(`SELECT * FROM api_keys WHERE id = ?`)
-      .get(id) as ApiKeyRow | undefined) ?? null
-  );
+  const db = getDrizzle();
+  const row = db
+    .select()
+    .from(schema.apiKeys)
+    .where(eq(schema.apiKeys.id, id))
+    .get();
+  return (row as ApiKeyRow | undefined) ?? null;
 }
 
 export function revokeApiKey(id: string): boolean {
-  const db = getDb();
+  const db = getDrizzle();
   const res = db
-    .prepare(`UPDATE api_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`)
-    .run(nowMs(), id);
+    .update(schema.apiKeys)
+    .set({ revoked_at: nowMs() })
+    .where(and(eq(schema.apiKeys.id, id), isNull(schema.apiKeys.revoked_at)))
+    .run();
   return res.changes > 0;
 }
 
 export function updateApiKeyPermissions(id: string, permissions: KeyPermissions): boolean {
-  const db = getDb();
+  const db = getDrizzle();
   const res = db
-    .prepare(`UPDATE api_keys SET permissions_json = ? WHERE id = ? AND revoked_at IS NULL`)
-    .run(JSON.stringify(permissions), id);
+    .update(schema.apiKeys)
+    .set({ permissions_json: JSON.stringify(permissions) })
+    .where(and(eq(schema.apiKeys.id, id), isNull(schema.apiKeys.revoked_at)))
+    .run();
   return res.changes > 0;
 }
 
@@ -230,18 +240,17 @@ export function listApiKeys(opts: {
   /** v0.5 tenancy filter. `null` = no filter (global admin); string = scoped. */
   tenantFilter?: string | null;
 } = {}): ApiKeyView[] {
-  const db = getDb();
-  const clauses: string[] = ["revoked_at IS NULL"];
-  const params: unknown[] = [];
+  const db = getDrizzle();
+  const conditions = [isNull(schema.apiKeys.revoked_at)];
   if (opts.tenantFilter != null) {
-    clauses.push("tenant_id = ?");
-    params.push(opts.tenantFilter);
+    conditions.push(eq(schema.apiKeys.tenant_id, opts.tenantFilter));
   }
   const rows = db
-    .prepare(
-      `SELECT * FROM api_keys WHERE ${clauses.join(" AND ")} ORDER BY created_at DESC`,
-    )
-    .all(...params) as ApiKeyRow[];
+    .select()
+    .from(schema.apiKeys)
+    .where(and(...conditions))
+    .orderBy(desc(schema.apiKeys.created_at))
+    .all() as ApiKeyRow[];
   return rows.map(toView);
 }
 

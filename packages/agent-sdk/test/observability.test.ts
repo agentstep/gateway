@@ -27,6 +27,7 @@ function freshDbEnv(): void {
   delete process.env.OBS_REDACT_KEYS;
   const g = globalThis as typeof globalThis & {
     __caDb?: unknown;
+    __caDrizzle?: unknown;
     __caInitialized?: unknown;
     __caInitPromise?: unknown;
     __caBusEmitters?: unknown;
@@ -38,6 +39,7 @@ function freshDbEnv(): void {
     __caSweeperHandle?: unknown;
   };
   delete g.__caDb;
+  delete g.__caDrizzle;
   delete g.__caInitialized;
   delete g.__caInitPromise;
   delete g.__caBusEmitters;
