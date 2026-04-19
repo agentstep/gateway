@@ -458,6 +458,30 @@ export async function runTurn(
         appendEventsBatch(sessionId, batchInputs);
       }
     }
+    // Flush any trailing NDJSON line left in the buffer (CLI may not
+    // terminate its last line with \n, leaving it as a remainder that
+    // parseNDJSONLines never processes).
+    if (buffer.trim()) {
+      try {
+        const trailing = JSON.parse(buffer.trim()) as Record<string, unknown>;
+        if (process.env.DEBUG_NDJSON) console.log("[ndjson] flush-trailing", JSON.stringify(trailing));
+        const translated = translator.translate(trailing);
+        if (translated.length > 0) {
+          const batchInputs: AppendInput[] = translated.map((t) => ({
+            type: t.type,
+            payload: t.payload,
+            origin: "server" as const,
+            processedAt: nowMs(),
+            traceId: trace.trace_id,
+            spanId: t.spanId ?? trace.span_id,
+            parentSpanId: t.parentSpanId ?? trace.parent_span_id,
+          }));
+          appendEventsBatch(sessionId, batchInputs);
+        }
+      } catch { /* not valid JSON — ignore */ }
+      buffer = "";
+    }
+
     const exitResult = await exec.exit;
     if (process.env.DEBUG_NDJSON && exitResult) {
       console.log(`[driver] ${sessionId} exit code: ${(exitResult as { code?: number }).code}`);
