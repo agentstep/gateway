@@ -15,6 +15,7 @@ import { getActor, dropActor } from "../sessions/actor";
 import { appendEvent, dropEmitter } from "../sessions/bus";
 import { interruptSession } from "../sessions/interrupt";
 import { releaseSession } from "../containers/lifecycle";
+import { kickoffEnvironmentSetup } from "../containers/setup";
 import { isProxied, markProxied, unmarkProxied, getProxiedTenantId } from "../db/proxy";
 import { forwardToAnthropic } from "../proxy/forward";
 import { syncAndCreateSession } from "../sync/anthropic";
@@ -281,9 +282,16 @@ export function handleCreateSession(request: Request): Promise<Response> {
         const { resolveAnthropicKey } = await import("../providers/upstream-keys");
         const resolved = resolveAnthropicKey({ vaultIds: data.vault_ids ?? undefined });
         if (!resolved) {
+          // Check if an OAuth token was found but silently rejected
+          const { getConfig } = await import("../config");
+          const cfg = getConfig();
+          const hasOAuth = cfg.anthropicApiKey?.startsWith("sk-ant-oat") || cfg.claudeToken;
           throw badRequest(
-            "ANTHROPIC_API_KEY required for anthropic provider " +
-            "(add to vault, upstream-key pool, or .env)",
+            hasOAuth
+              ? "OAuth tokens (sk-ant-oat*) are not supported by the anthropic provider. " +
+                "Use a standard API key (sk-ant-api*) or switch to a container provider (docker, apple-container, etc.)."
+              : "ANTHROPIC_API_KEY required for anthropic provider " +
+                "(add to vault, upstream-key pool, or .env)",
           );
         }
 
@@ -319,8 +327,17 @@ export function handleCreateSession(request: Request): Promise<Response> {
       }
 
       if (env.state !== "ready") {
+        // Auto-trigger setup for environments stuck in "preparing" — the
+        // handler's createEnvironment calls kickoff, but direct SDK
+        // callers (createEnvironment db function) may not have.
+        if (env.state === "preparing") {
+          kickoffEnvironmentSetup(env.id);
+        }
         throw badRequest(
-          `environment is not ready (state=${env.state}${env.state_message ? `: ${env.state_message}` : ""})`,
+          `environment is not ready (state=${env.state}). ` +
+          (env.state === "preparing"
+            ? "Setup has been triggered — retry in a few seconds."
+            : env.state_message ?? ""),
         );
       }
 

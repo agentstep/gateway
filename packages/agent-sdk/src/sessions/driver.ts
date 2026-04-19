@@ -302,6 +302,14 @@ export async function runTurn(
   if (turnBuild.env.OPENAI_API_KEY && !turnBuild.env.CODEX_API_KEY) {
     turnBuild.env.CODEX_API_KEY = turnBuild.env.OPENAI_API_KEY;
   }
+  // Auto-remap: if ANTHROPIC_API_KEY is an OAuth token (sk-ant-oat*),
+  // move it to CLAUDE_CODE_OAUTH_TOKEN. Claude CLI doesn't recognize
+  // OAuth tokens in ANTHROPIC_API_KEY — it expects them in a separate
+  // env var. Without this, the CLI garbles stdin parsing (Bug #2/#5).
+  if (turnBuild.env.ANTHROPIC_API_KEY?.startsWith("sk-ant-oat")) {
+    turnBuild.env.CLAUDE_CODE_OAUTH_TOKEN = turnBuild.env.ANTHROPIC_API_KEY;
+    delete turnBuild.env.ANTHROPIC_API_KEY;
+  }
   // If vault provides CLAUDE_CODE_OAUTH_TOKEN, remove ANTHROPIC_API_KEY
   // so Claude Code uses the OAuth token (it prefers ANTHROPIC_API_KEY when both set)
   if (turnBuild.env.CLAUDE_CODE_OAUTH_TOKEN && turnBuild.env.ANTHROPIC_API_KEY) {
@@ -486,9 +494,15 @@ export async function runTurn(
     if (process.env.DEBUG_NDJSON && exitResult) {
       console.log(`[driver] ${sessionId} exit code: ${(exitResult as { code?: number }).code}`);
     }
-    // If the process exited with non-zero and produced no output, surface an error
-    if ((exitResult as { code?: number })?.code !== 0 && buffer.trim() === "" && toolCallsInTurn === 0) {
-      const code = (exitResult as { code?: number })?.code ?? "unknown";
+    // If the process exited with non-zero and the translator received no
+    // meaningful output, surface an error. We check toolCallsInTurn as a
+    // proxy for "translator saw events" — if the CLI responded then crashed
+    // (exit code 2), the response is already committed and an error event
+    // would be confusing (Bug #3).
+    const exitCode = (exitResult as { code?: number })?.code;
+    const translatorSawOutput = toolCallsInTurn > 0 || translator.getTurnResult()?.stopReason != null;
+    if (exitCode !== 0 && !translatorSawOutput) {
+      const code = exitCode ?? "unknown";
       emit("session.error", {
         error: {
           type: "backend_error",
