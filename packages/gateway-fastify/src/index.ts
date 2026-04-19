@@ -28,6 +28,7 @@ import {
   handlePostEvents,
   handleListEvents,
   handleSessionStream,
+  prepareSessionStream,
   handleListThreads,
   handleCreateMemoryStore,
   handleListMemoryStores,
@@ -228,7 +229,52 @@ export function buildApp() {
   route(app, "get", "/v1/sessions/:id/events", handleListEvents, "id");
 
   // ── Stream (SSE) ─────────────────────────────────────────────────────
-  route(app, "get", "/v1/sessions/:id/events/stream", handleSessionStream, "id");
+  // Uses prepareSessionStream + reply.raw.write for proper SSE flushing.
+  // The generic route() helper pipes through sendWebResponse which buffers
+  // ReadableStream bodies — SSE requires immediate chunk flushing.
+  app.get("/v1/sessions/:id/events/stream", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const prepared = await prepareSessionStream(toWebRequest(req), id);
+
+    if (prepared instanceof Response) {
+      await sendWebResponse(reply, prepared);
+      return;
+    }
+
+    const { afterSeq, subscribeFn } = prepared;
+    reply.raw.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+
+    const pending: Array<{ seq: number; type: string; data: string }> = [];
+    const sub = subscribeFn(afterSeq, (evt) => {
+      pending.push({ seq: evt.seq, type: evt.type, data: JSON.stringify(evt) });
+    });
+
+    const interval = setInterval(() => {
+      while (pending.length > 0) {
+        const evt = pending.shift()!;
+        reply.raw.write(`id: ${evt.seq}\nevent: ${evt.type}\ndata: ${evt.data}\n\n`);
+      }
+      // Keepalive ping
+      reply.raw.write(`data: {"type":"ping"}\n\n`);
+    }, 500);
+
+    // Drain backlog immediately
+    while (pending.length > 0) {
+      const evt = pending.shift()!;
+      reply.raw.write(`id: ${evt.seq}\nevent: ${evt.type}\ndata: ${evt.data}\n\n`);
+    }
+
+    req.raw.on("close", () => {
+      clearInterval(interval);
+      sub.unsubscribe();
+      reply.raw.end();
+    });
+  });
 
   // ── Threads ──────────────────────────────────────────────────────────
   route(app, "get", "/v1/sessions/:id/threads", handleListThreads, "id");
