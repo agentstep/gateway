@@ -1,7 +1,7 @@
 {
   "license": "Apache-2.0",
   "name": "@agentstep/agent-sdk",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Core engine for AgentStep Gateway — backends, sandbox providers, session orchestration, and vault encryption.",
   "keywords": [
     "anthropic",
@@ -17,50 +17,37 @@
   ],
   "private": false,
   "type": "module",
-  "main": "src/index.ts",
+  "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts",
-    "./queue": "./src/queue/index.ts",
-    "./config": "./src/config/index.ts",
-    "./backends/claude": "./src/backends/claude/index.ts",
-    "./backends/codex": "./src/backends/codex/index.ts",
-    "./backends/opencode": "./src/backends/opencode/index.ts",
-    "./handlers": "./src/handlers/index.ts",
-    "./*": "./src/*.ts"
-  },
-  "publishConfig": {
-    "main": "dist/index.js",
-    "types": "dist/index.d.ts",
-    "exports": {
-      ".": {
-        "types": "./dist/index.d.ts",
-        "import": "./dist/index.js"
-      },
-      "./queue": {
-        "types": "./dist/queue/index.d.ts",
-        "import": "./dist/queue/index.js"
-      },
-      "./config": {
-        "types": "./dist/config/index.d.ts",
-        "import": "./dist/config/index.js"
-      },
-      "./backends/claude": {
-        "types": "./dist/backends/claude/index.d.ts",
-        "import": "./dist/backends/claude/index.js"
-      },
-      "./backends/codex": {
-        "types": "./dist/backends/codex/index.d.ts",
-        "import": "./dist/backends/codex/index.js"
-      },
-      "./backends/opencode": {
-        "types": "./dist/backends/opencode/index.d.ts",
-        "import": "./dist/backends/opencode/index.js"
-      },
-      "./handlers": {
-        "types": "./dist/handlers/index.d.ts",
-        "import": "./dist/handlers/index.js"
-      }
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./queue": {
+      "types": "./dist/queue/index.d.ts",
+      "import": "./dist/queue/index.js"
+    },
+    "./config": {
+      "types": "./dist/config/index.d.ts",
+      "import": "./dist/config/index.js"
+    },
+    "./backends/claude": {
+      "types": "./dist/backends/claude/index.d.ts",
+      "import": "./dist/backends/claude/index.js"
+    },
+    "./backends/codex": {
+      "types": "./dist/backends/codex/index.d.ts",
+      "import": "./dist/backends/codex/index.js"
+    },
+    "./backends/opencode": {
+      "types": "./dist/backends/opencode/index.d.ts",
+      "import": "./dist/backends/opencode/index.js"
+    },
+    "./handlers": {
+      "types": "./dist/handlers/index.d.ts",
+      "import": "./dist/handlers/index.js"
     }
   },
   "homepage": "https://www.agentstep.com",

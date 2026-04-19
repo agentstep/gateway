@@ -34,6 +34,9 @@ jobs:
       - run: npm run typecheck
       - run: npm test
 
+      - name: Build SDK (must precede gateway bundle — exports point to dist/)
+        run: npm run build -w @agentstep/agent-sdk
+
       - name: Build UI (Vite → ui.ts → gateway bundle)
         run: |
           cd packages/gateway-ui && npx vite build
