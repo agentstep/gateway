@@ -48,7 +48,8 @@
     "./handlers": {
       "types": "./dist/handlers/index.d.ts",
       "import": "./dist/handlers/index.js"
-    }
+    },
+    "./*": "./dist/*.js"
   },
   "homepage": "https://www.agentstep.com",
   "bugs": {
