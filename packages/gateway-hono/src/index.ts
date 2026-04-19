@@ -193,34 +193,34 @@ app.get("/v1/sessions/:id/events/stream", async (c) => {
 
   const { afterSeq, subscribeFn } = prepared;
   return streamSSE(c, async (stream) => {
-    // Queue for events from the subscribe callback (fires sync for backlog)
+    // Queue for events — the subscribe callback fires synchronously for
+    // backlog and asynchronously for live events from the EventEmitter.
     const pending: Array<{ seq: number; type: string; data: string }> = [];
-    let draining = false;
 
-    const drain = async () => {
-      if (draining) return;
-      draining = true;
+    const sub = subscribeFn(afterSeq, (evt) => {
+      pending.push({ seq: evt.seq, type: evt.type, data: JSON.stringify(evt) });
+    });
+
+    stream.onAbort(() => { sub.unsubscribe(); });
+
+    // Main loop: drain pending events, then sleep briefly.
+    // Short sleep (500ms) ensures live events are flushed promptly
+    // instead of waiting for a 15s keepalive cycle.
+    let lastPing = Date.now();
+    while (!c.req.raw.signal.aborted) {
+      // Drain all pending events
       while (pending.length > 0) {
         const evt = pending.shift()!;
         await stream.writeSSE({ id: String(evt.seq), event: evt.type, data: evt.data });
       }
-      draining = false;
-    };
 
-    const sub = subscribeFn(afterSeq, (evt) => {
-      pending.push({ seq: evt.seq, type: evt.type, data: JSON.stringify(evt) });
-      drain().catch(() => {});
-    });
+      // Keepalive ping every 15s
+      if (Date.now() - lastPing > 15000) {
+        await stream.writeSSE({ data: JSON.stringify({ type: "ping" }), event: "ping" });
+        lastPing = Date.now();
+      }
 
-    // Drain any backlog events written synchronously during subscribe
-    await drain();
-
-    stream.onAbort(() => { sub.unsubscribe(); });
-
-    // Hold the stream open — streamSSE closes when callback returns
-    while (!c.req.raw.signal.aborted) {
-      await stream.sleep(15000);
-      await stream.writeSSE({ data: JSON.stringify({ type: "ping" }), event: "ping" }).catch(() => {});
+      await stream.sleep(500);
     }
     sub.unsubscribe();
   });
