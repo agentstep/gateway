@@ -383,4 +383,214 @@ export function runMigrations(db: InstanceType<typeof Database>): void {
       PRIMARY KEY (local_id, resource_type)
     )
   `);
+
+  // ---------------------------------------------------------------------------
+  // v0.4.0 — Agent ops (virtual keys, cost attribution)
+  // ---------------------------------------------------------------------------
+
+  // Reserved for v0.5 full tenant isolation. No handler reads this column
+  // in v0.4 — it's a forward-compatibility hook so v0.5's migration doesn't
+  // need to rewrite this table. Seed key's tenant_id remains NULL = "legacy
+  // / global admin" until the operator runs `gateway tenants migrate-legacy`
+  // in v0.5.
+  const apiKeyCols = db
+    .prepare(`PRAGMA table_info(api_keys)`)
+    .all() as Array<{ name: string }>;
+  if (!apiKeyCols.some((c) => c.name === "tenant_id")) {
+    db.exec(`ALTER TABLE api_keys ADD COLUMN tenant_id TEXT`);
+  }
+
+  // Per-key cost attribution (v0.4 PR2). Sessions record which API key
+  // authenticated the POST /v1/sessions call. Legacy sessions remain NULL
+  // — metrics attribute them to the "__unattributed__" bucket.
+  const sessionColsApiKey = db
+    .prepare(`PRAGMA table_info(sessions)`)
+    .all() as Array<{ name: string }>;
+  if (!sessionColsApiKey.some((c) => c.name === "api_key_id")) {
+    db.exec(`ALTER TABLE sessions ADD COLUMN api_key_id TEXT`);
+  }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_api_key_id ON sessions(api_key_id)`);
+
+  // Budgets + RPM + fallback (v0.4 PR3).
+  // - api_keys.budget_usd / rate_limit_rpm: null = unlimited.
+  // - api_keys.spent_usd: running total, default 0. Incremented in the
+  //   driver's bumpSessionStats transaction so spend can never
+  //   under-report on crash.
+  // - agents.fallback_json: JSON array of {agent_id, environment_id}
+  //   tuples tried on session-creation failure (cycle-detected, max 3 hops).
+  const apiKeyColsBudget = db
+    .prepare(`PRAGMA table_info(api_keys)`)
+    .all() as Array<{ name: string }>;
+  if (!apiKeyColsBudget.some((c) => c.name === "budget_usd")) {
+    db.exec(`ALTER TABLE api_keys ADD COLUMN budget_usd REAL`);
+  }
+  if (!apiKeyColsBudget.some((c) => c.name === "rate_limit_rpm")) {
+    db.exec(`ALTER TABLE api_keys ADD COLUMN rate_limit_rpm INTEGER`);
+  }
+  if (!apiKeyColsBudget.some((c) => c.name === "spent_usd")) {
+    db.exec(`ALTER TABLE api_keys ADD COLUMN spent_usd REAL NOT NULL DEFAULT 0`);
+  }
+
+  const agentColsFallback = db
+    .prepare(`PRAGMA table_info(agents)`)
+    .all() as Array<{ name: string }>;
+  if (!agentColsFallback.some((c) => c.name === "fallback_json")) {
+    db.exec(`ALTER TABLE agents ADD COLUMN fallback_json TEXT`);
+  }
+
+  // Upstream-key pool (v0.4 PR4). Per-provider pool with LRU selection and
+  // per-row disable-on-failure. Values encrypted via the same AES-256-GCM
+  // machinery that protects vault entries (see db/vault-crypto.ts).
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS upstream_keys (
+      id TEXT PRIMARY KEY,
+      provider TEXT NOT NULL,
+      hash TEXT NOT NULL UNIQUE,
+      prefix TEXT NOT NULL,
+      value_encrypted TEXT NOT NULL,
+      weight INTEGER NOT NULL DEFAULT 1,
+      disabled_at INTEGER,
+      last_used_at INTEGER,
+      created_at INTEGER NOT NULL
+    )
+  `);
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_upstream_keys_provider_active
+       ON upstream_keys(provider, disabled_at, last_used_at)`,
+  );
+
+  // ---------------------------------------------------------------------------
+  // v0.5.0 — Tenancy
+  // ---------------------------------------------------------------------------
+
+  // tenants table. `default` tenant is seeded by init.ts on first boot via
+  // INSERT OR IGNORE. Archived tenants stay in the table — cost metrics and
+  // audit logs can still reference them by id.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS tenants (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      archived_at INTEGER
+    )
+  `);
+
+  // tenant_id on every resource that needs tenant isolation. Null =
+  // "legacy, global-admin-only" until the operator runs
+  // `gateway tenants migrate-legacy` to assign it to a tenant. The
+  // migration is opt-in so operators can see the transition.
+  //
+  // Out of scope for v0.5: memory_stores, files, proxy_resources,
+  // settings, skills_catalog, anthropic_sync, events (event access is
+  // gated via the parent session's tenant). Documented in docs/tenants.md.
+  for (const table of ["agents", "environments", "vaults", "sessions"]) {
+    const cols = db
+      .prepare(`PRAGMA table_info(${table})`)
+      .all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === "tenant_id")) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN tenant_id TEXT`);
+    }
+  }
+  // api_keys.tenant_id already exists from v0.4 (reserved column).
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_agents_tenant       ON agents(tenant_id)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_environments_tenant ON environments(tenant_id)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_vaults_tenant       ON vaults(tenant_id)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_tenant     ON sessions(tenant_id)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_api_keys_tenant     ON api_keys(tenant_id)`);
+
+  // Webhook HMAC (v0.5 PR4a). Per-agent-version shared secret used to
+  // sign webhook payloads. When null, webhooks are delivered unsigned
+  // (matches pre-v0.5 behavior). Null -> unsigned delivery; set → all
+  // deliveries include X-AgentStep-Signature: sha256=<hex(hmac)>.
+  const agentVerColsHook = db
+    .prepare(`PRAGMA table_info(agent_versions)`)
+    .all() as Array<{ name: string }>;
+  if (!agentVerColsHook.some((c) => c.name === "webhook_secret")) {
+    db.exec(`ALTER TABLE agent_versions ADD COLUMN webhook_secret TEXT`);
+  }
+
+  // Audit log (v0.5 PR4c). Append-only record of admin-sensitive
+  // operations (tenant/key/upstream-key/agent CRUD) so operators can
+  // reconstruct "who changed what when" after a security incident.
+  // Indexed on tenant_id + created_at so tenant-scoped queries stay fast
+  // as the table grows.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id            TEXT PRIMARY KEY,
+      created_at    INTEGER NOT NULL,
+      actor_key_id  TEXT,
+      actor_name    TEXT,
+      tenant_id     TEXT,
+      action        TEXT NOT NULL,
+      resource_type TEXT,
+      resource_id   TEXT,
+      outcome       TEXT NOT NULL,
+      metadata_json TEXT
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_audit_tenant_time ON audit_log(tenant_id, created_at)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_audit_actor       ON audit_log(actor_key_id, created_at)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_audit_action_time ON audit_log(action, created_at)`);
+
+  // Proxy routing tenant column (v0.5 P1-2). Proxied resources with no
+  // local mirror row previously bypassed tenant checks entirely because
+  // the lookup key was absent from every tenant-aware table. Stamp the
+  // tenant at mark-time so pure-proxy sessions/agents/envs can still be
+  // access-controlled per-tenant. Pre-v0.5 rows stay null and resolve
+  // as global-admin-only.
+  const proxyCols = db
+    .prepare(`PRAGMA table_info(proxy_resources)`)
+    .all() as Array<{ name: string }>;
+  if (!proxyCols.some((c) => c.name === "tenant_id")) {
+    db.exec(`ALTER TABLE proxy_resources ADD COLUMN tenant_id TEXT`);
+  }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_proxy_tenant ON proxy_resources(tenant_id)`);
+
+  // Memory store agent scoping (v0.5). Links a memory store to the
+  // agent that owns it. Pre-v0.5 stores have null agent_id and are
+  // accessible to global admins only. New stores require an agent_id.
+  const memStoreCols = db
+    .prepare(`PRAGMA table_info(memory_stores)`)
+    .all() as Array<{ name: string }>;
+  if (!memStoreCols.some((c) => c.name === "agent_id")) {
+    db.exec(`ALTER TABLE memory_stores ADD COLUMN agent_id TEXT`);
+  }
+  if (!memStoreCols.some(c => c.name === "metadata_json")) {
+    db.exec("ALTER TABLE memory_stores ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'");
+  }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_stores_agent ON memory_stores(agent_id)`);
+
+  // v0.4 extra columns on memories
+  const memoriesCols = db.prepare("PRAGMA table_info(memories)").all() as Array<{ name: string }>;
+  if (!memoriesCols.some(c => c.name === "metadata_json")) {
+    db.exec("ALTER TABLE memories ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'");
+  }
+
+  // Container file sync: container_path + content_hash on files
+  const filesColsSync = db.prepare("PRAGMA table_info(files)").all() as Array<{ name: string }>;
+  if (!filesColsSync.some(c => c.name === "container_path")) {
+    db.exec("ALTER TABLE files ADD COLUMN container_path TEXT");
+  }
+  if (!filesColsSync.some(c => c.name === "content_hash")) {
+    db.exec("ALTER TABLE files ADD COLUMN content_hash TEXT");
+  }
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_files_dedup ON files(scope_id, container_path, content_hash)`,
+  );
+
+  // Vault credentials (Anthropic-compatible structured auth)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS vault_credentials (
+      id TEXT PRIMARY KEY,
+      vault_id TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      auth_type TEXT NOT NULL DEFAULT 'static_bearer',
+      auth_token_encrypted TEXT NOT NULL,
+      mcp_server_url TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (vault_id) REFERENCES vaults(id) ON DELETE CASCADE,
+      UNIQUE(vault_id, display_name)
+    )
+  `);
 }
