@@ -1,6 +1,6 @@
 # Tenants
 
-AgentStep Gateway v0.5 groups every API key, agent, environment, vault,
+AgentStep Gateway v0.4 groups every API key, agent, environment, vault,
 and session under a **tenant**. A tenant is a hard isolation boundary —
 tenant admins see only their own tenant's resources, global admins see
 everything.
@@ -18,9 +18,9 @@ working exactly the way it did on 0.4.
 | Tenant admin | `true` | `X` | Everything inside tenant `X`. Creates/revokes keys in `X`. |
 | Tenant user | `false` | `X` | Resources in `X` that match the key's scope (`agents`/`environments`/`vaults` allow-lists from v0.4). |
 
-A pre-v0.5 key stored with the legacy `["*"]` permission hydrates as
+A pre-v0.4 key stored with the legacy `["*"]` permission hydrates as
 `{admin: true, scope: null}`. Combined with a null `tenant_id` (the
-default for pre-v0.5 rows), it becomes a global admin automatically —
+default for pre-v0.4 rows), it becomes a global admin automatically —
 no migration needed.
 
 ## Creating a tenant

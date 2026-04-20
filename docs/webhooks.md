@@ -2,7 +2,7 @@
 
 Agents can POST events to an external URL as they happen. You set this
 up per-agent via `webhook_url` + `webhook_events`. Optional signing
-(v0.5+) lets receivers verify the POST came from your gateway and
+(v0.4+) lets receivers verify the POST came from your gateway and
 hasn't been tampered with.
 
 ## Configuring a webhook
@@ -23,7 +23,7 @@ POST /v1/agents
 ```
 
 `webhook_secret` is optional. Without it, deliveries are unsigned
-(matching pre-v0.5 behavior). When present, every delivery includes:
+(matching pre-v0.4 behavior). When present, every delivery includes:
 
 | Header | Value |
 |--------|-------|
@@ -106,7 +106,7 @@ PATCH /v1/agents/<agent_id>
 
 Webhook delivery is **best-effort, fire-and-forget** with a 5 second
 timeout. If your receiver returns non-2xx or times out, the delivery
-is dropped silently. There is no retry queue in v0.5.
+is dropped silently. There is no retry queue in v0.4.
 
 If you need durable delivery, subscribe to the SSE stream
 (`/v1/sessions/:id/stream`) which is replay-safe via the

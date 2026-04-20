@@ -4,7 +4,7 @@ All notable changes to AgentStep Gateway are documented here. Dates are UTC.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project uses [SemVer](https://semver.org/).
 
-## [0.5.0] — 2026-04-17
+## [0.4.3] — 2026-04-20
 
 ### Added
 
@@ -82,7 +82,7 @@ Closes cross-tenant access gaps introduced by tenancy:
 
 ### Operational notes
 
-- **v0.4 → v0.5 upgrade**: no migration required to boot. Resources
+- **v0.4 → v0.4 upgrade**: no migration required to boot. Resources
   stay tenant-less (visible to global admins only) until you run
   `gateway tenants migrate-legacy`.
 - **Clustered deployments** should set `RATE_LIMIT_BACKEND=redis +
@@ -121,7 +121,7 @@ Closes cross-tenant access gaps introduced by tenancy:
   and 3-strike auto-disable. Admin API at `/v1/upstream-keys`. Anthropic
   only in v0.4; OpenAI/Gemini follow in 0.5.
 - `tenant_id TEXT` column reserved on `api_keys` (no reads in v0.4 —
-  forward-compat hook for v0.5 full tenant isolation).
+  forward-compat hook for v0.4 full tenant isolation).
 
 ### Changed
 
