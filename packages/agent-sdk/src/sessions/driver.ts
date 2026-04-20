@@ -37,7 +37,7 @@ import * as pool from "../containers/pool";
 import { resolveBackend } from "../backends/registry";
 import { resolveContainerProvider } from "../providers/registry";
 import { BLOCKED_ENV_KEYS } from "../providers/resolve-secrets";
-import { listEntries as listVaultEntries } from "../db/vaults";
+import { loadSessionSecrets } from "./secrets";
 import { parseNDJSONLines } from "../backends/shared/ndjson";
 import type { TranslatedEvent } from "../backends/shared/translator-types";
 import { classifyError, buildErrorPayload } from "./errors";
@@ -45,6 +45,7 @@ import { shouldRetry, incrementRetry, resetRetry, retryDelay } from "./retry";
 import type { Agent } from "../types";
 import type { ContainerProvider } from "../providers/types";
 import { resolveToolset } from "./tools";
+import { isProxied } from "../db/proxy";
 import { ApiError } from "../errors";
 import { nowMs } from "../util/clock";
 import { injectMcpAuthHeaders } from "./mcp-auth";
@@ -53,6 +54,20 @@ import {
   PERMISSION_BRIDGE_REQUEST_PATH,
   PERMISSION_BRIDGE_RESPONSE_PATH,
 } from "../backends/claude/permission-hook";
+
+/**
+ * Format stop_reason as an object for API responses.
+ * DB columns continue to store the plain string; only event payloads use the object shape.
+ */
+function formatStopReason(reason: string, eventIds?: string[]): Record<string, unknown> {
+  if (reason === "custom_tool_call" && eventIds?.length) {
+    return { type: "requires_action", event_ids: eventIds };
+  }
+  if (reason === "custom_tool_call") {
+    return { type: "requires_action" };
+  }
+  return { type: reason };
+}
 
 export async function runTurn(
   sessionId: string,
@@ -95,20 +110,19 @@ export async function runTurn(
   const agent = getAgent(session.agent.id, session.agent.version);
   if (!agent) {
     emit("session.error", { error: { type: "server_error", message: "agent not found" } });
-    emit("session.status_idle", { stop_reason: "error" });
+    emit("session.status_idle", { stop_reason: formatStopReason("error") });
     updateSessionStatus(sessionId, "idle", "error");
     return;
   }
 
   const backend = resolveBackend(agent.engine);
 
-  // Load all vault entries once — reused for runtime validation bypass,
-  // MCP auth header injection, and env var injection.
+  // Load all vault entries + credentials once — reused for runtime validation
+  // bypass, MCP auth header injection, and env var injection.
   const vaultEntries: Array<{ key: string; value: string }> = [];
   if (session.vault_ids && session.vault_ids.length > 0) {
-    for (const vid of session.vault_ids) {
-      vaultEntries.push(...listVaultEntries(vid));
-    }
+    const secrets = loadSessionSecrets(session.vault_ids);
+    vaultEntries.push(...secrets.map(s => ({ key: s.key, value: s.value })));
   }
   const hasVaultKeys = vaultEntries.length > 0;
 
@@ -121,24 +135,44 @@ export async function runTurn(
     const runtimeErr = backend.validateRuntime?.();
     if (runtimeErr) {
       emit("session.error", { error: { type: "invalid_request_error", message: runtimeErr } });
-      emit("session.status_idle", { stop_reason: "error" });
+      emit("session.status_idle", { stop_reason: formatStopReason("error") });
       updateSessionStatus(sessionId, "idle", "error");
       return;
     }
   }
 
-  // Budget check: if max_budget_usd is set and usage has exceeded it, refuse the turn
+  // Budget check: refuse turn if session OR owning key is over budget.
+  // Session budget = max_budget_usd on the row (pre-0.4 field, unchanged).
+  // Key budget = api_keys.budget_usd vs api_keys.spent_usd (v0.4 PR3).
+  // Both raise session.error{type:"budget_exceeded"} with a scope tag.
   const budgetRow = getSessionRow(sessionId);
   if (budgetRow?.max_budget_usd != null && budgetRow.usage_cost_usd >= budgetRow.max_budget_usd) {
     emit("session.error", {
       error: {
         type: "budget_exceeded",
-        message: `usage $${budgetRow.usage_cost_usd.toFixed(4)} >= budget $${budgetRow.max_budget_usd.toFixed(4)}`,
+        scope: "session",
+        message: `usage $${budgetRow.usage_cost_usd.toFixed(4)} >= session budget $${budgetRow.max_budget_usd.toFixed(4)}`,
       },
     });
-    emit("session.status_idle", { stop_reason: "error" });
+    emit("session.status_idle", { stop_reason: formatStopReason("error") });
     updateSessionStatus(sessionId, "idle", "error");
     return;
+  }
+  if (budgetRow?.api_key_id) {
+    const { getApiKeyById } = await import("../db/api_keys");
+    const key = getApiKeyById(budgetRow.api_key_id);
+    if (key && key.budget_usd != null && (key.spent_usd ?? 0) >= key.budget_usd) {
+      emit("session.error", {
+        error: {
+          type: "budget_exceeded",
+          scope: "key",
+          message: `api key "${key.name}" spent $${(key.spent_usd ?? 0).toFixed(4)} >= budget $${key.budget_usd.toFixed(4)}`,
+        },
+      });
+      emit("session.status_idle", { stop_reason: formatStopReason("error") });
+      updateSessionStatus(sessionId, "idle", "error");
+      return;
+    }
   }
 
   // Mark each pending input as processed-now
@@ -186,7 +220,7 @@ export async function runTurn(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     emit("session.error", { error: { type: "server_error", message: `container creation failed: ${msg}` } });
-    emit("session.status_idle", { stop_reason: "error" });
+    emit("session.status_idle", { stop_reason: formatStopReason("error") });
     updateSessionStatus(sessionId, "idle", "error");
     return;
   }
@@ -240,7 +274,7 @@ export async function runTurn(
     // span in the trace.
     emit("span.model_request_end", { model: agent.model, model_usage: null, status: "error" });
     emit("session.error", { error: { type, message: msg } });
-    emit("session.status_idle", { stop_reason: "error" });
+    emit("session.status_idle", { stop_reason: formatStopReason("error") });
     updateSessionStatus(sessionId, "idle", "error");
     return;
   }
@@ -262,6 +296,19 @@ export async function runTurn(
     if (!BLOCKED_ENV_KEYS.has(entry.key) && !MCP_KEY_RE.test(entry.key)) {
       turnBuild.env[entry.key] = entry.value;
     }
+  }
+  // If vault provides OPENAI_API_KEY, also set CODEX_API_KEY so the codex
+  // backend picks it up (codex checks CODEX_API_KEY before OPENAI_API_KEY).
+  if (turnBuild.env.OPENAI_API_KEY && !turnBuild.env.CODEX_API_KEY) {
+    turnBuild.env.CODEX_API_KEY = turnBuild.env.OPENAI_API_KEY;
+  }
+  // Auto-remap: if ANTHROPIC_API_KEY is an OAuth token (sk-ant-oat*),
+  // move it to CLAUDE_CODE_OAUTH_TOKEN. Claude CLI doesn't recognize
+  // OAuth tokens in ANTHROPIC_API_KEY — it expects them in a separate
+  // env var. Without this, the CLI garbles stdin parsing (Bug #2/#5).
+  if (turnBuild.env.ANTHROPIC_API_KEY?.startsWith("sk-ant-oat")) {
+    turnBuild.env.CLAUDE_CODE_OAUTH_TOKEN = turnBuild.env.ANTHROPIC_API_KEY;
+    delete turnBuild.env.ANTHROPIC_API_KEY;
   }
   // If vault provides CLAUDE_CODE_OAUTH_TOKEN, remove ANTHROPIC_API_KEY
   // so Claude Code uses the OAuth token (it prefers ANTHROPIC_API_KEY when both set)
@@ -349,7 +396,7 @@ export async function runTurn(
     // Close the open turn span before returning — see buildTurn catch above.
     emit("span.model_request_end", { model: agent.model, model_usage: null, status: "error" });
     emit("session.error", { error: { type: "server_error", message: `exec failed: ${msg}` } });
-    emit("session.status_idle", { stop_reason: "error" });
+    emit("session.status_idle", { stop_reason: formatStopReason("error") });
     updateSessionStatus(sessionId, "idle", "error");
     return;
   }
@@ -419,13 +466,43 @@ export async function runTurn(
         appendEventsBatch(sessionId, batchInputs);
       }
     }
+    // Flush any trailing NDJSON line left in the buffer (CLI may not
+    // terminate its last line with \n, leaving it as a remainder that
+    // parseNDJSONLines never processes).
+    if (buffer.trim()) {
+      try {
+        const trailing = JSON.parse(buffer.trim()) as Record<string, unknown>;
+        if (process.env.DEBUG_NDJSON) console.log("[ndjson] flush-trailing", JSON.stringify(trailing));
+        const translated = translator.translate(trailing);
+        if (translated.length > 0) {
+          const batchInputs: AppendInput[] = translated.map((t) => ({
+            type: t.type,
+            payload: t.payload,
+            origin: "server" as const,
+            processedAt: nowMs(),
+            traceId: trace.trace_id,
+            spanId: t.spanId ?? trace.span_id,
+            parentSpanId: t.parentSpanId ?? trace.parent_span_id,
+          }));
+          appendEventsBatch(sessionId, batchInputs);
+        }
+      } catch { /* not valid JSON — ignore */ }
+      buffer = "";
+    }
+
     const exitResult = await exec.exit;
     if (process.env.DEBUG_NDJSON && exitResult) {
       console.log(`[driver] ${sessionId} exit code: ${(exitResult as { code?: number }).code}`);
     }
-    // If the process exited with non-zero and produced no output, surface an error
-    if ((exitResult as { code?: number })?.code !== 0 && buffer.trim() === "" && toolCallsInTurn === 0) {
-      const code = (exitResult as { code?: number })?.code ?? "unknown";
+    // If the process exited with non-zero and the translator received no
+    // meaningful output, surface an error. We check toolCallsInTurn as a
+    // proxy for "translator saw events" — if the CLI responded then crashed
+    // (exit code 2), the response is already committed and an error event
+    // would be confusing (Bug #3).
+    const exitCode = (exitResult as { code?: number })?.code;
+    const translatorSawOutput = toolCallsInTurn > 0 || translator.getTurnResult()?.stopReason != null;
+    if (exitCode !== 0 && !translatorSawOutput) {
+      const code = exitCode ?? "unknown";
       emit("session.error", {
         error: {
           type: "backend_error",
@@ -458,7 +535,7 @@ export async function runTurn(
       emit("span.model_request_end", { model: agent.model, model_usage: null, status: "error" });
       const retryStatus = classified.retryable ? "exhausted" : "terminal";
       emit("session.error", { error: buildErrorPayload(classified, retryStatus) });
-      emit("session.status_idle", { stop_reason: "error" });
+      emit("session.status_idle", { stop_reason: formatStopReason("error") });
       updateSessionStatus(sessionId, "idle", "error");
       runtime.inFlightRuns.delete(sessionId);
       return;
@@ -477,7 +554,7 @@ export async function runTurn(
       model_usage: partial?.usage ?? null,
       status: "interrupted",
     });
-    emit("session.status_idle", { stop_reason: "interrupted" });
+    emit("session.status_idle", { stop_reason: formatStopReason("interrupted") });
     updateSessionStatus(sessionId, "idle", "interrupted");
     setIdleSince(sessionId, nowMs());
     scheduleDrain(sessionId);
@@ -501,6 +578,26 @@ export async function runTurn(
     result?.usage,
   );
 
+  // Container file sync: extract modified files before going idle.
+  // Must run before status_idle so the container is still alive.
+  const sessionRowForSync = getSessionRow(sessionId);
+  if (sessionRowForSync?.sprite_name && !isProxied(sessionId)) {
+    try {
+      const { syncContainerFiles } = await import("../sync/container-file-sync");
+      const syncResult = await syncContainerFiles({
+        sessionId,
+        spriteName: sessionRowForSync.sprite_name,
+        provider,
+        secrets,
+      });
+      if (syncResult.synced > 0) {
+        console.log(`[driver] synced ${syncResult.synced} files from container (${syncResult.skipped} skipped)`);
+      }
+    } catch (err) {
+      console.warn("[driver] container file sync failed:", (err as Error)?.stack ?? err);
+    }
+  }
+
   const now = nowMs();
   const stopReason = result?.stopReason ?? "end_turn";
 
@@ -508,6 +605,11 @@ export async function runTurn(
   // spawn_agent, intercept and delegate to the thread orchestrator. The result
   // is written back as a tool result and the turn is re-run automatically.
   if (stopReason === "custom_tool_call") {
+    // Collect event IDs of pending custom tool use events for the stop_reason payload
+    const customToolEventIds = listEvents(sessionId, { limit: 20, order: "desc" })
+      .filter(e => e.type === "agent.custom_tool_use")
+      .map(e => e.id);
+
     const serverToolResult = await handleServerSideTool(sessionId, agent, trace);
     if (serverToolResult) {
       // spawn_agent was handled — the thread orchestrator already wrote the
@@ -517,7 +619,7 @@ export async function runTurn(
         { model: agent.model, model_usage: result?.usage ?? null, status: "ok" },
         { at: now },
       );
-      emit("session.status_idle", { stop_reason: "custom_tool_call" }, { at: now });
+      emit("session.status_idle", { stop_reason: formatStopReason("custom_tool_call", customToolEventIds) }, { at: now });
       updateSessionStatus(sessionId, "idle", "custom_tool_call");
 
       // Write the spawn result as response.json into the container
@@ -560,7 +662,13 @@ export async function runTurn(
     { model: agent.model, model_usage: result?.usage ?? null, status: "ok" },
     { at: now },
   );
-  emit("session.status_idle", { stop_reason: stopReason }, { at: now });
+  // For custom_tool_call that wasn't handled server-side, collect event IDs for the stop_reason
+  const finalEventIds = stopReason === "custom_tool_call"
+    ? listEvents(sessionId, { limit: 20, order: "desc" })
+        .filter(e => e.type === "agent.custom_tool_use")
+        .map(e => e.id)
+    : undefined;
+  emit("session.status_idle", { stop_reason: formatStopReason(stopReason, finalEventIds) }, { at: now });
   updateSessionStatus(sessionId, "idle", stopReason);
   resetRetry(sessionId); // Clear retry counter on successful completion
   console.log(`[driver] ${sessionId} turn complete: stop_reason=${stopReason}`);

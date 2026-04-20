@@ -17,7 +17,6 @@
  * Shutdown cooperation: `stopping` is set by the shutdown handler so the
  * sweep bails out cleanly between candidates if SIGTERM fires mid-run.
  */
-import { getDb } from "../db/client";
 import { getConfig } from "../config";
 import { nowMs } from "../util/clock";
 import { getRuntime } from "../state";
@@ -26,6 +25,7 @@ import { appendEvent, dropEmitter } from "./bus";
 import {
   archiveSession,
   getSessionRow,
+  listIdleSessions,
   updateSessionStatus,
 } from "../db/sessions";
 import { releaseSession, reconcileOrphans, reconcileDockerOrphans } from "../containers/lifecycle";
@@ -80,15 +80,7 @@ async function evictIdleSessions(): Promise<void> {
 
   // COALESCE so sessions that never ran a turn (idle_since IS NULL) still
   // age out from their created_at. LIMIT caps the worst case per sweep.
-  const rows = getDb()
-    .prepare(
-      `SELECT id FROM sessions
-       WHERE status = 'idle'
-         AND archived_at IS NULL
-         AND COALESCE(idle_since, created_at) + ? < ?
-       LIMIT ?`,
-    )
-    .all(cfg.sessionMaxAgeMs, now, 50) as { id: string }[];
+  const rows = listIdleSessions(cfg.sessionMaxAgeMs, now, 50);
 
   if (rows.length === 0) return;
 

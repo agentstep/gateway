@@ -27,6 +27,7 @@
  * module so no writer can bypass it.
  */
 import { EventEmitter } from "node:events";
+import crypto from "node:crypto";
 import {
   appendEvent as dbAppend,
   appendEventsBatch as dbAppendBatch,
@@ -36,6 +37,7 @@ import {
 } from "../db/events";
 import { getSession } from "../db/sessions";
 import { getAgent } from "../db/agents";
+import { getDb } from "../db/client";
 import type { EventRow, ManagedEvent } from "../types";
 
 type GlobalBus = typeof globalThis & {
@@ -52,6 +54,8 @@ function emitters(): Map<string, EventEmitter> {
 interface WebhookCacheEntry {
   webhookUrl: string | null;
   webhookEvents: string[];
+  /** v0.5: shared secret for HMAC-SHA256 payload signing, or null. */
+  webhookSecret: string | null;
 }
 const webhookCache = new Map<string, WebhookCacheEntry>();
 
@@ -61,14 +65,20 @@ function getWebhookConfig(sessionId: string): WebhookCacheEntry {
 
   const session = getSession(sessionId);
   if (!session) {
-    const entry: WebhookCacheEntry = { webhookUrl: null, webhookEvents: [] };
+    const entry: WebhookCacheEntry = { webhookUrl: null, webhookEvents: [], webhookSecret: null };
     webhookCache.set(sessionId, entry);
     return entry;
   }
   const agent = getAgent(session.agent.id, session.agent.version);
+  // The public hydrated Agent doesn't expose the raw secret (only a
+  // boolean). Go straight to the row so we can actually sign with it.
+  const ver = getDb()
+    .prepare(`SELECT webhook_secret FROM agent_versions WHERE agent_id = ? AND version = ?`)
+    .get(session.agent.id, session.agent.version) as { webhook_secret: string | null } | undefined;
   const entry: WebhookCacheEntry = {
     webhookUrl: agent?.webhook_url ?? null,
     webhookEvents: agent?.webhook_events ?? [],
+    webhookSecret: ver?.webhook_secret ?? null,
   };
   webhookCache.set(sessionId, entry);
   return entry;
@@ -85,6 +95,22 @@ function getOrCreateEmitter(sessionId: string): EventEmitter {
   return em;
 }
 
+/**
+ * Sign the raw UTF-8 body with HMAC-SHA256 using the per-agent shared
+ * secret. Receivers verify with the same secret; the timestamp header
+ * lets them reject replays older than N seconds.
+ *
+ * Signature header format: `X-AgentStep-Signature: sha256=<hex>`.
+ * Timestamp header:        `X-AgentStep-Timestamp: <unix_ms>`.
+ * Signed body:             `<timestamp>.<payload>` so a captured
+ *                          payload can't be replayed with a new timestamp.
+ */
+function signPayload(secret: string, timestampMs: number, payload: string): string {
+  const h = crypto.createHmac("sha256", secret);
+  h.update(`${timestampMs}.${payload}`);
+  return h.digest("hex");
+}
+
 function fireWebhook(sessionId: string, row: EventRow): void {
   try {
     const config = getWebhookConfig(sessionId);
@@ -92,9 +118,18 @@ function fireWebhook(sessionId: string, row: EventRow): void {
     if (!config.webhookEvents.includes(row.type)) return;
 
     const payload = JSON.stringify(rowToManagedEvent(row));
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      "User-Agent": "agentstep-webhook/1",
+    };
+    if (config.webhookSecret) {
+      const ts = Date.now();
+      headers["X-AgentStep-Timestamp"] = String(ts);
+      headers["X-AgentStep-Signature"] = `sha256=${signPayload(config.webhookSecret, ts, payload)}`;
+    }
     void fetch(config.webhookUrl, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: payload,
       signal: AbortSignal.timeout(5000),
     }).catch((err: unknown) => {

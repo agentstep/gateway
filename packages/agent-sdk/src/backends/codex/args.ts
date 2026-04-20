@@ -1,9 +1,6 @@
 /**
  * Build the `codex exec` argv for one turn.
  *
- * Ported from
- * 
- *
  * Codex-specific constraints:
  * - No --max-turns (codex has no equivalent; silently ignored like opencode)
  * - No --system-prompt flag — system prompt is wrapped into the user prompt

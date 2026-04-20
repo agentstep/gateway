@@ -217,7 +217,13 @@ export function createCliProvider(cfg: CliProviderConfig): ContainerProvider {
     const args = cfg.execArgs(containerName, opts.argv);
     if (process.env.DEBUG_NDJSON) {
       console.log(`[exec] ${binary} ${args.map(a => a.includes(" ") ? `"${a}"` : a).join(" ")}`);
-      if (opts.stdin) console.log(`[exec] stdin: ${opts.stdin.slice(0, 200)}...`);
+      if (opts.stdin) {
+        // Log only the user prompt (after the blank-line separator), never
+        // the env KEY=VALUE header which contains API keys.
+        const sepIdx = opts.stdin.indexOf("\n\n");
+        const safePreview = sepIdx >= 0 ? opts.stdin.slice(sepIdx + 2, sepIdx + 202) : "[env-only stdin]";
+        console.log(`[exec] stdin: ${safePreview}...`);
+      }
     }
     const proc = spawn(binary, args, {
       stdio: ["pipe", "pipe", "pipe"],

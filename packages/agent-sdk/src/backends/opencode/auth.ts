@@ -47,7 +47,8 @@ export function buildOpencodeAuthEnv(): Record<string, string> {
  * (e.g. `openai/gpt-4o-mini`) and opencode routes based on the prefix.
  */
 export function validateOpencodeRuntime(): string | null {
-  const cfg = getConfig();
-  if (cfg.anthropicApiKey || cfg.openAiApiKey) return null;
-  return "opencode backend requires at least one provider key: ANTHROPIC_API_KEY or OPENAI_API_KEY (opencode does not accept sk-ant-oat OAuth tokens per Anthropic ToS)";
+  // Vault entries are injected by the driver AFTER buildTurn(), so
+  // getConfig() won't see vault-provided keys at this point. Return
+  // null and let the CLI surface the auth error in its NDJSON stream.
+  return null;
 }

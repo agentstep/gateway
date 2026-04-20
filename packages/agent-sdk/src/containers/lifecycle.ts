@@ -30,6 +30,12 @@ import { dockerProvider } from "../providers/docker";
 import { resolveVaultSecrets } from "../providers/resolve-secrets";
 import type { SessionResource, AgentSkill } from "../types";
 
+// Gate container-lifecycle logs behind DEBUG_LIFECYCLE=1 so a busy
+// gateway's logs aren't dominated by per-session creation chatter.
+const lcLog = (...args: unknown[]): void => {
+  if (process.env.DEBUG_LIFECYCLE === "1") console.log(...args);
+};
+
 const SPRITE_NAME_PREFIX = "ca-sess-";
 
 /**
@@ -46,30 +52,37 @@ export async function installSkills(
 ): Promise<void> {
   if (!skills || skills.length === 0) return;
 
+  // Sanitize skill names — only allow safe directory characters
+  const SAFE_NAME_RE = /^[a-zA-Z0-9_.-]+$/;
+  const safeSkills = skills.filter((s) => {
+    if (!SAFE_NAME_RE.test(s.name)) {
+      console.warn(`[lifecycle] skipping skill with unsafe name: ${s.name.slice(0, 40)}`);
+      return false;
+    }
+    return true;
+  });
+
   if (engine === "claude") {
     // Claude Code reads from .claude/skills/ directory
-    await provider.exec(spriteName, ["bash", "-c", "mkdir -p /home/agent/.claude/skills"]);
+    await provider.exec(spriteName, ["mkdir", "-p", "/home/agent/.claude/skills"]);
 
-    for (const skill of skills) {
-      // Write each skill as a SKILL.md file in its own directory
+    for (const skill of safeSkills) {
       const dirPath = `/home/agent/.claude/skills/${skill.name}`;
       const filePath = `${dirPath}/SKILL.md`;
-      await provider.exec(spriteName, ["bash", "-c", `mkdir -p ${dirPath}`]);
-
-      // Use stdin to write content (safe for special characters)
-      await provider.exec(spriteName, ["bash", "-c", `cat > ${filePath}`], {
+      await provider.exec(spriteName, ["mkdir", "-p", dirPath]);
+      await provider.exec(spriteName, ["sh", "-c", "cat > \"$1\"", "sh", filePath], {
         stdin: skill.content,
       });
     }
   }
 
   // Also write to .agents/skills/ for universal agent compatibility
-  await provider.exec(spriteName, ["bash", "-c", "mkdir -p /home/agent/.agents/skills"]);
-  for (const skill of skills) {
+  await provider.exec(spriteName, ["mkdir", "-p", "/home/agent/.agents/skills"]);
+  for (const skill of safeSkills) {
     const dirPath = `/home/agent/.agents/skills/${skill.name}`;
     const filePath = `${dirPath}/SKILL.md`;
-    await provider.exec(spriteName, ["bash", "-c", `mkdir -p ${dirPath}`]);
-    await provider.exec(spriteName, ["bash", "-c", `cat > ${filePath}`], {
+    await provider.exec(spriteName, ["mkdir", "-p", dirPath]);
+    await provider.exec(spriteName, ["sh", "-c", "cat > \"$1\"", "sh", filePath], {
       stdin: skill.content,
     });
   }
@@ -153,9 +166,9 @@ export async function acquireForFirstTurn(sessionId: string): Promise<string> {
   } : provider;
 
   const name = deriveSpriteName(sessionId);
-  console.log(`[lifecycle] ${sessionId} creating container via ${sp.name}...`);
+  lcLog(`[lifecycle] ${sessionId} creating container via ${sp.name}...`);
   await sp.create({ name });
-  console.log(`[lifecycle] ${sessionId} container created: ${name}`);
+  lcLog(`[lifecycle] ${sessionId} container created: ${name}`);
 
   // Backends with slow prep (e.g. opencode's npm install) bracket the work
   // with span events so the client sees something on the event stream
@@ -172,9 +185,9 @@ export async function acquireForFirstTurn(sessionId: string): Promise<string> {
   }
 
   try {
-    console.log(`[lifecycle] ${sessionId} installing ${backend.name} engine on container...`);
+    lcLog(`[lifecycle] ${sessionId} installing ${backend.name} engine on container...`);
     await backend.prepareOnSprite(name, sp);
-    console.log(`[lifecycle] ${sessionId} engine installed`);
+    lcLog(`[lifecycle] ${sessionId} engine installed`);
 
     // Install custom tool bridge if the agent has custom tools or threads_enabled (claude backend only)
     if (agent.engine === "claude") {
@@ -212,9 +225,9 @@ export async function acquireForFirstTurn(sessionId: string): Promise<string> {
 
     // Install agent skills into the container
     if (agent.skills && agent.skills.length > 0) {
-      console.log(`[lifecycle] ${sessionId} installing ${agent.skills.length} skill(s)...`);
+      lcLog(`[lifecycle] ${sessionId} installing ${agent.skills.length} skill(s)...`);
       await installSkills(name, sp, agent.skills, agent.engine);
-      console.log(`[lifecycle] ${sessionId} skills installed`);
+      lcLog(`[lifecycle] ${sessionId} skills installed`);
     }
   } catch (err) {
     await sp.delete(name).catch(() => {});
@@ -265,20 +278,37 @@ export async function provisionResources(
   resources: SessionResource[],
   provider: import("../providers/types").ContainerProvider,
 ): Promise<void> {
-  await provider.exec(spriteName, ["bash", "-c", "mkdir -p /tmp/resources /uploads"]);
+  await provider.exec(spriteName, ["mkdir", "-p", "/tmp/resources", "/uploads"]);
   const MAX_RESOURCE_BYTES = 50 * 1024 * 1024; // 50 MB
+  // Sanitize mount_path — only safe path characters, no traversal
+  const SAFE_PATH_RE = /^[a-zA-Z0-9_./\-]+$/;
+  function sanitizeMountPath(p: string | undefined): string | undefined {
+    if (!p) return undefined;
+    if (!SAFE_PATH_RE.test(p) || p.includes("..")) {
+      console.warn(`[lifecycle] rejecting unsafe mount_path: ${p.slice(0, 40)}`);
+      return undefined;
+    }
+    return p;
+  }
 
   for (let i = 0; i < resources.length; i++) {
     const r = resources[i];
-    const mountTarget = r.mount_path
-      ? `/uploads/${r.mount_path}`
+    const safeMountPath = sanitizeMountPath(r.mount_path);
+    const mountTarget = safeMountPath
+      ? `/uploads/${safeMountPath}`
       : `/tmp/resources/resource_${i}`;
 
-    // Ensure parent directory exists for mount_path
-    if (r.mount_path) {
+    // Ensure parent directory exists — use argv form (no shell)
+    if (safeMountPath) {
       const dir = mountTarget.substring(0, mountTarget.lastIndexOf("/"));
-      await provider.exec(spriteName, ["bash", "-c", `mkdir -p "${dir}"`]);
+      await provider.exec(spriteName, ["mkdir", "-p", dir]);
     }
+
+    // Write content using "sh -c 'cat > \"$1\"' sh <path>" pattern —
+    // the path is passed as a positional arg, never shell-interpolated.
+    const writeTo = async (target: string, content: string) => {
+      await provider.exec(spriteName, ["sh", "-c", "cat > \"$1\"", "sh", target], { stdin: content });
+    };
 
     if (r.type === "uri" && r.uri) {
       try {
@@ -297,13 +327,13 @@ export async function provisionResources(
           console.warn(`[lifecycle] skipping resource ${r.uri}: body too large`);
           continue;
         }
-        await provider.exec(spriteName, ["bash", "-c", `cat > "${mountTarget}"`], { stdin: content });
+        await writeTo(mountTarget, content);
       } catch (err) {
         console.warn(`[lifecycle] failed to provision URI resource ${r.uri}:`, err);
       }
     } else if (r.type === "text" && r.content) {
       try {
-        await provider.exec(spriteName, ["bash", "-c", `cat > "${mountTarget}"`], { stdin: r.content });
+        await writeTo(mountTarget, r.content);
       } catch (err) {
         console.warn(`[lifecycle] failed to provision text resource:`, err);
       }
@@ -321,18 +351,28 @@ export async function provisionResources(
           console.warn(`[lifecycle] skipping file ${r.file_id}: too large`);
           continue;
         }
-        await provider.exec(spriteName, ["bash", "-c", `cat > "${mountTarget}"`], { stdin: data.toString("utf8") });
+        await writeTo(mountTarget, data.toString("utf8"));
       } catch (err) {
         console.warn(`[lifecycle] failed to provision file resource ${r.file_id}:`, err);
       }
     } else if (r.type === "github_repository" && r.repository_url) {
       try {
-        const repoDir = r.mount_path ? `/uploads/${r.mount_path}` : `/tmp/resources/repo_${i}`;
-        let gitCmd = `git clone --depth 1`;
-        if (r.branch) gitCmd += ` --branch "${r.branch}"`;
-        gitCmd += ` "${r.repository_url}" "${repoDir}"`;
-        if (r.commit) gitCmd += ` && cd "${repoDir}" && git checkout "${r.commit}"`;
-        const result = await provider.exec(spriteName, ["bash", "-c", gitCmd], { timeoutMs: 120_000 });
+        const repoDir = safeMountPath ? `/uploads/${safeMountPath}` : `/tmp/resources/repo_${i}`;
+        // Validate branch/commit — alphanumeric + hyphen/dot/slash only
+        const SAFE_REF_RE = /^[a-zA-Z0-9_./\-]+$/;
+        const safeBranch = r.branch && SAFE_REF_RE.test(r.branch) ? r.branch : undefined;
+        const safeCommit = r.commit && SAFE_REF_RE.test(r.commit) ? r.commit : undefined;
+        if (r.branch && !safeBranch) console.warn(`[lifecycle] rejecting unsafe branch: ${r.branch.slice(0, 40)}`);
+        if (r.commit && !safeCommit) console.warn(`[lifecycle] rejecting unsafe commit: ${r.commit.slice(0, 40)}`);
+
+        // Build git clone as argv array — no shell interpolation
+        const gitArgs = ["git", "clone", "--depth", "1"];
+        if (safeBranch) { gitArgs.push("--branch", safeBranch); }
+        gitArgs.push("--", r.repository_url, repoDir);
+        const result = await provider.exec(spriteName, gitArgs, { timeoutMs: 120_000 });
+        if (safeCommit && result.exit_code === 0) {
+          await provider.exec(spriteName, ["git", "-C", repoDir, "checkout", safeCommit], { timeoutMs: 30_000 });
+        }
         if (result.exit_code !== 0) {
           console.warn(`[lifecycle] git clone failed for ${r.repository_url}: ${result.stderr.slice(0, 200)}`);
         }
