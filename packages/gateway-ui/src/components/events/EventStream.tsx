@@ -18,7 +18,7 @@ export function EventStream() {
   if (!sessionId) return <p className="p-3 text-xs text-muted-foreground/50">No session selected</p>;
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex flex-col overflow-hidden">
       <div className="flex items-center justify-between border-b border-border px-3 py-1.5">
         <span className="font-mono text-xs text-muted-foreground">{list.length} events</span>
         <Button

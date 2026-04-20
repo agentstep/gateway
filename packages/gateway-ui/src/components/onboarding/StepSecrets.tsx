@@ -29,8 +29,10 @@ export function StepSecrets({ engine, model, provider, agentId, agentName, hasEx
   const [vaultName, setVaultName] = useState(defaultVaultName);
   const { data: vaults } = useVaults();
 
-  // Filter vaults to only those owned by this agent (enforced server-side too)
-  const ownedVaults = agentId ? (vaults ?? []).filter(v => v.agent_id === agentId) : (vaults ?? []);
+  // Filter vaults to only those owned by this agent. When creating a
+  // new agent (agentId is null), there are no owned vaults — show empty
+  // so the user doesn't accidentally pick a vault from another agent.
+  const ownedVaults = agentId ? (vaults ?? []).filter(v => v.agent_id === agentId) : [];
 
   // Deduplicate by name — keep the most recent (first in list, API returns desc)
   const seen = new Set<string>();
@@ -160,7 +162,7 @@ export function StepSecrets({ engine, model, provider, agentId, agentName, hasEx
           {fields.map((f) => (
             <div key={f.key} className="flex flex-col gap-1.5">
               <Label className="text-xs text-muted-foreground">{f.label}</Label>
-              <Input type="password" placeholder={f.key} value={values[f.key] || ""}
+              <Input type="password" placeholder={f.key === "ANTHROPIC_API_KEY" && engine === "claude" ? "ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN" : f.key} value={values[f.key] || ""}
                 onChange={(e) => setValues({ ...values, [f.key]: e.target.value })}
                 className="h-10 w-full text-foreground border-border bg-muted font-mono text-sm placeholder:text-muted-foreground focus-visible:ring-ring" />
             </div>

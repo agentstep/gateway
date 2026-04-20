@@ -33,16 +33,16 @@ export function EventRow({ event, prevEvent }: Props) {
   return (
     <div className="border-b border-border">
       <button
-        className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-muted"
+        className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-muted overflow-hidden min-w-0"
         onClick={() => setExpanded(!expanded)}
       >
         <ChevronRight className={cn("size-3 shrink-0 text-muted-foreground/50 transition-transform", expanded && "rotate-90")} />
         <span className="w-5 text-right font-mono text-xs text-muted-foreground">{event.seq}</span>
-        <Badge variant="outline" className={cn("h-4 rounded px-1.5 text-xs font-medium", badgeStyle(event.type))}>
+        <Badge variant="outline" className={cn("h-4 shrink-0 rounded px-1.5 font-mono text-xs font-medium whitespace-nowrap", badgeStyle(event.type))}>
           {event.type}
         </Badge>
-        <span className="flex-1 truncate text-xs text-muted-foreground">{preview}</span>
-        {delta > 0 && <span className="font-mono text-xs text-muted-foreground/50">+{delta}ms</span>}
+        <span className="w-0 flex-1 truncate text-xs text-muted-foreground">{preview}</span>
+        {delta > 0 && <span className="shrink-0 font-mono text-xs text-muted-foreground/50">+{delta}ms</span>}
       </button>
       {expanded && (
         <div className="relative border-t border-border bg-muted px-4 py-3">
@@ -74,6 +74,10 @@ function getPreview(type: string, event: SessionEvent): string {
   }
   if (type === "agent.tool_use") return (event.name as string) || "tool";
   if (type.includes("error")) return ((event.error as {message?: string})?.message) || "";
-  if (type.includes("status")) return (event.stop_reason as string) || "";
+  if (type.includes("status")) {
+    const sr = event.stop_reason;
+    if (sr && typeof sr === "object") return (sr as {type?: string}).type || "";
+    return (sr as string) || "";
+  }
   return "";
 }

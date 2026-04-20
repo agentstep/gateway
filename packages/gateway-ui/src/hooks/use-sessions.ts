@@ -7,7 +7,7 @@ export interface Session {
   environment_id: string;
   vault_ids?: string[];
   status: string;
-  stop_reason: string | null;
+  stop_reason: string | { type: string } | null;
   title: string | null;
   created_at: number;
   updated_at: number;

@@ -1,8 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
-import { ChevronDown, Search, X, Loader2, Plus, Trash2 } from "lucide-react";
+import { Search, X, Loader2, Plus, Trash2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
 import { useAgent, useUpdateAgent } from "@/hooks/use-agents";
 import { api } from "@/lib/api-client";
 import { fetchSkill } from "@/lib/skills";
@@ -88,13 +87,8 @@ export function PlaygroundSkills({ agentId }: Props) {
   const installedNames = new Set(skills.map(s => s.name));
 
   return (
-    <Collapsible>
-      <CollapsibleTrigger className="flex w-full items-center justify-between px-4 py-3 text-xs font-semibold uppercase tracking-widest text-muted-foreground hover:text-foreground transition-colors">
-        Skills {skills.length > 0 && <span className="font-mono text-[10px] font-normal">{skills.length}</span>}
-        <ChevronDown className="size-3.5 transition-transform data-[panel-open]:rotate-180" />
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <div className="flex flex-col gap-2 px-4 pb-4">
+    <div>
+        <div className="flex flex-col gap-2">
           {/* Search */}
           <div className="relative">
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3 text-muted-foreground" />
@@ -163,8 +157,7 @@ export function PlaygroundSkills({ agentId }: Props) {
             <p className="text-[10px] text-muted-foreground">No skills installed</p>
           ) : null}
         </div>
-      </CollapsibleContent>
-    </Collapsible>
+    </div>
   );
 }
 
