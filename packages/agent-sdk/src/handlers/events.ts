@@ -333,7 +333,56 @@ async function teeRemoteStreamInner(localSessionId: string, remoteSessionId: str
       return;
     }
 
-    teeLog(`[tee] tool result sent — re-opening stream`);
+    teeLog(`[tee] tool result sent — backfilling missed events before re-opening stream`);
+
+    // Backfill: poll Anthropic's events list to catch events emitted
+    // between reader.cancel() and the new SSE connection. Without this,
+    // the tool_result, status_running, agent.message etc. from the
+    // re-entry turn are lost.
+    try {
+      const backfillRes = await fetch(
+        `https://api.anthropic.com/v1/sessions/${remoteSessionId}/events?limit=50`,
+        {
+          headers: {
+            "x-api-key": apiKey,
+            "anthropic-version": "2023-06-01",
+            "anthropic-beta": "managed-agents-2026-04-01",
+          },
+        },
+      );
+      if (backfillRes.ok) {
+        const backfillBody = (await backfillRes.json()) as { data?: Array<Record<string, unknown>> };
+        const backfillEvents = backfillBody.data ?? [];
+        let backfilled = 0;
+        const typeMap: Record<string, string> = {
+          "agent": "agent.message",
+          "status_running": "session.status_running",
+          "status_idle": "session.status_idle",
+          "model_request_start": "span.model_request_start",
+          "model_request_end": "span.model_request_end",
+        };
+        for (const evt of backfillEvents) {
+          const evtId = (evt.id ?? "") as string;
+          if (!evtId || seenIds.has(evtId)) continue;
+          // Skip user events
+          const evtType = (evt.type ?? "") as string;
+          if (evtType === "user" || evtType === "user.message" || evtType === "user.custom_tool_result") continue;
+          seenIds.add(evtId);
+          const localType = typeMap[evtType] ?? evtType;
+          appendEvent(localSessionId, {
+            type: localType,
+            payload: evt,
+            origin: "server",
+            processedAt: Date.now(),
+          });
+          backfilled++;
+        }
+        teeLog(`[tee] backfilled ${backfilled} events from Anthropic`);
+      }
+    } catch (err) {
+      teeLog(`[tee] backfill failed:`, err);
+    }
+
     reentryCount++;
   }
 
