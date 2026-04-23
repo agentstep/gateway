@@ -67,7 +67,7 @@ const NetworkingSchema = z.union([
 
 const ConfigSchema = z.object({
   type: z.literal("cloud"),
-  provider: z.enum(["sprites", "docker", "apple-container", "apple-firecracker", "podman", "e2b", "vercel", "daytona", "fly", "modal", "mvm", "anthropic"]).optional(),
+  provider: z.enum(["sprites", "docker", "apple-container", "apple-firecracker", "podman", "e2b", "vercel", "daytona", "fly", "modal", "mvm", "anthropic", "cloud-run"]).optional(),
   packages: PackagesSchema,
   networking: NetworkingSchema.optional(),
 });
