@@ -48,9 +48,7 @@ export async function forwardToAnthropic(
   const origUrl = new URL(request.url);
   url.search = origUrl.search;
 
-  // Stream endpoint requires agent-api beta; all others use managed-agents
-  const isStreamEndpoint = path.endsWith("/stream");
-  const beta = isStreamEndpoint ? "agent-api-2026-03-01" : BETA_HEADER;
+  const beta = BETA_HEADER;
 
   const headers = new Headers();
   headers.set("x-api-key", apiKey);

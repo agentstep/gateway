@@ -172,11 +172,11 @@ async function teeRemoteStreamInner(localSessionId: string, remoteSessionId: str
   // Outer loop: re-opens the SSE stream after handling a server-side tool
   while (reentryCount <= MAX_TEE_REENTRIES) {
     teeLog(`[tee] connecting to Anthropic stream for ${remoteSessionId} (iteration ${reentryCount})`);
-    const res = await fetch(`https://api.anthropic.com/v1/sessions/${remoteSessionId}/stream`, {
+    const res = await fetch(`https://api.anthropic.com/v1/sessions/${remoteSessionId}/events/stream`, {
       headers: {
         "x-api-key": apiKey,
         "anthropic-version": "2023-06-01",
-        "anthropic-beta": "agent-api-2026-03-01",
+        "anthropic-beta": "managed-agents-2026-04-01",
         "accept": "text/event-stream",
       },
     });
@@ -304,7 +304,7 @@ async function teeRemoteStreamInner(localSessionId: string, remoteSessionId: str
         headers: {
           "x-api-key": apiKey,
           "anthropic-version": "2023-06-01",
-          "anthropic-beta": "agent-api-2026-03-01",
+          "anthropic-beta": "managed-agents-2026-04-01",
           "content-type": "application/json",
         },
         body: JSON.stringify({
