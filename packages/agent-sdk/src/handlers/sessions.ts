@@ -333,6 +333,23 @@ export function handleCreateSession(request: Request): Promise<Response> {
         // stamp both with the same tenant so cross-tenant access
         // attempts are rejected identically by either code path.
         markProxied(session.id, "session", agentTenantId);
+
+        // Insert into session_resources table for consistency
+        if (data.resources?.length) {
+          const { createResource } = await import("../db/session-resources");
+          for (const r of data.resources) {
+            createResource(session.id, {
+              type: r.type as "file" | "github_repository",
+              file_id: r.file_id,
+              mount_path: r.mount_path,
+              url: r.type === "github_repository" ? r.repository_url : r.uri,
+              checkout: r.branch ? { type: "branch", name: r.branch }
+                : r.commit ? { type: "commit", name: r.commit }
+                : undefined,
+            });
+          }
+        }
+
         getActor(session.id);
         return jsonOk(session, 201);
       }
@@ -364,6 +381,22 @@ export function handleCreateSession(request: Request): Promise<Response> {
         api_key_id: auth.keyId,
         tenant_id: agentTenantId,
       });
+
+      // Insert into session_resources table so provisioning picks them up
+      if (data.resources?.length) {
+        const { createResource } = await import("../db/session-resources");
+        for (const r of data.resources) {
+          createResource(session.id, {
+            type: r.type as "file" | "github_repository",
+            file_id: r.file_id,
+            mount_path: r.mount_path,
+            url: r.type === "github_repository" ? r.repository_url : r.uri,
+            checkout: r.branch ? { type: "branch", name: r.branch }
+              : r.commit ? { type: "commit", name: r.commit }
+              : undefined,
+          });
+        }
+      }
 
       getActor(session.id);
       return jsonOk(session, 201);
