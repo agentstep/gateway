@@ -101,11 +101,20 @@ async function doInit(): Promise<void> {
   // 1e. Shutdown handlers
   installShutdownHandlers();
 
-  // 2. Stale-session recovery
+  // 2. Stale-session recovery (running sessions) + pool reconstruction
   try {
     await recoverStaleSessions();
   } catch (err) {
     console.error("[init] stale session recovery failed:", err);
+  }
+
+  // 2b. Rebuild in-memory pool for idle sessions that still have containers.
+  // recoverStaleSessions handles status='running'; this covers idle/error
+  // sessions whose containers survived the restart.
+  try {
+    await rebuildContainerPool();
+  } catch (err) {
+    console.error("[init] container pool rebuild failed:", err);
   }
 
   // 3. Sprite orphan reconcile (best-effort, non-blocking)
@@ -312,5 +321,64 @@ export async function recoverStaleSessions(): Promise<void> {
     } catch (err) {
       console.error(`[init] failed to recover session ${row.id}:`, err);
     }
+  }
+}
+
+/**
+ * Rebuild the in-memory container pool from DB for non-running sessions.
+ *
+ * recoverStaleSessions() handles status='running'. This function covers
+ * idle/error sessions that still have a sprite_name set — their containers
+ * survived the restart but the in-memory pool lost track of them.
+ *
+ * Without this, reconcileOrphans() would delete live containers and
+ * countInEnv() would under-report, breaking quota enforcement.
+ */
+async function rebuildContainerPool(): Promise<void> {
+  const db = getDb();
+  // Find all non-running sessions with a container that aren't already in the pool
+  const rows = db
+    .prepare(
+      `SELECT * FROM sessions WHERE sprite_name IS NOT NULL AND status != 'running' AND archived_at IS NULL`,
+    )
+    .all() as SessionRow[];
+
+  if (rows.length === 0) return;
+
+  let recovered = 0;
+  let cleared = 0;
+
+  for (const row of rows) {
+    // Skip if already registered by recoverStaleSessions
+    if (pool.getBySession(row.id)) continue;
+
+    try {
+      const envObj = getEnvironment(row.environment_id);
+      const provider = await resolveContainerProvider(envObj?.config?.provider);
+      const containers = await provider.list({ prefix: row.sprite_name! });
+      const alive = containers.some((c) => c.name === row.sprite_name);
+
+      if (alive) {
+        pool.register({
+          spriteName: row.sprite_name!,
+          envId: row.environment_id,
+          sessionId: row.id,
+          createdAt: nowMs(),
+        });
+        recovered++;
+      } else {
+        // Container is gone — clear the stale sprite_name
+        setSessionSprite(row.id, null);
+        cleared++;
+      }
+    } catch {
+      // Provider unavailable — clear sprite_name so future turns re-create
+      setSessionSprite(row.id, null);
+      cleared++;
+    }
+  }
+
+  if (recovered > 0 || cleared > 0) {
+    console.log(`[init] pool rebuild: ${recovered} containers recovered, ${cleared} stale references cleared`);
   }
 }

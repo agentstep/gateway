@@ -35,7 +35,9 @@ function state(): PoolState {
 export function register(entry: SpriteEntry): void {
   const s = state();
   const list = s.byEnv.get(entry.envId) ?? [];
-  list.push(entry);
+  if (!list.some(e => e.sessionId === entry.sessionId)) {
+    list.push(entry);
+  }
   s.byEnv.set(entry.envId, list);
   s.bySession.set(entry.sessionId, entry);
 }
