@@ -283,15 +283,20 @@ function getModelsFromCache(): Promise<ModelEntry[]> {
 
   cache.promise = fetchAllModels()
     .then((data) => {
-      if (data.length > 0) {
-        cache.data = data;
-        cache.fetchedAt = Date.now();
-      } else if (!cache.data) {
-        // No live data and no stale data — use fallback
-        cache.data = buildFallbackModels();
-        cache.fetchedAt = Date.now();
+      // Always merge fallback models so cloud models are available
+      // even when only Ollama returned data (no API keys set).
+      const fallback = buildFallbackModels();
+      const seen = new Set(data.map((m) => m.id));
+      const merged = [...data];
+      for (const fb of fallback) {
+        if (!seen.has(fb.id)) {
+          merged.push(fb);
+          seen.add(fb.id);
+        }
       }
-      return cache.data!;
+      cache.data = merged;
+      cache.fetchedAt = Date.now();
+      return cache.data;
     })
     .catch(() => {
       // Stale-while-error
