@@ -22,6 +22,7 @@ import { EventStream } from "@/components/events/EventStream";
 import { PlaygroundSkills } from "@/components/playground/PlaygroundSkills";
 import { PlaygroundFiles } from "@/components/playground/PlaygroundFiles";
 import { toast } from "sonner";
+import { isLocalModel } from "@/lib/constants";
 
 // ─── Left panel ───────────────────────────────────────────────────────────────
 
@@ -134,6 +135,32 @@ function ConfigPanel({ sessionId, onSessionCreated }: ConfigPanelProps) {
                   <span className="text-muted-foreground">Created</span>
                   <span className="font-mono text-foreground">{new Date(session.created_at).toLocaleTimeString()}</span>
                 </div>
+                {(() => {
+                  const agent = agents?.find(a => a.id === session.agent?.id);
+                  const env = environments?.find(e => e.id === session.environment_id);
+                  return (
+                    <>
+                      {agent && (
+                        <>
+                          <div className="flex justify-between text-xs">
+                            <span className="text-muted-foreground">Model</span>
+                            <span className="font-mono text-foreground truncate max-w-[120px]">{agent.model}</span>
+                          </div>
+                          <div className="flex justify-between text-xs">
+                            <span className="text-muted-foreground">Engine</span>
+                            <span className="font-mono text-foreground">{(agent.engine ?? "claude") + (isLocalModel(agent.model) ? " (ollama)" : "")}</span>
+                          </div>
+                        </>
+                      )}
+                      {env?.config?.provider && (
+                        <div className="flex justify-between text-xs">
+                          <span className="text-muted-foreground">Provider</span>
+                          <span className="font-mono text-foreground">{env.config.provider}</span>
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
             </AccordionContent>
           </AccordionItem>
@@ -161,7 +188,11 @@ function ConfigPanel({ sessionId, onSessionCreated }: ConfigPanelProps) {
                   </SelectContent>
                 </Select>
                 {currentAgent && (
-                  <span className="font-mono text-[10px] text-muted-foreground pl-0.5">{currentAgent.model}</span>
+                  <div className="flex items-center gap-2 pl-0.5">
+                    <span className="font-mono text-[10px] text-muted-foreground">{currentAgent.model}</span>
+                    <span className="text-[10px] text-muted-foreground/60">·</span>
+                    <span className="text-[10px] text-muted-foreground">{(currentAgent.engine ?? "claude") + (isLocalModel(currentAgent.model) ? " (ollama)" : "")}</span>
+                  </div>
                 )}
               </div>
 
@@ -182,6 +213,13 @@ function ConfigPanel({ sessionId, onSessionCreated }: ConfigPanelProps) {
                     )}
                   </SelectContent>
                 </Select>
+                {(() => {
+                  const env = readyEnvironments.find(e => e.id === environmentId);
+                  const provider = env?.config?.provider;
+                  return provider ? (
+                    <span className="text-[10px] text-muted-foreground pl-0.5">{provider}</span>
+                  ) : null;
+                })()}
               </div>
 
               <div className="flex flex-col gap-1.5">
@@ -392,10 +430,10 @@ export function PlaygroundPage({ sessionId: initialSessionId }: { sessionId?: st
           <div className="flex h-full flex-col">
             <div className="shrink-0 px-4 py-3 border-b border-border">
               <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-                Output Files
+                Files
               </p>
             </div>
-            <div className="flex-1 overflow-y-auto">
+            <div className="flex-1 overflow-hidden">
               <PlaygroundFiles sessionId={playgroundSessionId} />
             </div>
           </div>
