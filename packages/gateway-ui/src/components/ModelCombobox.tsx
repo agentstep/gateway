@@ -111,7 +111,7 @@ export function ModelCombobox({ engine, value, onChange }: Props) {
       <PopoverContent className="w-80 p-0" align="start">
         <Command>
           <CommandInput placeholder="Search models..." />
-          <CommandList>
+          <CommandList className="max-h-[300px]">
             <CommandEmpty>
               {isLoading ? "Loading models..." : "No models found."}
             </CommandEmpty>
