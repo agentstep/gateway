@@ -167,8 +167,18 @@ export async function acquireForFirstTurn(sessionId: string): Promise<string> {
 
   const name = deriveSpriteName(sessionId);
   lcLog(`[lifecycle] ${sessionId} creating container via ${sp.name}...`);
-  await sp.create({ name });
-  lcLog(`[lifecycle] ${sessionId} container created: ${name}`);
+  try {
+    await sp.create({ name });
+    lcLog(`[lifecycle] ${sessionId} container created: ${name}`);
+  } catch (err) {
+    // If the container already exists (e.g. server restarted mid-setup),
+    // reuse it instead of failing. The engine may already be installed.
+    if (String(err).includes("already exists")) {
+      lcLog(`[lifecycle] ${sessionId} container ${name} already exists, reusing`);
+    } else {
+      throw err;
+    }
+  }
 
   // Backends with slow prep (e.g. opencode's npm install) bracket the work
   // with span events so the client sees something on the event stream
