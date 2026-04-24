@@ -28,5 +28,5 @@
     "@types/better-sqlite3": "^7.6.13",
     "@vitest/coverage-v8": "^4.1.4"
   },
-  "version": "0.4.12"
+  "version": "0.4.13"
 }
