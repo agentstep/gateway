@@ -29,7 +29,7 @@ gateway quickstart           # interactive: create agent, env, session, chat
 ### From source
 
 ```bash
-git clone https://github.com/agentstep/gateway.git
+git clone https://github.com/paulmeller/gateway.git
 cd gateway
 npm install
 npm run dev                  # Hono server on :4000 with hot reload
@@ -38,7 +38,7 @@ npm run dev                  # Hono server on :4000 with hot reload
 ### With Claude Code
 
 ```bash
-git clone https://github.com/agentstep/gateway.git
+git clone https://github.com/paulmeller/gateway.git
 cd gateway
 claude
 > /setup-gateway

@@ -5,7 +5,7 @@ Thanks for your interest in contributing! This project is Apache 2.0-licensed an
 ## Development Setup
 
 ```bash
-git clone https://github.com/agentstep/gateway.git
+git clone https://github.com/paulmeller/gateway.git
 cd gateway
 npm install
 npm test
