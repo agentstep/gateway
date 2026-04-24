@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { routeWrap, jsonOk } from "../http";
 import { getDb } from "../db/client";
-import { getSession, getSessionRow, setOutcomeCriteria } from "../db/sessions";
+import { getSession, getSessionRow, setOutcomeCriteria, bumpSessionStats, updateSessionMutable } from "../db/sessions";
 import { listEvents, rowToManagedEvent } from "../db/events";
 import { appendEvent } from "../sessions/bus";
 import { getActor } from "../sessions/actor";
@@ -196,6 +196,11 @@ async function teeRemoteStreamInner(localSessionId: string, remoteSessionId: str
     let sawRequiresAction = false;
     let lastToolUseEvt: Record<string, unknown> | null = null;
 
+    // Stats accumulators for this turn — flushed on status_idle
+    let turnToolCalls = 0;
+    let turnRunningAt = 0;
+    let turnUsage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+
     try {
       while (true) {
         const { done, value } = await reader.read();
@@ -236,6 +241,51 @@ async function teeRemoteStreamInner(localSessionId: string, remoteSessionId: str
                 processedAt: Date.now(),
               });
 
+              // ── Stats tracking for proxied sessions ──
+              if (localType === "session.status_running") {
+                turnRunningAt = Date.now();
+              }
+              if (localType.includes("tool_use")) {
+                turnToolCalls++;
+              }
+              // Capture usage from model_request_end (Anthropic puts it in "model_usage" or "usage")
+              if (localType === "span.model_request_end") {
+                const mu = (evt.model_usage ?? evt.usage) as Record<string, number> | undefined;
+                if (mu) {
+                  turnUsage.input_tokens += mu.input_tokens ?? 0;
+                  turnUsage.output_tokens += mu.output_tokens ?? 0;
+                  turnUsage.cache_read_input_tokens += mu.cache_read_input_tokens ?? 0;
+                  turnUsage.cache_creation_input_tokens += mu.cache_creation_input_tokens ?? 0;
+                }
+              }
+              // Flush stats on idle
+              if (localType === "session.status_idle") {
+                const activeSec = turnRunningAt > 0 ? (Date.now() - turnRunningAt) / 1000 : 0;
+                bumpSessionStats(
+                  localSessionId,
+                  { turn_count: 1, tool_calls_count: turnToolCalls, active_seconds: Math.round(activeSec), duration_seconds: Math.round(activeSec) },
+                  turnUsage.input_tokens > 0 || turnUsage.output_tokens > 0 ? turnUsage : undefined,
+                );
+                // Set title from first user message if not set
+                if (reentryCount === 0) {
+                  const session = getSession(localSessionId);
+                  if (session && !session.title) {
+                    const firstUserEvt = listEvents(localSessionId, { limit: 1, order: "asc" });
+                    if (firstUserEvt.length > 0 && firstUserEvt[0].type === "user.message") {
+                      try {
+                        const p = JSON.parse(firstUserEvt[0].payload_json) as { content?: Array<{ text?: string }> };
+                        const text = p.content?.[0]?.text;
+                        if (text) updateSessionMutable(localSessionId, { title: text.slice(0, 60) });
+                      } catch { /* ignore */ }
+                    }
+                  }
+                }
+                // Reset for next turn
+                turnToolCalls = 0;
+                turnRunningAt = 0;
+                turnUsage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+              }
+
               // Track tool_use events (Anthropic sends type "tool_use", not "agent.custom_tool_use")
               if (localType === "tool_use" || localType === "agent.custom_tool_use") {
                 lastToolUseEvt = evt;
@@ -243,8 +293,6 @@ async function teeRemoteStreamInner(localSessionId: string, remoteSessionId: str
 
               // When the stream goes idle and we saw a tool_use event,
               // break out of the reader loop to trigger re-entry.
-              // Can't wait for stream end — Anthropic keeps the SSE
-              // connection open indefinitely.
               if (localType === "session.status_idle" && lastToolUseEvt) {
                 sawRequiresAction = true;
                 teeLog(`[tee] idle with pending tool_use — breaking for re-entry`);
