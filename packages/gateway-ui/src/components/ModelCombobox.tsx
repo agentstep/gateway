@@ -123,9 +123,10 @@ export function ModelCombobox({ engine, value, onChange }: Props) {
                         onChange(engineId);
                         setOpen(false);
                       }}
+                      className="flex w-full items-center justify-between"
                     >
-                      <span className="truncate">{engineId}</span>
-                      <span className="ml-auto flex items-center gap-1.5">
+                      <span className="truncate flex-1 min-w-0">{engineId}</span>
+                      <span className="shrink-0 flex items-center gap-1.5 ml-2">
                         {model.local && (
                           <Badge className="bg-lime-400/15 text-lime-400 border-lime-400/30 text-[10px] px-1.5 py-0 h-4">
                             Local
