@@ -1,4 +1,4 @@
-import { Link, useNavigate } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/settings/PageHeader";
 import { useSessions } from "@/hooks/use-sessions";
@@ -86,15 +86,10 @@ export function SessionsPage() {
                   <TableRow
                     key={session.id}
                     className="cursor-pointer hover:bg-accent/30"
+                    onClick={() => navigate({ to: "/playground/$sessionId", params: { sessionId: session.id } })}
                   >
                     <TableCell className="font-medium text-foreground">
-                      <Link
-                        to="/playground/$sessionId"
-                        params={{ sessionId: session.id }}
-                        className="hover:underline"
-                      >
-                        {session.title ?? session.id.slice(0, 12) + "…"}
-                      </Link>
+                      {session.title ?? session.id.slice(0, 12) + "…"}
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">{agentName}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">{envName}</TableCell>
