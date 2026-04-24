@@ -30,15 +30,25 @@ const PROVIDER_LABELS: Record<string, string> = {
   unknown: "Other",
 };
 
-/** Group models by provider */
-function groupByProvider(models: ModelEntry[]): Record<string, ModelEntry[]> {
+/** Provider display order — most relevant first */
+const PROVIDER_ORDER = ["anthropic", "openai", "google", "ollama", "openrouter", "unknown"];
+
+/** Group models by provider, sorted by context window (largest first) */
+function groupByProvider(models: ModelEntry[]): Array<[string, ModelEntry[]]> {
   const groups: Record<string, ModelEntry[]> = {};
   for (const m of models) {
     const key = m.provider;
     if (!groups[key]) groups[key] = [];
     groups[key].push(m);
   }
-  return groups;
+  // Sort within each group: largest context window first
+  for (const list of Object.values(groups)) {
+    list.sort((a, b) => (b.context_window ?? 0) - (a.context_window ?? 0));
+  }
+  // Sort groups by provider order
+  return PROVIDER_ORDER
+    .filter((p) => groups[p])
+    .map((p) => [p, groups[p]] as [string, ModelEntry[]]);
 }
 
 /** Format context window for display */
@@ -78,7 +88,7 @@ export function ModelCombobox({ engine, value, onChange }: Props) {
     ? resolveEngineId(selectedModel)
     : value || "Select a model";
 
-  const grouped = models ? groupByProvider(models) : {};
+  const grouped = models ? groupByProvider(models) : [];
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -105,7 +115,7 @@ export function ModelCombobox({ engine, value, onChange }: Props) {
             <CommandEmpty>
               {isLoading ? "Loading models..." : "No models found."}
             </CommandEmpty>
-            {Object.entries(grouped).map(([provider, providerModels]) => (
+            {grouped.map(([provider, providerModels]) => (
               <CommandGroup
                 key={provider}
                 heading={PROVIDER_LABELS[provider] ?? provider}
