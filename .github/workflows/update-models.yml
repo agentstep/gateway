@@ -39,33 +39,54 @@ jobs:
           print(f'Pre-filtered: {len(filtered)} models')
           "
 
-          # 3. Claude curates the final list
+          # 3. Claude curates the final list via Anthropic API
           if [ -n "$ANTHROPIC_API_KEY" ]; then
-            npx claude -p "You are curating a model catalog for a coding agent gateway.
+            pip install anthropic -q
+            python3 -c "
+          import json, sys
+          from anthropic import Anthropic
 
-          Read the pre-filtered model list ($(python3 -c "import json; print(len(json.load(open('/tmp/pre-filtered.json'))))" ) models).
+          catalog = json.load(open('/tmp/pre-filtered.json'))
+          client = Anthropic()
 
-          Keep only models that are:
-          - Current generation (not deprecated, not legacy snapshots with date suffixes)
+          msg = client.messages.create(
+              model='claude-haiku-4-5',
+              max_tokens=8192,
+              messages=[{
+                  'role': 'user',
+                  'content': f'''You are curating a model catalog for a coding agent gateway.
+
+          Here are {len(catalog)} pre-filtered models. Keep only models that are:
+          - Current generation (not deprecated, not legacy snapshots)
           - Suitable for coding/chat agent workloads
-          - The canonical version (not date-stamped variants of the same model)
+          - The canonical version (not date-stamped variants)
 
-          Remove models that are:
-          - Old generations (gpt-3.5, gpt-4-turbo, etc. — keep gpt-4.1+ and gpt-5+)
-          - Preview/experimental builds unless they're the only version of that model
-          - Duplicates with different suffixes (-001, -latest) unless meaningfully different
+          Remove:
+          - Old generations (gpt-3.5, gpt-4-turbo — keep gpt-4.1+ and gpt-5+)
+          - Preview/experimental unless it is the only version
+          - Duplicates with -001, -latest suffixes unless meaningfully different
 
-          Output ONLY a valid JSON object with the same structure as the input.
-          Do not include any explanation, just the JSON." \
-              --input /tmp/pre-filtered.json \
-              --output /tmp/curated.json 2>/dev/null
+          Output ONLY a valid JSON object with the same structure. No explanation.
+
+          {json.dumps(catalog)}'''
+              }],
+          )
+
+          text = msg.content[0].text.strip()
+          # Extract JSON from response (may be wrapped in markdown code block)
+          if text.startswith('\`\`\`'):
+              text = text.split('\n', 1)[1].rsplit('\`\`\`', 1)[0]
+          curated = json.loads(text)
+          json.dump(curated, open('/tmp/curated.json', 'w'), indent=2)
+          print(f'Claude curated: {len(curated)} models (from {len(catalog)})')
+          "
 
             if [ -f /tmp/curated.json ] && python3 -c "import json; json.load(open('/tmp/curated.json'))" 2>/dev/null; then
               cp /tmp/curated.json packages/agent-sdk/src/lib/model-catalog.json
               TOTAL=$(python3 -c "import json; print(len(json.load(open('/tmp/curated.json'))))")
-              echo "Claude curated: $TOTAL models"
+              echo "Curated: $TOTAL models"
             else
-              echo "Claude curation failed — using pre-filtered list"
+              echo "Curation failed — using pre-filtered list"
               cp /tmp/pre-filtered.json packages/agent-sdk/src/lib/model-catalog.json
               TOTAL=$(python3 -c "import json; print(len(json.load(open('/tmp/pre-filtered.json'))))")
             fi
