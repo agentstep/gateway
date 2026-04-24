@@ -38,6 +38,15 @@ export function ChatThread() {
     return <OnboardingWizard />;
   }
 
+  // Show loading indicator while events are being fetched
+  if (!events) {
+    return (
+      <div className="flex-1 flex items-center justify-center">
+        <TypingIndicator />
+      </div>
+    );
+  }
+
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="mx-auto max-w-3xl py-6 px-4">
