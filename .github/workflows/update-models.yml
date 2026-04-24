@@ -43,42 +43,37 @@ jobs:
           if [ -n "$ANTHROPIC_API_KEY" ]; then
             pip install anthropic -q
             python3 -c "
-          import json, sys
+          import json
           from anthropic import Anthropic
 
           catalog = json.load(open('/tmp/pre-filtered.json'))
+          model_ids = sorted(catalog.keys())
           client = Anthropic()
 
           msg = client.messages.create(
               model='claude-sonnet-4-6',
-              max_tokens=8192,
+              max_tokens=4096,
               messages=[{
                   'role': 'user',
-                  'content': f'''You are curating a model catalog for a coding agent gateway.
+                  'content': '''Curate this model list for a coding agent gateway. Return ONLY the IDs to keep, one per line.
 
-          Here are {len(catalog)} pre-filtered models. Keep only models that are:
-          - Current generation (not deprecated, not legacy snapshots)
-          - Suitable for coding/chat agent workloads
-          - The canonical version (not date-stamped variants)
+          RULES:
+          - Keep ALL versions in the current generation of each model family
+          - Anthropic: keep claude-4.x only (haiku-4-5, sonnet-4-5/4-6, opus-4-5/4-6/4-7). Remove ALL claude-3.x.
+          - OpenAI: keep gpt-4.1+, ALL gpt-5.x, codex-mini-latest, o1-pro, o3-mini/pro, o4-mini. Remove gpt-3.5, gpt-4, gpt-4o, chatgpt-4o.
+          - Google: keep gemini-2.0+, 2.5+, 3.x. Include flash, pro, and -lite variants.
+          - Remove date-stamped models (20240307, 20250219, etc.)
+          - Remove -001 suffixes, -latest (except codex-mini-latest), -chat-latest, -experimental
+          - Keep deep-research variants
 
-          Remove:
-          - Old generations (gpt-3.5, gpt-4-turbo — keep gpt-4.1+ and gpt-5+)
-          - Preview/experimental unless it is the only version
-          - Duplicates with -001, -latest suffixes unless meaningfully different
-
-          Output ONLY a valid JSON object with the same structure. No explanation.
-
-          {json.dumps(catalog)}'''
+          ''' + chr(10).join(model_ids)
               }],
           )
 
-          text = msg.content[0].text.strip()
-          # Extract JSON from response (may be wrapped in markdown code block)
-          if text.startswith('\`\`\`'):
-              text = text.split('\n', 1)[1].rsplit('\`\`\`', 1)[0]
-          curated = json.loads(text)
+          kept = [l.strip() for l in msg.content[0].text.strip().split(chr(10)) if l.strip() and l.strip() in catalog]
+          curated = {k: catalog[k] for k in kept}
           json.dump(curated, open('/tmp/curated.json', 'w'), indent=2)
-          print(f'Claude curated: {len(curated)} models (from {len(catalog)})')
+          print(f'Curated: {len(curated)} models (from {len(catalog)})')
           "
 
             if [ -f /tmp/curated.json ] && python3 -c "import json; json.load(open('/tmp/curated.json'))" 2>/dev/null; then
