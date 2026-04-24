@@ -220,6 +220,8 @@ async function fetchAllModels(): Promise<ModelEntry[]> {
   if (process.env.OPENROUTER_ENABLED === "1") {
     fetchers.push(fetchOpenRouter().catch(() => []));
   }
+  // Fetch latest curated catalog from GitHub (updates daily, no auth needed)
+  fetchers.push(fetchRemoteCatalog().then((c) => c ? catalogToModels(c) : []).catch(() => []));
 
   const results = await Promise.allSettled(fetchers);
   const all: ModelEntry[] = [];
@@ -318,14 +320,23 @@ function getModelsFromCache(): Promise<ModelEntry[]> {
  * Only includes chat/completion models from major providers that work
  * with at least one gateway engine.
  */
-function buildFallbackModels(): ModelEntry[] {
-  let catalog: Record<string, Record<string, unknown>>;
+const CATALOG_URL = "https://raw.githubusercontent.com/agentstep/gateway/main/packages/agent-sdk/src/lib/model-catalog.json";
+let remoteCatalogCache: Record<string, Record<string, unknown>> | null = null;
+
+async function fetchRemoteCatalog(): Promise<Record<string, Record<string, unknown>> | null> {
+  if (remoteCatalogCache) return remoteCatalogCache;
   try {
-    catalog = require("./model-catalog.json") as Record<string, Record<string, unknown>>;
+    const res = await fetch(CATALOG_URL, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return null;
+    remoteCatalogCache = (await res.json()) as Record<string, Record<string, unknown>>;
+    return remoteCatalogCache;
   } catch {
-    // Catalog not bundled — fall back to the old hardcoded list
-    return buildLegacyFallback();
+    return null;
   }
+}
+
+/** Convert a LiteLLM-format catalog object into ModelEntry[]. */
+function catalogToModels(catalog: Record<string, Record<string, unknown>>): ModelEntry[] {
 
   const results: ModelEntry[] = [];
 
@@ -396,6 +407,17 @@ function buildFallbackModels(): ModelEntry[] {
   }
 
   return results;
+}
+
+/** Build fallback from bundled catalog or remote cache. */
+function buildFallbackModels(): ModelEntry[] {
+  if (remoteCatalogCache) return catalogToModels(remoteCatalogCache);
+  try {
+    const bundled = require("./model-catalog.json") as Record<string, Record<string, unknown>>;
+    return catalogToModels(bundled);
+  } catch {
+    return buildLegacyFallback();
+  }
 }
 
 /** Legacy hardcoded fallback — only used if model-catalog.json is missing. */
