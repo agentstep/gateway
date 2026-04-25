@@ -50,6 +50,7 @@ export function StepEnvironment({ onNext, onBack, engine }: Props) {
 
   // Surface unhealthy envs for debugging (user sees we have envs, they're just broken)
   const unhealthyCount = (envs?.length ?? 0) - readyEnvs.length;
+  const hasAnyEnvs = !isLoading && !isError && (envs?.length ?? 0) > 0;
   const hasExisting = !isLoading && !isError && readyEnvs.length > 0;
   const [mode, setMode] = useState<"select" | "create">("create");
   const [selectedId, setSelectedId] = useState("");
@@ -112,7 +113,13 @@ export function StepEnvironment({ onNext, onBack, engine }: Props) {
         </p>
       )}
 
-      {hasExisting && <ModeToggle mode={mode} onModeChange={setMode} />}
+      {hasAnyEnvs && <ModeToggle mode={mode} onModeChange={setMode} />}
+
+      {mode === "select" && !hasExisting && hasAnyEnvs && (
+        <p className="text-xs text-muted-foreground text-center py-4">
+          No compatible environments for the {engine ?? "selected"} engine. Create a new one below.
+        </p>
+      )}
 
       {mode === "select" && hasExisting && (
         <div className="flex flex-col gap-3">
