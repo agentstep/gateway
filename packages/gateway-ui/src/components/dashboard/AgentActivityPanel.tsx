@@ -6,6 +6,7 @@
  */
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAgentMetrics } from "@/hooks/use-metrics";
+import { useAgents } from "@/hooks/use-agents";
 import { BarList } from "./Sparkline";
 import { StatTile, formatUsd } from "./StatTile";
 
@@ -43,10 +44,12 @@ function stopReasonColor(key: string): string {
 }
 
 export function AgentActivityPanel({ windowMinutes }: { windowMinutes: number }) {
+  const { data: agents } = useAgents();
   const agentQuery = useAgentMetrics({
     windowMs: windowMinutes * 60_000,
     groupBy: "agent",
   });
+  const agentName = (id: string) => agents?.find(a => a.id === id)?.name ?? id.slice(0, 16) + "…";
 
   return (
     <div>
@@ -130,7 +133,7 @@ export function AgentActivityPanel({ windowMinutes }: { windowMinutes: number })
                 agentQuery.data?.groups
                   .filter((g) => g.cost_usd > 0)
                   .map((g) => ({
-                    label: g.key,
+                    label: agentName(g.key),
                     value: g.cost_usd,
                     subtitle: `${g.turn_count}t`,
                   })) ?? []
