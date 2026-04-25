@@ -1,7 +1,7 @@
 /**
  * M5 sweeper eviction tests — no real sprites.
  *
- * Mocks containers/lifecycle (formerly sprite/lifecycle) so releaseSession / reconcileOrphans are
+ * Mocks containers/lifecycle (formerly sprite/lifecycle) so releaseSession / reconcileOrphanSandboxes are
  * no-op spies. Seeds session rows directly and exercises the sweep loop.
  *
  * Covered:
@@ -18,14 +18,14 @@ import fs from "node:fs";
 import os from "node:os";
 
 const releaseSessionMock = vi.fn(async () => {});
-const reconcileOrphansMock = vi.fn(async () => ({ deleted: 0, kept: 0 }));
-const reconcileDockerOrphansMock = vi.fn(async () => ({ deleted: 0, kept: 0 }));
+const reconcileOrphanSandboxesMock = vi.fn(async () => ({ deleted: 0, kept: 0 }));
+const reconcileDockerOrphanSandboxesMock = vi.fn(async () => ({ deleted: 0, kept: 0 }));
 
 // Hoisted mock — must be at module top.
 vi.mock("../src/containers/lifecycle", () => ({
   releaseSession: releaseSessionMock,
-  reconcileOrphans: reconcileOrphansMock,
-  reconcileDockerOrphans: reconcileDockerOrphansMock,
+  reconcileOrphanSandboxes: reconcileOrphanSandboxesMock,
+  reconcileDockerOrphanSandboxes: reconcileDockerOrphanSandboxesMock,
   acquireForFirstTurn: vi.fn(async () => "ca-sess-fake"),
 }));
 
@@ -73,7 +73,7 @@ interface SeedSessionOpts {
   status?: "idle" | "running" | "terminated";
   idleSince?: number | null;
   createdAt?: number;
-  spriteName?: string | null;
+  sandboxName?: string | null;
   archivedAt?: number | null;
 }
 
@@ -84,14 +84,14 @@ async function seedSession(opts: SeedSessionOpts): Promise<void> {
     `INSERT INTO sessions (
        id, agent_id, agent_version, environment_id, status,
        title, metadata_json, created_at, updated_at,
-       sprite_name, idle_since, archived_at
+       sandbox_name, idle_since, archived_at
      ) VALUES (?, 'agent_s', 1, 'env_s', ?, NULL, '{}', ?, ?, ?, ?, ?)`,
   ).run(
     opts.id,
     opts.status ?? "idle",
     opts.createdAt ?? Date.now(),
     opts.createdAt ?? Date.now(),
-    opts.spriteName ?? null,
+    opts.sandboxName ?? null,
     opts.idleSince ?? null,
     opts.archivedAt ?? null,
   );
@@ -101,7 +101,7 @@ describe("sweeper eviction", () => {
   beforeEach(() => {
     freshDbEnv();
     releaseSessionMock.mockClear();
-    reconcileOrphansMock.mockClear();
+    reconcileOrphanSandboxesMock.mockClear();
   });
 
   it("evicts an idle session whose idle_since is past the TTL", async () => {
@@ -112,7 +112,7 @@ describe("sweeper eviction", () => {
       status: "idle",
       idleSince: now - 120_000, // way past 60s TTL
       createdAt: now - 200_000,
-      spriteName: "ca-sess-foo",
+      sandboxName: "ca-sess-foo",
     });
 
     const { runSweep, __resetSweeperState } = await import("../src/sessions/sweeper");
@@ -151,7 +151,7 @@ describe("sweeper eviction", () => {
       status: "idle",
       idleSince: null, // never ran a turn
       createdAt: now - 120_000, // created 2 minutes ago, TTL=60s
-      spriteName: null,
+      sandboxName: null,
     });
 
     const { runSweep, __resetSweeperState } = await import("../src/sessions/sweeper");
@@ -175,7 +175,7 @@ describe("sweeper eviction", () => {
       status: "idle",
       idleSince: now - 1000, // fresh
       createdAt: now - 5000,
-      spriteName: "ca-sess-fresh",
+      sandboxName: "ca-sess-fresh",
     });
 
     const { runSweep, __resetSweeperState } = await import("../src/sessions/sweeper");
@@ -198,7 +198,7 @@ describe("sweeper eviction", () => {
       status: "running",
       idleSince: now - 120_000, // ancient
       createdAt: now - 200_000,
-      spriteName: "ca-sess-running",
+      sandboxName: "ca-sess-running",
     });
 
     const { runSweep, __resetSweeperState } = await import("../src/sessions/sweeper");
@@ -221,7 +221,7 @@ describe("sweeper eviction", () => {
       status: "idle", // DB says idle...
       idleSince: now - 120_000,
       createdAt: now - 200_000,
-      spriteName: "ca-sess-inflight",
+      sandboxName: "ca-sess-inflight",
     });
 
     // ...but inFlightRuns says a turn is in progress (simulates the
@@ -259,7 +259,7 @@ describe("sweeper eviction", () => {
       status: "idle",
       idleSince: now - 120_000,
       createdAt: now - 200_000,
-      spriteName: "ca-sess-reentrant",
+      sandboxName: "ca-sess-reentrant",
     });
 
     const { runSweep, __resetSweeperState } = await import("../src/sessions/sweeper");

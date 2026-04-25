@@ -33,7 +33,7 @@ export function EnvironmentPopover({ envId, children }: Props) {
           </div>
           <div>
             <p className="text-xs uppercase tracking-wider text-muted-foreground mb-1">Provider</p>
-            <p className="font-mono text-xs text-muted-foreground">{env.config?.provider || "sprites"}</p>
+            <p className="font-mono text-xs text-muted-foreground">{env.config?.provider || "unknown"}</p>
           </div>
         </div>
       </PopoverContent>

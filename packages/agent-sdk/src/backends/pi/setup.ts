@@ -1,5 +1,5 @@
 /**
- * Install the pi.dev coding agent on a freshly-created sprite.
+ * Install the pi.dev coding agent on a freshly-created sandbox.
  *
  * Mirrors gemini/factory setup with the same sentinel + symlink pattern.
  * pi is distributed as the `@mariozechner/pi-coding-agent` npm package and
@@ -10,8 +10,8 @@ import { installPiWrapper } from "./wrapper-script";
 
 const SENTINEL_NAME = ".claude-agents-pi-installed";
 
-export async function preparePiOnSprite(spriteName: string, provider: ContainerProvider): Promise<void> {
-  await installPiWrapper(spriteName, provider);
+export async function preparePiOnSandbox(sandboxName: string, provider: ContainerProvider): Promise<void> {
+  await installPiWrapper(sandboxName, provider);
 
   const script = [
     "set -euo pipefail",
@@ -24,7 +24,7 @@ export async function preparePiOnSprite(spriteName: string, provider: ContainerP
     'touch "$SENTINEL"',
   ].join(" && ");
 
-  const result = await provider.exec(spriteName, ["bash", "-c", script], {
+  const result = await provider.exec(sandboxName, ["bash", "-c", script], {
     timeoutMs: 5 * 60_000,
   });
   if (result.exit_code !== 0) {

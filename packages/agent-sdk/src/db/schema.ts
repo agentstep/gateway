@@ -95,7 +95,7 @@ export const environments = sqliteTable("environments", {
   metadata_json: text("metadata_json").notNull().default("{}"),
   state: text("state").notNull().default("preparing"),
   state_message: text("state_message"),
-  template_sprite: text("template_sprite"),
+  template_sandbox: text("template_sandbox"),
   checkpoint_id: text("checkpoint_id"),
   // v0.5 ALTER TABLE addition:
   tenant_id: text("tenant_id"),
@@ -110,7 +110,7 @@ export const sessions = sqliteTable("sessions", {
   agent_id: text("agent_id").notNull(),
   agent_version: integer("agent_version").notNull(),
   environment_id: text("environment_id").notNull(),
-  sprite_name: text("sprite_name"),
+  sandbox_name: text("sandbox_name"),
   claude_session_id: text("claude_session_id"),
   status: text("status").notNull().default("idle"),
   stop_reason: text("stop_reason"),

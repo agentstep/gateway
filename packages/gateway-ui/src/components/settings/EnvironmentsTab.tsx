@@ -53,7 +53,7 @@ export function EnvironmentsTab() {
                 <TableRow key={e.id}>
                   <TableCell className="font-mono text-xs text-muted-foreground">{e.id.slice(0, 16)}...</TableCell>
                   <TableCell className="font-medium text-foreground">{e.name}</TableCell>
-                  <TableCell className="font-mono text-xs text-muted-foreground">{e.config?.provider || "sprites"}</TableCell>
+                  <TableCell className="font-mono text-xs text-muted-foreground">{e.config?.provider || "unknown"}</TableCell>
                   <TableCell>
                     <Badge variant="outline" className={cn("text-xs",
                       e.state === "ready" ? "border-lime-400/20 bg-lime-400/10 text-lime-400" : "text-muted-foreground"

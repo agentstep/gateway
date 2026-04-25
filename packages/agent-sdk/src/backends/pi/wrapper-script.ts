@@ -11,15 +11,15 @@ import type { ContainerProvider } from "../../providers/types";
 
 export const PI_WRAPPER_PATH = "/tmp/.pi-wrapper";
 
-const SPRITE_WRAPPER_SCRIPT = [
+const SANDBOX_WRAPPER_SCRIPT = [
   "#!/bin/bash",
   'while IFS= read -r line; do [ -z "$line" ] && break; export "$line"; done',
   'exec pi "$@"',
 ].join("\n");
 
-export async function installPiWrapper(spriteName: string, provider: ContainerProvider): Promise<void> {
-  const escaped = SPRITE_WRAPPER_SCRIPT.replace(/'/g, "'\\''");
-  await provider.exec(spriteName, [
+export async function installPiWrapper(sandboxName: string, provider: ContainerProvider): Promise<void> {
+  const escaped = SANDBOX_WRAPPER_SCRIPT.replace(/'/g, "'\\''");
+  await provider.exec(sandboxName, [
     "bash",
     "-c",
     `printf '%s' '${escaped}' > ${PI_WRAPPER_PATH} && chmod +x ${PI_WRAPPER_PATH}`,

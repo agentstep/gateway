@@ -246,7 +246,7 @@ const EnvironmentPackages = z
   })
   .openapi({
     description:
-      "Package lists installed into the sprite during environment setup. All are optional.",
+      "Package lists installed into the sandbox during environment setup. All are optional.",
   });
 
 const EnvironmentNetworking = z.union([

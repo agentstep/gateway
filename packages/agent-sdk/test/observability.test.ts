@@ -59,8 +59,8 @@ function freshDbEnv(): void {
 vi.mock("../src/containers/lifecycle", () => ({
   acquireForFirstTurn: vi.fn(async () => "ca-sess-fake"),
   releaseSession: vi.fn(async () => {}),
-  reconcileOrphans: vi.fn(async () => ({ deleted: 0, kept: 0 })),
-  reconcileDockerOrphans: vi.fn(async () => ({ deleted: 0, kept: 0 })),
+  reconcileOrphanSandboxes: vi.fn(async () => ({ deleted: 0, kept: 0 })),
+  reconcileDockerOrphanSandboxes: vi.fn(async () => ({ deleted: 0, kept: 0 })),
 }));
 
 /**
@@ -118,7 +118,7 @@ async function seedMinimalSchema(
   db.prepare(
     `INSERT INTO sessions (
        id, agent_id, agent_version, environment_id, status,
-       title, metadata_json, created_at, updated_at, sprite_name
+       title, metadata_json, created_at, updated_at, sandbox_name
      ) VALUES (?, ?, 1, 'env_o', 'idle', NULL, '{}', ?, ?, 'ca-sess-fake')`,
   ).run(sessionId, agentId, now, now);
 }

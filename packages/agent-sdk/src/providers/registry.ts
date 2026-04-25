@@ -25,7 +25,8 @@ const PROVIDERS: Record<ProviderName, () => Promise<ContainerProvider>> = {
 export async function resolveContainerProvider(
   providerName?: string | null,
 ): Promise<ContainerProvider> {
-  const key = (providerName ?? "sprites") as ProviderName;
+  if (!providerName) throw new Error("No container provider specified — set provider in the environment config");
+  const key = providerName as ProviderName;
   const loader = PROVIDERS[key];
   if (!loader) throw new Error(`Unknown provider: "${key}". Available: ${Object.keys(PROVIDERS).join(", ")}`);
   return loader();

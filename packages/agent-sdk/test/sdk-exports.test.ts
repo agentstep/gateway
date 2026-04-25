@@ -93,9 +93,10 @@ describe("Provider Registry", () => {
     );
   });
 
-  it("defaults to sprites when no provider name given", async () => {
+  it("throws when no provider name given", async () => {
     const { resolveContainerProvider } = await import("../src/providers/registry");
-    const provider = await resolveContainerProvider(null);
-    expect(provider.name).toBe("sprites");
+    await expect(resolveContainerProvider(null)).rejects.toThrow(
+      /No container provider specified/,
+    );
   });
 });

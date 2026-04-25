@@ -1,12 +1,12 @@
 /**
- * Session-scoped sprite lifecycle.
+ * Session-scoped sandbox lifecycle.
  *
  * - Sprites are reserved **lazily** on the first user.message, not at
  *   `POST /v1/sessions` time. This keeps session creation fast and decoupled
- *   from sprite provisioning latency.
- * - Each session is pinned 1:1 to a sprite for its lifetime. No rebalancing.
+ *   from sandbox provisioning latency.
+ * - Each session is pinned 1:1 to a sandbox for its lifetime. No rebalancing.
  * - There is no park/restore capability: sprites.dev checkpoints are
- *   per-sprite only (no cross-sprite restore) and there is no suspend API.
+ *   per-sandbox only (no cross-sandbox restore) and there is no suspend API.
  *   Idle sessions are evicted by the sweeper — see `sessions/sweeper.ts`.
  * - Orphan reconciliation runs on startup and periodically from the sweeper.
  */
@@ -19,7 +19,7 @@ import { getEnvironment, getEnvironmentRow } from "../db/environments";
 import {
   getSession,
   getSessionRow,
-  setSessionSprite,
+  setSessionSandbox,
 } from "../db/sessions";
 import { appendEvent } from "../sessions/bus";
 import { getConfig } from "../config";
@@ -36,7 +36,7 @@ const lcLog = (...args: unknown[]): void => {
   if (process.env.DEBUG_LIFECYCLE === "1") console.log(...args);
 };
 
-const SPRITE_NAME_PREFIX = "ca-sess-";
+const SANDBOX_NAME_PREFIX = "ca-sess-";
 
 /**
  * Install agent skills into the container.
@@ -45,7 +45,7 @@ const SPRITE_NAME_PREFIX = "ca-sess-";
  * For all backends: also writes to /home/agent/.agents/skills/<name>/SKILL.md
  */
 export async function installSkills(
-  spriteName: string,
+  sandboxName: string,
   provider: import("../providers/types").ContainerProvider,
   skills: AgentSkill[],
   engine: string,
@@ -64,40 +64,40 @@ export async function installSkills(
 
   if (engine === "claude") {
     // Claude Code reads from .claude/skills/ directory
-    await provider.exec(spriteName, ["mkdir", "-p", "/home/agent/.claude/skills"]);
+    await provider.exec(sandboxName, ["mkdir", "-p", "/home/agent/.claude/skills"]);
 
     for (const skill of safeSkills) {
       const dirPath = `/home/agent/.claude/skills/${skill.name}`;
       const filePath = `${dirPath}/SKILL.md`;
-      await provider.exec(spriteName, ["mkdir", "-p", dirPath]);
-      await provider.exec(spriteName, ["sh", "-c", "cat > \"$1\"", "sh", filePath], {
+      await provider.exec(sandboxName, ["mkdir", "-p", dirPath]);
+      await provider.exec(sandboxName, ["sh", "-c", "cat > \"$1\"", "sh", filePath], {
         stdin: skill.content,
       });
     }
   }
 
   // Also write to .agents/skills/ for universal agent compatibility
-  await provider.exec(spriteName, ["mkdir", "-p", "/home/agent/.agents/skills"]);
+  await provider.exec(sandboxName, ["mkdir", "-p", "/home/agent/.agents/skills"]);
   for (const skill of safeSkills) {
     const dirPath = `/home/agent/.agents/skills/${skill.name}`;
     const filePath = `${dirPath}/SKILL.md`;
-    await provider.exec(spriteName, ["mkdir", "-p", dirPath]);
-    await provider.exec(spriteName, ["sh", "-c", "cat > \"$1\"", "sh", filePath], {
+    await provider.exec(sandboxName, ["mkdir", "-p", dirPath]);
+    await provider.exec(sandboxName, ["sh", "-c", "cat > \"$1\"", "sh", filePath], {
       stdin: skill.content,
     });
   }
 }
 
-function deriveSpriteName(sessionId: string): string {
+function deriveSandboxName(sessionId: string): string {
   // Stable prefix + ULID tail, lowercased (sprites.dev requires lowercase names).
-  return `${SPRITE_NAME_PREFIX}${sessionId.replace(/^sess_/, "").toLowerCase()}`;
+  return `${SANDBOX_NAME_PREFIX}${sessionId.replace(/^sess_/, "").toLowerCase()}`;
 }
 
 /**
- * Acquire a sprite for the session if one is not already bound. Called
+ * Acquire a sandbox for the session if one is not already bound. Called
  * from the driver on the first turn (not from the session create route).
  *
- * Runs the agent's backend-specific `prepareOnSprite` hook after the sprite
+ * Runs the agent's backend-specific `prepareOnSandbox` hook after the sandbox
  * is created. For claude this is a sub-second wrapper install; for opencode
  * it's a ~10-second npm install + symlink.
  *
@@ -109,7 +109,7 @@ function deriveSpriteName(sessionId: string): string {
 export async function acquireForFirstTurn(sessionId: string): Promise<string> {
   const row = getSessionRow(sessionId);
   if (!row) throw new ApiError(404, "not_found_error", `session not found: ${sessionId}`);
-  if (row.sprite_name) return row.sprite_name;
+  if (row.sandbox_name) return row.sandbox_name;
 
   const env = getEnvironmentRow(row.environment_id);
   if (!env) throw new ApiError(404, "not_found_error", "environment not found");
@@ -121,8 +121,8 @@ export async function acquireForFirstTurn(sessionId: string): Promise<string> {
     );
   }
 
-  if (pool.countInEnv(env.id) >= getConfig().maxSpritesPerEnv) {
-    throw new ApiError(503, "server_busy", "env sprite pool exhausted");
+  if (pool.countInEnv(env.id) >= getConfig().maxSandboxesPerEnv) {
+    throw new ApiError(503, "server_busy", "env sandbox pool exhausted");
   }
 
   const agent = getAgent(row.agent_id, row.agent_version);
@@ -165,7 +165,7 @@ export async function acquireForFirstTurn(sessionId: string): Promise<string> {
       provider.delete(n, s ?? secrets),
   } : provider;
 
-  const name = deriveSpriteName(sessionId);
+  const name = deriveSandboxName(sessionId);
   lcLog(`[lifecycle] ${sessionId} creating container via ${sp.name}...`);
   try {
     await sp.create({ name });
@@ -196,7 +196,7 @@ export async function acquireForFirstTurn(sessionId: string): Promise<string> {
 
   try {
     lcLog(`[lifecycle] ${sessionId} installing ${backend.name} engine on container...`);
-    await backend.prepareOnSprite(name, sp);
+    await backend.prepareOnSandbox(name, sp);
     lcLog(`[lifecycle] ${sessionId} engine installed`);
 
     // Install custom tool bridge if the agent has custom tools or threads_enabled (claude backend only)
@@ -283,13 +283,13 @@ export async function acquireForFirstTurn(sessionId: string): Promise<string> {
   }
 
   pool.register({
-    spriteName: name,
+    sandboxName: name,
     envId: env.id,
     sessionId,
     createdAt: nowMs(),
     vaultSecrets: Object.keys(secrets).length > 0 ? secrets : undefined,
   });
-  setSessionSprite(sessionId, name);
+  setSessionSandbox(sessionId, name);
   return name;
 }
 
@@ -307,11 +307,11 @@ export async function acquireForFirstTurn(sessionId: string): Promise<string> {
  *   - github_repository: cloned via git
  */
 export async function provisionResources(
-  spriteName: string,
+  sandboxName: string,
   resources: SessionResource[],
   provider: import("../providers/types").ContainerProvider,
 ): Promise<void> {
-  await provider.exec(spriteName, ["mkdir", "-p", "/mnt/session/resources", "/mnt/session/uploads", "/mnt/session/outputs"]);
+  await provider.exec(sandboxName, ["mkdir", "-p", "/mnt/session/resources", "/mnt/session/uploads", "/mnt/session/outputs"]);
   const MAX_RESOURCE_BYTES = 50 * 1024 * 1024; // 50 MB
   // Sanitize mount_path — only safe path characters, no traversal
   const SAFE_PATH_RE = /^[a-zA-Z0-9_./\-]+$/;
@@ -344,15 +344,15 @@ export async function provisionResources(
     // Ensure parent directory exists — use argv form (no shell)
     const dir = mountTarget.substring(0, mountTarget.lastIndexOf("/"));
     if (dir) {
-      await provider.exec(spriteName, ["mkdir", "-p", dir]);
+      await provider.exec(sandboxName, ["mkdir", "-p", dir]);
     }
 
     // Write content using "sh -c 'cat > \"$1\"' sh <path>" pattern —
     // the path is passed as a positional arg, never shell-interpolated.
     // After writing, chmod a-w to make the mount read-only.
     const writeTo = async (target: string, content: string) => {
-      await provider.exec(spriteName, ["sh", "-c", "cat > \"$1\"", "sh", target], { stdin: content });
-      await provider.exec(spriteName, ["chmod", "a-w", target]);
+      await provider.exec(sandboxName, ["sh", "-c", "cat > \"$1\"", "sh", target], { stdin: content });
+      await provider.exec(sandboxName, ["chmod", "a-w", target]);
     };
 
     if (r.type === "uri" && r.uri) {
@@ -416,9 +416,9 @@ export async function provisionResources(
         const gitArgs = ["git", "clone", "--depth", "1"];
         if (safeBranch) { gitArgs.push("--branch", safeBranch); }
         gitArgs.push("--", r.repository_url, repoDir);
-        const result = await provider.exec(spriteName, gitArgs, { timeoutMs: 120_000 });
+        const result = await provider.exec(sandboxName, gitArgs, { timeoutMs: 120_000 });
         if (safeCommit && result.exit_code === 0) {
-          await provider.exec(spriteName, ["git", "-C", repoDir, "checkout", safeCommit], { timeoutMs: 30_000 });
+          await provider.exec(sandboxName, ["git", "-C", repoDir, "checkout", safeCommit], { timeoutMs: 30_000 });
         }
         if (result.exit_code !== 0) {
           console.warn(`[lifecycle] git clone failed for ${r.repository_url}: ${result.stderr.slice(0, 200)}`);
@@ -434,13 +434,13 @@ export async function provisionResources(
 export { installClaudeWrapper };
 
 /**
- * Release and delete the sprite bound to this session. Best-effort — logs
+ * Release and delete the sandbox bound to this session. Best-effort — logs
  * failures but does not throw.
  */
 export async function releaseSession(sessionId: string): Promise<void> {
   const entry = pool.unregister(sessionId);
   const row = getSessionRow(sessionId);
-  const name = entry?.spriteName ?? row?.sprite_name ?? null;
+  const name = entry?.sandboxName ?? row?.sandbox_name ?? null;
   if (name) {
     const envObj = row ? getEnvironment(row.environment_id) : null;
     const provider = await resolveContainerProvider(envObj?.config?.provider);
@@ -448,26 +448,26 @@ export async function releaseSession(sessionId: string): Promise<void> {
       console.warn(`releaseSession: failed to delete container ${name}:`, err);
     });
   }
-  if (row?.sprite_name) setSessionSprite(sessionId, null);
+  if (row?.sandbox_name) setSessionSandbox(sessionId, null);
 }
 
 /**
- * Reconcile orphaned sprites. Compares sprites.dev's fleet against our
+ * Reconcile orphaned sandboxes. Compares sprites.dev's fleet against our
  * sessions table and deletes anything with our prefix that has no active
  * session. Run on startup and on a 1h interval.
  */
-export async function reconcileOrphans(): Promise<{ deleted: number; kept: number }> {
+export async function reconcileOrphanSandboxes(): Promise<{ deleted: number; kept: number }> {
   let deleted = 0;
   let kept = 0;
 
   const liveNames = new Set(
-    pool.allSessionSprites().map((e) => e.spriteName).filter(Boolean),
+    pool.allSessionSandboxes().map((e) => e.sandboxName).filter(Boolean),
   );
 
   let token: string | undefined;
   for (;;) {
     const res = await listSprites({
-      prefix: SPRITE_NAME_PREFIX,
+      prefix: SANDBOX_NAME_PREFIX,
       max_results: 100,
       continuation_token: token,
     });
@@ -487,19 +487,19 @@ export async function reconcileOrphans(): Promise<{ deleted: number; kept: numbe
 }
 
 /**
- * Reconcile orphaned Docker containers. Same logic as reconcileOrphans
+ * Reconcile orphaned Docker containers. Same logic as reconcileOrphanSandboxes
  * but uses the Docker provider's list method (`docker ps --filter`).
- * Run alongside reconcileOrphans on startup and on a 1h interval.
+ * Run alongside reconcileOrphanSandboxes on startup and on a 1h interval.
  */
-export async function reconcileDockerOrphans(): Promise<{ deleted: number; kept: number }> {
+export async function reconcileDockerOrphanSandboxes(): Promise<{ deleted: number; kept: number }> {
   let deleted = 0;
   let kept = 0;
 
   const liveNames = new Set(
-    pool.allSessionSprites().map((e) => e.spriteName).filter(Boolean),
+    pool.allSessionSandboxes().map((e) => e.sandboxName).filter(Boolean),
   );
 
-  const containers = await dockerProvider.list({ prefix: SPRITE_NAME_PREFIX });
+  const containers = await dockerProvider.list({ prefix: SANDBOX_NAME_PREFIX });
   for (const c of containers) {
     if (liveNames.has(c.name)) {
       kept++;

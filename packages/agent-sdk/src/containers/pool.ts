@@ -1,15 +1,15 @@
 /**
- * Per-environment sprite pool + session-to-sprite affinity.
+ * Per-environment sandbox pool + session-to-sandbox affinity.
  *
- * Sessions are pinned 1:1 to a sprite for their entire lifetime. The pool
- * tracks which sprites are attached to which sessions so we can enforce
- * `max_sprites_per_env` and clean up on session delete.
+ * Sessions are pinned 1:1 to a sandbox for their entire lifetime. The pool
+ * tracks which sandboxes are attached to which sessions so we can enforce
+ * `max_sandboxes_per_env` and clean up on session delete.
  *
  * Pattern inspired by
  * 
  */
-export interface SpriteEntry {
-  spriteName: string;
+export interface SandboxEntry {
+  sandboxName: string;
   envId: string;
   sessionId: string;
   createdAt: number;
@@ -18,8 +18,8 @@ export interface SpriteEntry {
 }
 
 type PoolState = {
-  byEnv: Map<string, SpriteEntry[]>;
-  bySession: Map<string, SpriteEntry>;
+  byEnv: Map<string, SandboxEntry[]>;
+  bySession: Map<string, SandboxEntry>;
 };
 
 type GlobalPool = typeof globalThis & { __caPool?: PoolState };
@@ -32,7 +32,7 @@ function state(): PoolState {
   return g.__caPool;
 }
 
-export function register(entry: SpriteEntry): void {
+export function register(entry: SandboxEntry): void {
   const s = state();
   const list = s.byEnv.get(entry.envId) ?? [];
   if (!list.some(e => e.sessionId === entry.sessionId)) {
@@ -42,7 +42,7 @@ export function register(entry: SpriteEntry): void {
   s.bySession.set(entry.sessionId, entry);
 }
 
-export function getBySession(sessionId: string): SpriteEntry | null {
+export function getBySession(sessionId: string): SandboxEntry | null {
   return state().bySession.get(sessionId) ?? null;
 }
 
@@ -50,7 +50,7 @@ export function countInEnv(envId: string): number {
   return state().byEnv.get(envId)?.length ?? 0;
 }
 
-export function unregister(sessionId: string): SpriteEntry | null {
+export function unregister(sessionId: string): SandboxEntry | null {
   const s = state();
   const entry = s.bySession.get(sessionId);
   if (!entry) return null;
@@ -64,6 +64,6 @@ export function unregister(sessionId: string): SpriteEntry | null {
   return entry;
 }
 
-export function allSessionSprites(): SpriteEntry[] {
+export function allSessionSandboxes(): SandboxEntry[] {
   return Array.from(state().bySession.values());
 }

@@ -17,7 +17,7 @@ import { buildFactoryArgs } from "./args";
 import { buildFactoryAuthEnv, validateFactoryRuntime } from "./auth";
 import { createFactoryTranslator } from "./translator";
 import { FACTORY_WRAPPER_PATH } from "./wrapper-script";
-import { prepareFactoryOnSprite } from "./setup";
+import { prepareFactoryOnSandbox } from "./setup";
 
 function buildTurn(input: BuildTurnInput): BuildTurnResult {
   const { agent, backendSessionId, promptText, toolResults } = input;
@@ -42,7 +42,7 @@ export const factoryBackend: Backend = {
   wrapperPath: FACTORY_WRAPPER_PATH,
   buildTurn,
   createTranslator: (opts: TranslatorOptions) => createFactoryTranslator(opts),
-  prepareOnSprite: (name, provider) => prepareFactoryOnSprite(name, provider),
+  prepareOnSandbox: (name, provider) => prepareFactoryOnSandbox(name, provider),
 
   validateRuntime: validateFactoryRuntime,
 };
@@ -51,6 +51,6 @@ export {
   buildFactoryArgs,
   buildFactoryAuthEnv,
   createFactoryTranslator,
-  prepareFactoryOnSprite,
+  prepareFactoryOnSandbox,
   FACTORY_WRAPPER_PATH,
 };

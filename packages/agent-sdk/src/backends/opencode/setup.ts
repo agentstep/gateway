@@ -1,9 +1,9 @@
 /**
- * Install opencode on a freshly-created sprite.
+ * Install opencode on a freshly-created sandbox.
  *
  * Idempotent via a sentinel file at OPENCODE_INSTALLED_SENTINEL. First call
  * takes ~10 seconds on sprites.dev's base image.
- * Subsequent calls for the same sprite are instant (sentinel short-circuit).
+ * Subsequent calls for the same sandbox are instant (sentinel short-circuit).
  *
  * findings:
  * - sprites.dev base image has node v22.20.0 pre-installed via nvm at
@@ -22,8 +22,8 @@ import { installOpencodeWrapper } from "./wrapper-script";
 // (sprites.dev HOME=/home/sprite, Docker/Apple HOME=/root or /home/node)
 const SENTINEL_NAME = ".claude-agents-opencode-installed";
 
-export async function prepareOpencodeOnSprite(spriteName: string, provider: ContainerProvider): Promise<void> {
-  await installOpencodeWrapper(spriteName, provider);
+export async function prepareOpencodeOnSandbox(sandboxName: string, provider: ContainerProvider): Promise<void> {
+  await installOpencodeWrapper(sandboxName, provider);
 
   // Install opencode binary, sentinel-guarded for idempotency.
   // Uses /usr/local/bin/opencode for verification (not `which`) because
@@ -43,7 +43,7 @@ export async function prepareOpencodeOnSprite(spriteName: string, provider: Cont
     'touch "$SENTINEL"',
   ].join(" && ");
 
-  const result = await provider.exec(spriteName, ["bash", "-c", script], {
+  const result = await provider.exec(sandboxName, ["bash", "-c", script], {
     timeoutMs: 5 * 60_000, // 5 minutes — cold install typically <30s but leave headroom
   });
   if (result.exit_code !== 0) {

@@ -8,7 +8,7 @@
  *
  * Interrupts are implemented by aborting the HTTP fetch. This gives clean
  * client-visible semantics (session.status_idle{stop_reason: interrupted}
- * is emitted within milliseconds) even though the sprite-side process may
+ * is emitted within milliseconds) even though the sandbox-side process may
  * run to its natural completion.
  *
  * If sprites.dev later publishes a WS stdin protocol or a kill-by-name
@@ -57,16 +57,16 @@ function authHeaders(tokenOverride?: string): Record<string, string> {
 }
 
 /**
- * Start a streaming HTTP exec on a sprite. The `argv` becomes `?cmd=a&cmd=b...`
+ * Start a streaming HTTP exec on a sandbox. The `argv` becomes `?cmd=a&cmd=b...`
  * query params; stdin (if any) is posted as the request body; the response
  * body is the streamed stdout.
  *
  * When the AbortSignal fires, the underlying fetch is aborted — the HTTP
  * connection closes from our side, which the driver treats as an interrupted
- * turn. The sprite-side process is unaffected; it will finish naturally.
+ * turn. The sandbox-side process is unaffected; it will finish naturally.
  */
 export async function startExec(
-  spriteName: string,
+  sandboxName: string,
   opts: ExecOptions,
 ): Promise<ExecSession> {
   const params = new URLSearchParams();
@@ -87,7 +87,7 @@ export async function startExec(
   }
 
   const res = await fetch(
-    `${api()}/v1/sprites/${encodeURIComponent(spriteName)}/exec?${params.toString()}`,
+    `${api()}/v1/sprites/${encodeURIComponent(sandboxName)}/exec?${params.toString()}`,
     {
       method: "POST",
       headers: authHeaders(opts.secrets?.SPRITE_TOKEN),
@@ -102,12 +102,12 @@ export async function startExec(
     throw new ApiError(
       502,
       "server_error",
-      `sprite exec failed (${res.status}): ${text.slice(0, 300)}`,
+      `sandbox exec failed (${res.status}): ${text.slice(0, 300)}`,
     );
   }
   if (!res.body) {
     clearTimeout(timeoutId);
-    throw new ApiError(502, "server_error", "sprite exec returned no body");
+    throw new ApiError(502, "server_error", "sandbox exec returned no body");
   }
 
   let exitResolve: (v: ExecResult) => void = () => {};

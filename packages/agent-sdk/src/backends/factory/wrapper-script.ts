@@ -15,7 +15,7 @@ import type { ContainerProvider } from "../../providers/types";
 
 export const FACTORY_WRAPPER_PATH = "/tmp/.factory-wrapper";
 
-const SPRITE_WRAPPER_SCRIPT = [
+const SANDBOX_WRAPPER_SCRIPT = [
   "#!/bin/bash",
   "set -e",
   'while IFS= read -r line; do [ -z "$line" ] && break; export "$line"; done',
@@ -23,9 +23,9 @@ const SPRITE_WRAPPER_SCRIPT = [
   'exec droid "$@" "$PROMPT"',
 ].join("\n");
 
-export async function installFactoryWrapper(spriteName: string, provider: ContainerProvider): Promise<void> {
-  const escaped = SPRITE_WRAPPER_SCRIPT.replace(/'/g, "'\\''");
-  await provider.exec(spriteName, [
+export async function installFactoryWrapper(sandboxName: string, provider: ContainerProvider): Promise<void> {
+  const escaped = SANDBOX_WRAPPER_SCRIPT.replace(/'/g, "'\\''");
+  await provider.exec(sandboxName, [
     "bash",
     "-c",
     `printf '%s' '${escaped}' > ${FACTORY_WRAPPER_PATH} && chmod +x ${FACTORY_WRAPPER_PATH}`,

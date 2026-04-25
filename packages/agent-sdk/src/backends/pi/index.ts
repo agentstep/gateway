@@ -24,7 +24,7 @@ import { buildPiArgs } from "./args";
 import { buildPiAuthEnv, validatePiRuntime } from "./auth";
 import { createPiTranslator } from "./translator";
 import { PI_WRAPPER_PATH } from "./wrapper-script";
-import { preparePiOnSprite } from "./setup";
+import { preparePiOnSandbox } from "./setup";
 
 function buildTurn(input: BuildTurnInput): BuildTurnResult {
   const { agent, backendSessionId, promptText, toolResults } = input;
@@ -47,7 +47,7 @@ export const piBackend: Backend = {
   wrapperPath: PI_WRAPPER_PATH,
   buildTurn,
   createTranslator: (opts: TranslatorOptions) => createPiTranslator(opts),
-  prepareOnSprite: (name, provider) => preparePiOnSprite(name, provider),
+  prepareOnSandbox: (name, provider) => preparePiOnSandbox(name, provider),
 
   validateRuntime: validatePiRuntime,
 };
@@ -56,6 +56,6 @@ export {
   buildPiArgs,
   buildPiAuthEnv,
   createPiTranslator,
-  preparePiOnSprite,
+  preparePiOnSandbox,
   PI_WRAPPER_PATH,
 };

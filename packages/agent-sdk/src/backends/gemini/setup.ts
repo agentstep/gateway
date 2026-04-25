@@ -1,5 +1,5 @@
 /**
- * Install gemini CLI on a freshly-created sprite.
+ * Install gemini CLI on a freshly-created sandbox.
  *
  * Mirrors codex/setup.ts with the same sentinel + symlink pattern.
  * Gemini CLI is installed via npm from the @google/gemini-cli package.
@@ -9,8 +9,8 @@ import { installGeminiWrapper } from "./wrapper-script";
 
 const SENTINEL_NAME = ".claude-agents-gemini-installed";
 
-export async function prepareGeminiOnSprite(spriteName: string, provider: ContainerProvider): Promise<void> {
-  await installGeminiWrapper(spriteName, provider);
+export async function prepareGeminiOnSandbox(sandboxName: string, provider: ContainerProvider): Promise<void> {
+  await installGeminiWrapper(sandboxName, provider);
 
   const script = [
     "set -euo pipefail",
@@ -23,7 +23,7 @@ export async function prepareGeminiOnSprite(spriteName: string, provider: Contai
     'touch "$SENTINEL"',
   ].join(" && ");
 
-  const result = await provider.exec(spriteName, ["bash", "-c", script], {
+  const result = await provider.exec(sandboxName, ["bash", "-c", script], {
     timeoutMs: 5 * 60_000,
   });
   if (result.exit_code !== 0) {

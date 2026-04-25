@@ -125,7 +125,7 @@ export function updateEnvironmentCheckpoint(
 ): void {
   const db = getDrizzle();
   db.update(schema.environments)
-    .set({ checkpoint_id: checkpointId, template_sprite: templateSprite })
+    .set({ checkpoint_id: checkpointId, template_sandbox: templateSprite })
     .where(eq(schema.environments.id, id))
     .run();
 }

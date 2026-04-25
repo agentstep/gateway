@@ -10,7 +10,7 @@
  *   turns >= 2; pi auto-saves sessions to ~/.pi/agent/sessions
  * - `--model <provider/id[:level]>` selects the LLM
  * - `--no-extensions` skips local extension discovery so behavior is
- *   deterministic across sprites
+ *   deterministic across sandboxes
  * - System prompt is wrapped into the user prompt text via the shared
  *   wrapPromptWithSystem helper (pi has --system-prompt but we keep the
  *   same approach as the other prompt-wrapping backends to share the

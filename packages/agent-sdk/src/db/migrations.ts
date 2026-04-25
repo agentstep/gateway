@@ -9,7 +9,7 @@ import type Database from "libsql";
  *   - idempotency_key partial unique index dedupes client retries
  *   - stats / usage are columnar on sessions (not JSON blobs)
  *   - environments have async state machine (preparing → ready | failed)
- *   - sessions.sprite_name is NULL until first user.message (lazy reservation)
+ *   - sessions.sandbox_name is NULL until first user.message (lazy reservation)
  */
 export function runMigrations(db: InstanceType<typeof Database>): void {
   db.exec(`
@@ -59,7 +59,7 @@ export function runMigrations(db: InstanceType<typeof Database>): void {
       config_json TEXT NOT NULL,
       state TEXT NOT NULL DEFAULT 'preparing',
       state_message TEXT,
-      template_sprite TEXT,
+      template_sandbox TEXT,
       checkpoint_id TEXT,
       created_at INTEGER NOT NULL,
       archived_at INTEGER
@@ -70,7 +70,7 @@ export function runMigrations(db: InstanceType<typeof Database>): void {
       agent_id TEXT NOT NULL,
       agent_version INTEGER NOT NULL,
       environment_id TEXT NOT NULL,
-      sprite_name TEXT,
+      sandbox_name TEXT,
       -- Legacy name: holds any backend's session id (claude's session_id or
       -- opencode's sessionID). Kept as claude_session_id to avoid schema
       -- churn; see lib/backends/types.ts for the abstraction.
@@ -166,7 +166,7 @@ export function runMigrations(db: InstanceType<typeof Database>): void {
     );
   }
 
-  // Docker provider: provider_name on sessions (defaults to 'sprites' for existing rows)
+  // Docker provider: provider_name on sessions
   const sessionCols = db
     .prepare(`PRAGMA table_info(sessions)`)
     .all() as Array<{ name: string }>;
@@ -631,4 +631,18 @@ export function runMigrations(db: InstanceType<typeof Database>): void {
       UNIQUE(vault_id, display_name)
     )
   `);
+
+  // Rename sprite_name → sandbox_name, template_sprite → template_sandbox
+  const sessCols3 = db
+    .prepare(`PRAGMA table_info(sessions)`)
+    .all() as Array<{ name: string }>;
+  if (sessCols3.some((c) => c.name === "sprite_name")) {
+    db.exec(`ALTER TABLE sessions RENAME COLUMN sprite_name TO sandbox_name`);
+  }
+  const envCols3 = db
+    .prepare(`PRAGMA table_info(environments)`)
+    .all() as Array<{ name: string }>;
+  if (envCols3.some((c) => c.name === "template_sprite")) {
+    db.exec(`ALTER TABLE environments RENAME COLUMN template_sprite TO template_sandbox`);
+  }
 }

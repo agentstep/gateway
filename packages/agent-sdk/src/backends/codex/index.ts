@@ -2,7 +2,7 @@
  * Codex backend: drives OpenAI's `codex exec` on sprites.dev containers.
  *
  * The wrapper script + install flow mirror the opencode adapter's
- * sprite-side patterns (see `wrapper-script.ts`).
+ * sandbox-side patterns (see `wrapper-script.ts`).
  *
  * Custom tool re-entry is NOT supported by codex — codex exec has no
  * equivalent of claude's --input-format stream-json. buildTurn rejects
@@ -16,7 +16,7 @@ import { buildCodexArgs } from "./args";
 import { buildCodexAuthEnv, validateCodexRuntime } from "./auth";
 import { createCodexTranslator } from "./translator";
 import { CODEX_WRAPPER_PATH } from "./wrapper-script";
-import { prepareCodexOnSprite } from "./setup";
+import { prepareCodexOnSandbox } from "./setup";
 
 function buildTurn(input: BuildTurnInput): BuildTurnResult {
   const { agent, promptText, toolResults } = input;
@@ -38,7 +38,7 @@ export const codexBackend: Backend = {
   wrapperPath: CODEX_WRAPPER_PATH,
   buildTurn,
   createTranslator: (opts: TranslatorOptions) => createCodexTranslator(opts),
-  prepareOnSprite: (name, provider) => prepareCodexOnSprite(name, provider),
+  prepareOnSandbox: (name, provider) => prepareCodexOnSandbox(name, provider),
 
   validateRuntime: validateCodexRuntime,
 };
@@ -47,6 +47,6 @@ export {
   buildCodexArgs,
   buildCodexAuthEnv,
   createCodexTranslator,
-  prepareCodexOnSprite,
+  prepareCodexOnSandbox,
   CODEX_WRAPPER_PATH,
 };

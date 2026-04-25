@@ -1,5 +1,5 @@
 /**
- * Install codex on a freshly-created sprite.
+ * Install codex on a freshly-created sandbox.
  *
  * Mirrors lib/backends/opencode/setup.ts with the same sentinel + symlink
  * fix pattern Codex is installed via npm from the
@@ -12,8 +12,8 @@ import { installCodexWrapper } from "./wrapper-script";
 
 const SENTINEL_NAME = ".claude-agents-codex-installed";
 
-export async function prepareCodexOnSprite(spriteName: string, provider: ContainerProvider): Promise<void> {
-  await installCodexWrapper(spriteName, provider);
+export async function prepareCodexOnSandbox(sandboxName: string, provider: ContainerProvider): Promise<void> {
+  await installCodexWrapper(sandboxName, provider);
 
   const script = [
     "set -euo pipefail",
@@ -26,7 +26,7 @@ export async function prepareCodexOnSprite(spriteName: string, provider: Contain
     'touch "$SENTINEL"',
   ].join(" && ");
 
-  const result = await provider.exec(spriteName, ["bash", "-c", script], {
+  const result = await provider.exec(sandboxName, ["bash", "-c", script], {
     timeoutMs: 5 * 60_000,
   });
   if (result.exit_code !== 0) {

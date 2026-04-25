@@ -57,7 +57,7 @@ export interface BuildTurnResult {
 
 export interface Backend {
   name: BackendName;
-  /** Absolute path to this backend's wrapper script on the sprite */
+  /** Absolute path to this backend's wrapper script on the sandbox */
   wrapperPath: string;
   /**
    * Build argv + env + stdin primitives for one turn of this backend.
@@ -67,10 +67,10 @@ export interface Backend {
   /** Stateful translator, created fresh per turn */
   createTranslator(opts: TranslatorOptions): Translator;
   /**
-   * Install / verify the backend binary + wrapper on a freshly-created sprite.
+   * Install / verify the backend binary + wrapper on a freshly-created sandbox.
    * Safe to call multiple times (idempotent via sentinels).
    */
-  prepareOnSprite(spriteName: string, provider: ContainerProvider): Promise<void>;
+  prepareOnSandbox(sandboxName: string, provider: ContainerProvider): Promise<void>;
   /**
    * Agent-create-time validation: return an error message if this backend
    * cannot run with the current config (e.g. opencode + no API key).

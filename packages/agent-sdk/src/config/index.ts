@@ -20,7 +20,7 @@ export interface Config {
   agentTimeoutMs: number;
   spriteTimeoutMs: number;
   concurrency: number;
-  maxSpritesPerEnv: number;
+  maxSandboxesPerEnv: number;
   sessionMaxAgeMs: number;
   sweeperIntervalMs: number;
   /** OTLP/HTTP endpoint for trace export (OTEL_EXPORTER_OTLP_ENDPOINT). */
@@ -79,7 +79,7 @@ function loadConfig(): Config {
     agentTimeoutMs: num(process.env.AGENT_TIMEOUT_MS, 600_000),
     spriteTimeoutMs: num(process.env.SPRITE_TIMEOUT_MS, 30_000),
     concurrency: num(process.env.CONCURRENCY, 4),
-    maxSpritesPerEnv: num(process.env.MAX_SPRITES_PER_ENV, 8),
+    maxSandboxesPerEnv: num(process.env.MAX_SANDBOXES_PER_ENV, 8),
     sessionMaxAgeMs: num(process.env.SESSION_MAX_AGE_MS, 7 * 24 * 3600 * 1000),
     sweeperIntervalMs: num(process.env.SWEEPER_INTERVAL_MS, 60_000),
     otlpEndpoint:

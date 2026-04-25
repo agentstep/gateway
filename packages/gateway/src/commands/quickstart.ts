@@ -142,7 +142,7 @@ async function runInteractiveQuickstart(b: any, opts: any, verbose: boolean): Pr
         ...LOCAL_PROVIDERS.map((pr) => ({ value: pr, label: pr, hint: "local" })),
         ...CLOUD_PROVIDERS.map((pr) => ({ value: pr, label: pr, hint: "cloud" })),
       ],
-      initialValue: opts.provider ?? "sprites",
+      initialValue: opts.provider,
     });
     if (p.isCancel(provider)) { p.cancel("Cancelled."); process.exit(0); }
 

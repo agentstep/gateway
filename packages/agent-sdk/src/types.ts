@@ -174,7 +174,7 @@ export interface EnvironmentRow {
   metadata_json: string;
   state: EnvironmentState;
   state_message: string | null;
-  template_sprite: string | null;
+  template_sandbox: string | null;
   checkpoint_id: string | null;
   /** v0.5: tenant ownership. Null = legacy/global (pre-migration). */
   tenant_id: string | null;
@@ -205,7 +205,7 @@ export interface SessionRow {
   agent_id: string;
   agent_version: number;
   environment_id: string;
-  sprite_name: string | null;
+  sandbox_name: string | null;
   claude_session_id: string | null;
   status: SessionStatus;
   stop_reason: string | null;

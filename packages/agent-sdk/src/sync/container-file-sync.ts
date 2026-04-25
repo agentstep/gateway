@@ -114,7 +114,7 @@ function isBinaryExtension(p: string): boolean {
  * then filters to common code/text directories.
  */
 async function discoverChangedFiles(
-  spriteName: string,
+  sandboxName: string,
   provider: ContainerProvider,
   secrets?: ProviderSecrets,
 ): Promise<string[]> {
@@ -123,7 +123,7 @@ async function discoverChangedFiles(
     // Use -mmin -30 (modified in last 30 min) as a portable heuristic
     // since /proc/1/cmdline doesn't exist on macOS containers.
     const result = await provider.exec(
-      spriteName,
+      sandboxName,
       ["sh", "-c", [
         "find /home /root /workspace /mnt",
         "-maxdepth 4 -type f -mmin -30 -size +0c",
@@ -151,11 +151,11 @@ async function discoverChangedFiles(
  */
 export async function syncContainerFiles(opts: {
   sessionId: string;
-  spriteName: string;
+  sandboxName: string;
   provider: ContainerProvider;
   secrets?: ProviderSecrets;
 }): Promise<{ synced: number; skipped: number }> {
-  const { sessionId, spriteName, provider, secrets } = opts;
+  const { sessionId, sandboxName, provider, secrets } = opts;
 
   const extracted = extractFilePaths(sessionId);
   let allPaths = extracted.paths;
@@ -165,7 +165,7 @@ export async function syncContainerFiles(opts: {
   // the container. Only runs when file tools were actually invoked —
   // prevents syncing stale files from reused containers.
   if (allPaths.length === 0 && extracted.sawFileTools) {
-    allPaths = await discoverChangedFiles(spriteName, provider, secrets);
+    allPaths = await discoverChangedFiles(sandboxName, provider, secrets);
   }
   if (allPaths.length === 0) return { synced: 0, skipped: 0 };
 
@@ -201,7 +201,7 @@ export async function syncContainerFiles(opts: {
   for (const filePath of validPaths) {
     try {
       const result = await provider.exec(
-        spriteName,
+        sandboxName,
         ["cat", "--", filePath],
         { secrets, timeoutMs: 15000 },
       );

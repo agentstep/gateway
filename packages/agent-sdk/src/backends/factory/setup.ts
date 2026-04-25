@@ -1,5 +1,5 @@
 /**
- * Install factory (droid) CLI on a freshly-created sprite.
+ * Install factory (droid) CLI on a freshly-created sandbox.
  *
  * Mirrors codex/setup.ts with the same sentinel + symlink pattern.
  * Factory CLI is installed via npm from the @factory/cli package.
@@ -9,8 +9,8 @@ import { installFactoryWrapper } from "./wrapper-script";
 
 const SENTINEL_NAME = ".claude-agents-factory-installed";
 
-export async function prepareFactoryOnSprite(spriteName: string, provider: ContainerProvider): Promise<void> {
-  await installFactoryWrapper(spriteName, provider);
+export async function prepareFactoryOnSandbox(sandboxName: string, provider: ContainerProvider): Promise<void> {
+  await installFactoryWrapper(sandboxName, provider);
 
   const script = [
     "set -euo pipefail",
@@ -23,7 +23,7 @@ export async function prepareFactoryOnSprite(spriteName: string, provider: Conta
     'touch "$SENTINEL"',
   ].join(" && ");
 
-  const result = await provider.exec(spriteName, ["bash", "-c", script], {
+  const result = await provider.exec(sandboxName, ["bash", "-c", script], {
     timeoutMs: 5 * 60_000,
   });
   if (result.exit_code !== 0) {

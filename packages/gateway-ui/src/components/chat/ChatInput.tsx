@@ -22,7 +22,7 @@ export function ChatInput() {
   const { data: providerStatus } = useProviderStatus();
 
   const env = environments?.find((e) => e.id === session?.environment_id);
-  const providerName = env?.config?.provider || "sprites";
+  const providerName = env?.config?.provider || "unknown";
   const status = providerStatus?.[providerName];
   const providerAvailable = status?.available ?? true;
   const isRunning = session?.status === "running";

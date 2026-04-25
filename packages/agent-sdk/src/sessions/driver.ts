@@ -1,20 +1,20 @@
 /**
- * Turn driver — orchestrates one turn of a backend CLI against a sprite.
+ * Turn driver — orchestrates one turn of a backend CLI against a sandbox.
  *
  * Backend-agnostic: resolves the agent's `backend` field via the registry
  * and delegates argv/env/stdin construction + stream translation to the
- * concrete backend (claude, opencode, ...). The driver owns sprite
+ * concrete backend (claude, opencode, ...). The driver owns sandbox
  * acquisition, the stream loop, event bus appends, and usage persistence.
  *
  * Flow:
- *   1. Validate runtime config for the backend (fail fast before sprite).
- *   2. Lazy-acquire the sprite if the session has none yet.
+ *   1. Validate runtime config for the backend (fail fast before sandbox).
+ *   2. Lazy-acquire the sandbox if the session has none yet.
  *   3. Mark each pending user.message as processed (processed_at = now).
  *   4. Flip session status to "running", append `session.status_running`
  *      and `span.model_request_start`.
  *   5. Call backend.buildTurn → argv + env + stdin. Compose the wrapper
  *      stdin body as `envLines \n\n stdin`.
- *   6. Spawn exec on the sprite.
+ *   6. Spawn exec on the sandbox.
  *   7. Stream NDJSON through the translator, batch-append events per chunk.
  *   8. On successful exit: append `span.model_request_end`, update columnar
  *      usage, persist the latest backend session id, append
@@ -129,7 +129,7 @@ export async function runTurn(
 
   // Belt-and-braces runtime validation. Config may have changed since the
   // agent was created (env vars cleared, settings table mutated). Fail fast
-  // BEFORE sprite acquire / install so a 3-minute install isn't wasted on a
+  // BEFORE sandbox acquire / install so a 3-minute install isn't wasted on a
   // misconfigured backend.
   // Skip if session has vault entries — they provide keys at container level.
   if (!hasVaultKeys) {
@@ -188,12 +188,12 @@ export async function runTurn(
     }
   }
 
-  // Acquire sprite if needed
+  // Acquire sandbox if needed
   console.log(`[driver] ${sessionId} acquiring container...`);
-  let spriteName: string;
+  let sandboxName: string;
   try {
-    spriteName = await acquireForFirstTurn(sessionId);
-    console.log(`[driver] ${sessionId} container ready: ${spriteName}`);
+    sandboxName = await acquireForFirstTurn(sessionId);
+    console.log(`[driver] ${sessionId} container ready: ${sandboxName}`);
 
     // Re-inject skills if agent has been updated (new or changed skills)
     const latestAgent = getAgent(session.agent.id);
@@ -206,7 +206,7 @@ export async function runTurn(
         console.log(`[driver] ${sessionId} injecting ${newSkills.length} new skill(s)...`);
         const envRow = getEnvironment(session.environment_id);
         const sp = await resolveContainerProvider(envRow?.config?.provider);
-        await installSkills(spriteName, sp, newSkills, agent.engine);
+        await installSkills(sandboxName, sp, newSkills, agent.engine);
         console.log(`[driver] ${sessionId} skills injected`);
       }
     }
@@ -216,7 +216,7 @@ export async function runTurn(
     if (freshSession?.resources && freshSession.resources.length > 0) {
       const envRow = getEnvironment(session.environment_id);
       const sp = await resolveContainerProvider(envRow?.config?.provider);
-      await provisionResources(spriteName, freshSession.resources, sp);
+      await provisionResources(sandboxName, freshSession.resources, sp);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -327,7 +327,7 @@ export async function runTurn(
     let ollamaHostPort: string | undefined;
     if (!turnBuild.env.OLLAMA_HOST) {
       const envRow = getEnvironment(session.environment_id);
-      const provName = envRow?.config?.provider ?? "sprites";
+      const provName = envRow?.config?.provider ?? "docker";
       if (provName === "docker" || provName === "podman") {
         ollamaHostPort = "host.docker.internal:11434";
       } else if (provName === "apple-container" || provName === "apple-firecracker") {
@@ -408,19 +408,19 @@ export async function runTurn(
   // write response.json and remove the pending sentinel before --resume.
   if (agent.engine === "claude" && toolResults.length > 0) {
     const { TOOL_BRIDGE_RESPONSE_PATH, TOOL_BRIDGE_PENDING_PATH } = await import("../backends/claude/tool-bridge");
-    const spriteName = getSessionRow(sessionId)?.sprite_name;
-    if (spriteName) {
+    const sandboxName = getSessionRow(sessionId)?.sandbox_name;
+    if (sandboxName) {
       for (const r of toolResults) {
         const responseJson = JSON.stringify({ content: r.content });
         await provider.exec(
-          spriteName,
+          sandboxName,
           ["bash", "-c", `cat > ${TOOL_BRIDGE_RESPONSE_PATH}`],
           { stdin: responseJson, secrets },
         ).catch((err: unknown) => {
           console.warn(`[driver] failed to write tool bridge response:`, err);
         });
         await provider.exec(
-          spriteName,
+          sandboxName,
           ["rm", "-f", TOOL_BRIDGE_PENDING_PATH],
           { secrets },
         ).catch(() => {});
@@ -438,7 +438,7 @@ export async function runTurn(
 
   let exec;
   try {
-    exec = await provider.startExec(spriteName, {
+    exec = await provider.startExec(sandboxName, {
       argv,
       stdin,
       signal: controller.signal,
@@ -473,7 +473,7 @@ export async function runTurn(
   let permissionPollTimer: ReturnType<typeof setInterval> | null = null;
   if (agent.confirmation_mode) {
     permissionPollTimer = setInterval(() => {
-      void checkPermissionSentinel(sessionId, spriteName, provider).catch(
+      void checkPermissionSentinel(sessionId, sandboxName, provider).catch(
         (err: unknown) => {
           console.warn(`[driver] permission sentinel check failed:`, err);
         },
@@ -635,12 +635,12 @@ export async function runTurn(
   // Container file sync: extract modified files before going idle.
   // Must run before status_idle so the container is still alive.
   const sessionRowForSync = getSessionRow(sessionId);
-  if (sessionRowForSync?.sprite_name && !isProxied(sessionId)) {
+  if (sessionRowForSync?.sandbox_name && !isProxied(sessionId)) {
     try {
       const { syncContainerFiles } = await import("../sync/container-file-sync");
       const syncResult = await syncContainerFiles({
         sessionId,
-        spriteName: sessionRowForSync.sprite_name,
+        sandboxName: sessionRowForSync.sandbox_name,
         provider,
         secrets,
       });
@@ -678,7 +678,7 @@ export async function runTurn(
 
       // Write the spawn result as response.json into the container
       const { TOOL_BRIDGE_RESPONSE_PATH, TOOL_BRIDGE_PENDING_PATH } = await import("../backends/claude/tool-bridge");
-      const sprName = getSessionRow(sessionId)?.sprite_name;
+      const sprName = getSessionRow(sessionId)?.sandbox_name;
       if (sprName) {
         const responseJson = JSON.stringify({ content: [{ type: "text", text: serverToolResult.text }] });
         const envForSession = getEnvironment(session.environment_id);
@@ -925,14 +925,14 @@ function getPendingConfirmations(): Set<string> {
  */
 async function checkPermissionSentinel(
   sessionId: string,
-  spriteName: string,
+  sandboxName: string,
   provider: ContainerProvider,
 ): Promise<void> {
   if (getPendingConfirmations().has(sessionId)) return;
 
   try {
     const result = await provider.exec(
-      spriteName,
+      sandboxName,
       ["test", "-f", PERMISSION_BRIDGE_PENDING_PATH],
     );
     if (result.exit_code !== 0) return; // No pending sentinel
@@ -944,7 +944,7 @@ async function checkPermissionSentinel(
   let request: { tool_name?: string; tool_input?: unknown; tool_use_id?: string };
   try {
     const result = await provider.exec(
-      spriteName,
+      sandboxName,
       ["cat", PERMISSION_BRIDGE_REQUEST_PATH],
     );
     request = JSON.parse(result.stdout) as typeof request;
@@ -980,8 +980,8 @@ export async function writePermissionResponse(
   denyMessage?: string,
 ): Promise<void> {
   const row = getSessionRow(sessionId);
-  if (!row?.sprite_name) {
-    console.warn(`[driver] no sprite for session ${sessionId}, cannot write permission response`);
+  if (!row?.sandbox_name) {
+    console.warn(`[driver] no sandbox for session ${sessionId}, cannot write permission response`);
     return;
   }
 
@@ -996,7 +996,7 @@ export async function writePermissionResponse(
 
   try {
     await provider.exec(
-      row.sprite_name,
+      row.sandbox_name,
       ["bash", "-c", `cat > ${PERMISSION_BRIDGE_RESPONSE_PATH}`],
       { stdin: response, secrets: permSecrets },
     );

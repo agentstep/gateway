@@ -5,9 +5,9 @@
  * One timer means one set of interleaving concerns.
  *
  * Park/restore as originally planned is infeasible (spike S2: sprites.dev
- * checkpoints are per-sprite only; no stopSprite API). The correct M5
- * model is: pin the sprite for the session's lifetime, and evict the
- * session (release the sprite, terminate the row) after idle TTL expires.
+ * checkpoints are per-sandbox only; no stopSprite API). The correct M5
+ * model is: pin the sandbox for the session's lifetime, and evict the
+ * session (release the sandbox, terminate the row) after idle TTL expires.
  *
  * Re-entrancy: `sweeping` prevents overlapping ticks from stacking if a
  * prior sweep runs longer than the interval. A stuck `releaseSession` can
@@ -28,7 +28,7 @@ import {
   listIdleSessions,
   updateSessionStatus,
 } from "../db/sessions";
-import { releaseSession, reconcileOrphans, reconcileDockerOrphans } from "../containers/lifecycle";
+import { releaseSession, reconcileOrphanSandboxes, reconcileDockerOrphanSandboxes } from "../containers/lifecycle";
 
 let sweeping = false;
 let stopping = false;
@@ -55,13 +55,13 @@ export async function runSweep(): Promise<void> {
     const cfg = getConfig();
     if (cfg.spriteToken) {
       try {
-        await reconcileOrphans();
+        await reconcileOrphanSandboxes();
       } catch (e) {
-        console.warn("[sweeper] reconcile sprites failed:", e);
+        console.warn("[sweeper] reconcile sandboxes failed:", e);
       }
     }
     try {
-      await reconcileDockerOrphans();
+      await reconcileDockerOrphanSandboxes();
     } catch (e) {
       // Docker not available — skip silently
       if (!(e instanceof Error) || !e.message.includes("ENOENT")) {

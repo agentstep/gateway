@@ -75,7 +75,7 @@ export function StepEnvironment({ onNext, onBack, engine }: Props) {
     if (mode === "select") {
       const env = readyEnvs.find(e => e.id === selectedId);
       if (!env) { toast.error("Please select an environment"); return; }
-      onNext({ mode: "select", env: { id: env.id, name: env.name, provider: env.config?.provider || "sprites" } });
+      onNext({ mode: "select", env: { id: env.id, name: env.name, provider: env.config?.provider || "unknown" } });
     } else {
       if (!name.trim()) { toast.error("Environment name is required"); return; }
       if (!provider) { toast.error("Please select a provider"); return; }
@@ -125,7 +125,7 @@ export function StepEnvironment({ onNext, onBack, engine }: Props) {
               <SelectContent>
                 {readyEnvs.map((e) => (
                   <SelectItem key={e.id} value={e.id}>
-                    {e.name} <span className="text-muted-foreground ml-1">({e.config?.provider || "sprites"})</span>
+                    {e.name} <span className="text-muted-foreground ml-1">({e.config?.provider || "unknown"})</span>
                   </SelectItem>
                 ))}
               </SelectContent>

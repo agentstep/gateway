@@ -27,8 +27,8 @@ vi.mock("../src/containers/exec", async () => {
 vi.mock("../src/containers/lifecycle", () => ({
   acquireForFirstTurn: vi.fn(async () => "ca-sess-fake"),
   releaseSession: vi.fn(async () => {}),
-  reconcileOrphans: vi.fn(async () => ({ deleted: 0, kept: 0 })),
-  reconcileDockerOrphans: vi.fn(async () => ({ deleted: 0, kept: 0 })),
+  reconcileOrphanSandboxes: vi.fn(async () => ({ deleted: 0, kept: 0 })),
+  reconcileDockerOrphanSandboxes: vi.fn(async () => ({ deleted: 0, kept: 0 })),
 }));
 
 vi.mock("../src/providers/registry", async () => {
@@ -98,7 +98,7 @@ async function seedAgentEnvSession(): Promise<{ sessionId: string }> {
   db.prepare(
     `INSERT INTO sessions (
        id, agent_id, agent_version, environment_id, status,
-       title, metadata_json, created_at, updated_at, sprite_name
+       title, metadata_json, created_at, updated_at, sandbox_name
      ) VALUES ('sess_oc', 'agent_oc', 1, 'env_oc', 'idle', NULL, '{}', 0, 0, 'ca-sess-fake')`,
   ).run();
 

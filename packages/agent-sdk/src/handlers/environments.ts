@@ -121,7 +121,10 @@ export function handleCreateEnvironment(request: Request): Promise<Response> {
 
     // Pre-flight: check provider is available before creating the environment
     // Skip for cloud providers — their API keys are configured separately (vaults/secrets)
-    const providerName = parsed.data.config.provider ?? "sprites";
+    const providerName = parsed.data.config.provider;
+    if (!providerName) {
+      throw badRequest("config.provider is required — specify a sandbox provider (e.g. docker, apple-container)");
+    }
     const CLOUD_PROVIDERS = new Set(["sprites", "e2b", "vercel", "daytona", "fly", "modal", "anthropic"]);
     if (!CLOUD_PROVIDERS.has(providerName)) {
       const provider = await resolveProvider(providerName);

@@ -378,7 +378,7 @@ registry.registerPath({
   tags: ["Sessions"],
   summary: "Create a session",
   description:
-    "Creates a session idle and pinned to the specified agent version + environment. A sprite is NOT allocated until the first user.message event.",
+    "Creates a session idle and pinned to the specified agent version + environment. A sandbox is NOT allocated until the first user.message event.",
   security: [{ ApiKey: [] }],
   request: {
     body: {
@@ -470,7 +470,7 @@ registry.registerPath({
   tags: ["Sessions"],
   summary: "Delete (terminate) a session",
   description:
-    "Interrupts any in-flight turn, releases the sprite, and flips the session to `terminated` with `stop_reason:\"deleted\"`.",
+    "Interrupts any in-flight turn, releases the sandbox, and flips the session to `terminated` with `stop_reason:\"deleted\"`.",
   security: [{ ApiKey: [] }],
   request: { params: z.object({ id: z.string() }) },
   responses: {

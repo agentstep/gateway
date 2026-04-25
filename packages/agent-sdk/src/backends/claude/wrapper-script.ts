@@ -12,7 +12,7 @@ import type { ContainerProvider } from "../../providers/types";
 // Use /tmp/ for wrapper scripts — it exists on all container runtimes
 export const CLAUDE_WRAPPER_PATH = "/tmp/.claude-wrapper";
 
-const SPRITE_WRAPPER_SCRIPT = `#!/bin/sh
+const SANDBOX_WRAPPER_SCRIPT = `#!/bin/sh
 export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 # V8 bytecode cache: Node.js caches compiled JS to disk.
 # First run builds cache (~55s). Subsequent runs skip V8 compilation (~8s startup).
@@ -44,13 +44,13 @@ rm -f "$PROMPT_FILE"
 exit $EXIT_CODE
 `;
 
-export async function installClaudeWrapper(spriteName: string, provider: ContainerProvider): Promise<void> {
+export async function installClaudeWrapper(sandboxName: string, provider: ContainerProvider): Promise<void> {
   // Write wrapper via stdin to avoid quoting issues through SSH
-  console.log(`[wrapper] writing ${CLAUDE_WRAPPER_PATH} to ${spriteName} (${SPRITE_WRAPPER_SCRIPT.length} bytes)`);
-  const result = await provider.exec(spriteName, [
+  console.log(`[wrapper] writing ${CLAUDE_WRAPPER_PATH} to ${sandboxName} (${SANDBOX_WRAPPER_SCRIPT.length} bytes)`);
+  const result = await provider.exec(sandboxName, [
     "sh",
     "-c",
     `cat > ${CLAUDE_WRAPPER_PATH} && chmod +x ${CLAUDE_WRAPPER_PATH} && echo OK`,
-  ], { stdin: SPRITE_WRAPPER_SCRIPT });
+  ], { stdin: SANDBOX_WRAPPER_SCRIPT });
   console.log(`[wrapper] result: exit=${result.exit_code} stdout="${result.stdout.trim()}" stderr="${result.stderr.trim()}"`);
 }

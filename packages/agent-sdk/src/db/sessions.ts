@@ -173,10 +173,10 @@ export function updateSessionStatus(
     .run();
 }
 
-export function setSessionSprite(id: string, spriteName: string | null): void {
+export function setSessionSandbox(id: string, sandboxName: string | null): void {
   const db = getDrizzle();
   db.update(schema.sessions)
-    .set({ sprite_name: spriteName, updated_at: nowMs() })
+    .set({ sandbox_name: sandboxName, updated_at: nowMs() })
     .where(eq(schema.sessions.id, id))
     .run();
 }

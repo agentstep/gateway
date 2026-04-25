@@ -17,7 +17,7 @@ import { buildGeminiArgs } from "./args";
 import { buildGeminiAuthEnv, validateGeminiRuntime } from "./auth";
 import { createGeminiTranslator } from "./translator";
 import { GEMINI_WRAPPER_PATH } from "./wrapper-script";
-import { prepareGeminiOnSprite } from "./setup";
+import { prepareGeminiOnSandbox } from "./setup";
 
 function buildTurn(input: BuildTurnInput): BuildTurnResult {
   const { agent, backendSessionId, promptText, toolResults } = input;
@@ -40,7 +40,7 @@ export const geminiBackend: Backend = {
   wrapperPath: GEMINI_WRAPPER_PATH,
   buildTurn,
   createTranslator: (opts: TranslatorOptions) => createGeminiTranslator(opts),
-  prepareOnSprite: (name, provider) => prepareGeminiOnSprite(name, provider),
+  prepareOnSandbox: (name, provider) => prepareGeminiOnSandbox(name, provider),
 
   validateRuntime: validateGeminiRuntime,
 };
@@ -49,6 +49,6 @@ export {
   buildGeminiArgs,
   buildGeminiAuthEnv,
   createGeminiTranslator,
-  prepareGeminiOnSprite,
+  prepareGeminiOnSandbox,
   GEMINI_WRAPPER_PATH,
 };

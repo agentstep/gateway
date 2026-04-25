@@ -11,7 +11,7 @@ Run AI coding agents in sandboxed environments — any engine, any sandbox, one 
 - **Drop-in alternative to Anthropic's Managed Agents API** — same resource model (agents, vaults, sessions, environments), same SSE event stream. Point any HTTP client at `http://localhost:4000/v1` with the `anthropic-beta: managed-agents-2026-04-01` header and you get the same API surface. (The `@anthropic-ai/sdk` npm package doesn't yet expose the managed-agents beta endpoints — use raw `fetch` or curl until they land upstream.)
 - **Runs on your infrastructure** — prompts, code, and outputs stay local. SQLite storage. No telemetry without consent.
 - **Any agent engine** — Claude, Codex, OpenCode, Gemini, Factory, or sync-and-proxy to Anthropic's hosted Managed Agents. One config change to switch.
-- **11 sandbox providers** — Docker, Podman, Apple Container, Apple Firecracker, Sprites (default), E2B, Vercel, Daytona, Fly, Modal, MVM.
+- **11 sandbox providers** — Docker, Podman, Apple Container, Apple Firecracker, Sprites, E2B, Vercel, Daytona, Fly, Modal, MVM.
 - **Ships with a web UI** — React dashboard at `localhost:4000` for chat, observability, vault management. Same API as the CLI, nothing hidden.
 - **Vault-encrypted secrets at rest** — AES-256-GCM per-instance key, stored in `.env`, never returned over the API in plaintext.
 

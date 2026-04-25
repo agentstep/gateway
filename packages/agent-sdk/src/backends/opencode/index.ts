@@ -1,6 +1,6 @@
 /**
  * Opencode backend: drives sst/opencode-ai's `opencode run` on sprites.dev
- * containers. See wrapper-script.ts and setup.ts for the sprite-side
+ * containers. See wrapper-script.ts and setup.ts for the sandbox-side
  * install + invocation flow.
  *
  * Custom tool re-entry (the stream-json user frame path claude uses) is NOT
@@ -16,7 +16,7 @@ import { buildOpencodeAuthEnv, validateOpencodeRuntime } from "./auth";
 import { buildOpencodeConfigEnv } from "./mcp";
 import { createOpencodeTranslator } from "./translator";
 import { OPENCODE_WRAPPER_PATH, installOpencodeWrapper } from "./wrapper-script";
-import { prepareOpencodeOnSprite } from "./setup";
+import { prepareOpencodeOnSandbox } from "./setup";
 
 function buildTurn(input: BuildTurnInput): BuildTurnResult {
   const { agent, backendSessionId, promptText, toolResults } = input;
@@ -46,7 +46,7 @@ export const opencodeBackend: Backend = {
   wrapperPath: OPENCODE_WRAPPER_PATH,
   buildTurn,
   createTranslator: (opts: TranslatorOptions) => createOpencodeTranslator(opts),
-  prepareOnSprite: (name, provider) => prepareOpencodeOnSprite(name, provider),
+  prepareOnSandbox: (name, provider) => prepareOpencodeOnSandbox(name, provider),
 
   validateRuntime: validateOpencodeRuntime,
 };
@@ -58,6 +58,6 @@ export {
   buildOpencodeConfigEnv,
   createOpencodeTranslator,
   installOpencodeWrapper,
-  prepareOpencodeOnSprite,
+  prepareOpencodeOnSandbox,
   OPENCODE_WRAPPER_PATH,
 };

@@ -36,7 +36,7 @@ export function resetQueue(): void {
 }
 
 export async function startExec(
-  _spriteName: string,
+  _sandboxName: string,
   opts: { argv: string[]; stdin?: string; signal?: AbortSignal; timeoutMs?: number },
 ): Promise<ExecSession> {
   const turn = queue.shift();

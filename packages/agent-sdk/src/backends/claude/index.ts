@@ -43,7 +43,7 @@ function buildTurn(input: BuildTurnInput): BuildTurnResult {
 
   // If the agent has custom tools or threads_enabled (which adds spawn_agent
   // as a bridge tool), inject the tool bridge MCP server into --mcp-config.
-  // The bridge script + tools.json are installed on the sprite by prepareOnSprite.
+  // The bridge script + tools.json are installed on the sandbox by prepareOnSandbox.
   // This overrides any existing --mcp-config in argsBase — we find it and merge.
   const customTools = agent.tools.filter((t): t is CustomTool => t.type === "custom");
   const hasBridgeTools = customTools.length > 0 || agent.threads_enabled;
@@ -103,49 +103,49 @@ function validateRuntime(): string | null {
 }
 
 /**
- * Install the bridge script and tools.json on the sprite if the agent has
- * custom tools. Called from the lifecycle after the base prepareOnSprite.
+ * Install the bridge script and tools.json on the sandbox if the agent has
+ * custom tools. Called from the lifecycle after the base prepareOnSandbox.
  */
 async function installToolBridge(
-  spriteName: string,
+  sandboxName: string,
   customTools: CustomTool[],
   provider: ContainerProvider,
 ): Promise<void> {
   if (customTools.length === 0) return;
 
-  await provider.exec(spriteName, ["mkdir", "-p", TOOL_BRIDGE_DIR]);
+  await provider.exec(sandboxName, ["mkdir", "-p", TOOL_BRIDGE_DIR]);
   await provider.exec(
-    spriteName,
+    sandboxName,
     ["bash", "-c", `cat > ${TOOL_BRIDGE_SCRIPT_PATH}`],
     { stdin: generateBridgeScript() },
   );
   await provider.exec(
-    spriteName,
+    sandboxName,
     ["bash", "-c", `cat > ${TOOL_BRIDGE_TOOLS_PATH}`],
     { stdin: toolsToJson(customTools) },
   );
-  await provider.exec(spriteName, ["chmod", "+x", TOOL_BRIDGE_SCRIPT_PATH]);
+  await provider.exec(sandboxName, ["chmod", "+x", TOOL_BRIDGE_SCRIPT_PATH]);
 }
 
 /**
  * Install the permission hook script and configure Claude Code's settings
- * to use it. Called from the lifecycle after prepareOnSprite when the agent
+ * to use it. Called from the lifecycle after prepareOnSandbox when the agent
  * has confirmation_mode enabled.
  */
 async function installPermissionHook(
-  spriteName: string,
+  sandboxName: string,
   provider: ContainerProvider,
 ): Promise<void> {
   // Create the bridge directory
-  await provider.exec(spriteName, ["mkdir", "-p", PERMISSION_BRIDGE_DIR]);
+  await provider.exec(sandboxName, ["mkdir", "-p", PERMISSION_BRIDGE_DIR]);
 
   // Write the hook script
   await provider.exec(
-    spriteName,
+    sandboxName,
     ["bash", "-c", `cat > ${PERMISSION_HOOK_SCRIPT_PATH}`],
     { stdin: generatePermissionHookScript() },
   );
-  await provider.exec(spriteName, ["chmod", "+x", PERMISSION_HOOK_SCRIPT_PATH]);
+  await provider.exec(sandboxName, ["chmod", "+x", PERMISSION_HOOK_SCRIPT_PATH]);
 
   // Write the hooks config to $HOME/.claude/settings.json.
   // Claude Code reads hooks from the user's settings file at startup.
@@ -157,7 +157,7 @@ async function installPermissionHook(
   let existingSettings: Record<string, unknown> = {};
   try {
     const result = await provider.exec(
-      spriteName,
+      sandboxName,
       ["cat", settingsPath],
     );
     if (result.stdout.trim()) {
@@ -169,7 +169,7 @@ async function installPermissionHook(
 
   const merged = { ...existingSettings, ...hooksConfig };
   await provider.exec(
-    spriteName,
+    sandboxName,
     ["bash", "-c", `mkdir -p /home/sprite/.claude && cat > ${settingsPath}`],
     { stdin: JSON.stringify(merged, null, 2) },
   );
@@ -180,7 +180,7 @@ export const claudeBackend: Backend = {
   wrapperPath: CLAUDE_WRAPPER_PATH,
   buildTurn,
   createTranslator: (opts: TranslatorOptions) => createClaudeTranslator(opts),
-  prepareOnSprite: (name: string, provider: ContainerProvider) => installClaudeWrapper(name, provider),
+  prepareOnSandbox: (name: string, provider: ContainerProvider) => installClaudeWrapper(name, provider),
   validateRuntime,
 };
 

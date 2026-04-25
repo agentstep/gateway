@@ -4,10 +4,10 @@
  * Enforces two limits:
  *   - Global: `config.concurrency` (how many turns may run simultaneously
  *     across all sessions/environments)
- *   - Per-environment: `config.maxSpritesPerEnv` (real resource constraint,
- *     since each running turn owns a sprite in its env's pool)
+ *   - Per-environment: `config.maxSandboxesPerEnv` (real resource constraint,
+ *     since each running turn owns a sandbox in its env's pool)
  *
- * Sessions are pinned to sprites 1:1, so a session's active turn naturally
+ * Sessions are pinned to sandboxes 1:1, so a session's active turn naturally
  * consumes one env slot. The queue tracks pending enqueues and releases
  * capacity as turns complete.
  *
@@ -74,7 +74,7 @@ export function enqueueTurn<T>(envId: string, run: () => Promise<T>): Promise<T>
       if (st.activeGlobal >= c.concurrency) break;
       const job = st.queue[i];
       const envActive = st.activeByEnv.get(job.envId) ?? 0;
-      if (envActive >= c.maxSpritesPerEnv) continue;
+      if (envActive >= c.maxSandboxesPerEnv) continue;
 
       // Take this job
       st.queue.splice(i, 1);

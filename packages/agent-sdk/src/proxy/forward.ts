@@ -6,7 +6,7 @@
  * (including SSE streams) back to the client. Works for both JSON and
  * streaming responses.
  *
- * This is the core of the "anthropic" proxy backend — no sprite, no CLI,
+ * This is the core of the "anthropic" proxy backend — no sandbox, no CLI,
  * no translator. Anthropic owns the resource IDs and handles all execution.
  */
 import { getConfig } from "../config";

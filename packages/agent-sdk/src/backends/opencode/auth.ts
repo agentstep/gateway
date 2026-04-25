@@ -15,7 +15,7 @@
  * the user doesn't discover the mismatch inside an opaque opencode error
  * stream.
  *
- * Spike (2026-04-10) verified on a real sprite that opencode picks
+ * Spike (2026-04-10) verified on a real sandbox that opencode picks
  * up `OPENAI_API_KEY` as an env var without any config file.
  */
 import { getConfig } from "../../config";

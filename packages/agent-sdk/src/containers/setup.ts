@@ -2,15 +2,15 @@
  * Async environment setup: package install + checkpoint.
  *
  * Runs in the background after `POST /v1/environments` returns. Creates a
- * fresh template sprite, installs packages per `env.config.packages`, writes
+ * fresh template sandbox, installs packages per `env.config.packages`, writes
  * an idempotency sentinel, creates a sprites.dev checkpoint, persists the
- * checkpoint id on the environment row, deletes the template sprite, and
+ * checkpoint id on the environment row, deletes the template sandbox, and
  * flips `environments.state` to `ready` (or `failed` on error).
  *
  * Sentinel idempotency pattern from
  * 
  *
- * NOTE: the sentinel path assumes claude runs as user `sprite` with
+ * NOTE: the sentinel path assumes claude runs as user `sprite` (on sprites.dev) with
  * `HOME=/home/sprite`. Spike S1 validates this and may change the path.
  */
 import crypto from "node:crypto";
@@ -71,22 +71,22 @@ function shellEscape(s: string): string {
 }
 
 /**
- * Prepare a freshly-created sprite: install the wrapper script and run
+ * Prepare a freshly-created sandbox: install the wrapper script and run
  * the environment's setup commands. Returns when the sentinel is in place.
  */
 export async function prepareSprite(
-  spriteName: string,
+  sandboxName: string,
   packages: EnvironmentConfig["packages"],
   provider?: ContainerProvider,
 ): Promise<void> {
   const p = provider ?? await resolveContainerProvider();
-  await installWrapper(spriteName, p);
+  await installWrapper(sandboxName, p);
 
   const hash = hashPackages(packages);
   const sentinel = `${SENTINEL_DIR}/.claude-agents-setup-${hash}`;
   const installCmds = buildInstallCommands(packages);
   if (installCmds.length === 0) {
-    await p.exec(spriteName, ["bash", "-c", `touch ${sentinel}`]);
+    await p.exec(sandboxName, ["bash", "-c", `touch ${sentinel}`]);
     return;
   }
 
@@ -97,7 +97,7 @@ export async function prepareSprite(
     `touch ${sentinel}`,
   ].join(" && ");
 
-  const result = await p.exec(spriteName, ["bash", "-c", script], {
+  const result = await p.exec(sandboxName, ["bash", "-c", script], {
     timeoutMs: 30 * 60_000,
   });
   if (result.exit_code !== 0) {
@@ -132,7 +132,7 @@ async function runEnvironmentSetup(envId: string): Promise<void> {
   const hasPackages = config.packages && Object.values(config.packages).some((v) => v && v.length > 0);
 
   if (!hasPackages) {
-    // No packages to install — env is ready immediately. Each session sprite
+    // No packages to install — env is ready immediately. Each session sandbox
     // will get the wrapper installed in lifecycle.acquireForFirstTurn().
     updateEnvironmentState(envId, "ready", null);
     return;
@@ -140,8 +140,8 @@ async function runEnvironmentSetup(envId: string): Promise<void> {
 
   // With packages: create a template container, run installs, then mark ready.
   // NOTE: sprites.dev checkpoints are per-sprite only, so we can't snapshot
-  // the template and restore onto session sprites. For now, packages are
-  // re-installed per session sprite (slow). M5 will optimize with a sprite
+  // the template and restore onto session sandboxes. For now, packages are
+  // re-installed per session sandbox (slow). M5 will optimize with a sandbox
   // pool or alternative approach.
   const templateName = `ca-env-tpl-${newId("env").slice(4, 16).toLowerCase()}`;
   await provider.create({ name: templateName });

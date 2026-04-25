@@ -7,7 +7,7 @@
  *      `session.error{type:"server_restart"}` event + flipped to idle.
  *      (We do NOT implement true session.status_rescheduled semantics — see
  *      plan §I8.)
- *   3. Sprite orphan reconciler: best-effort pruning of old sprites whose
+ *   3. Sandbox orphan reconciler: best-effort pruning of old sandboxes whose
  *      sessions no longer exist.
  */
 import fs from "node:fs";
@@ -22,13 +22,13 @@ import { runSweep } from "./sessions/sweeper";
 import { getRuntime } from "./state";
 import { runTurn } from "./sessions/driver";
 import { enqueueTurn } from "./queue";
-import { reconcileOrphans, reconcileDockerOrphans } from "./containers/lifecycle";
+import { reconcileOrphanSandboxes, reconcileDockerOrphanSandboxes } from "./containers/lifecycle";
 import { installShutdownHandlers } from "./shutdown";
 import { nowMs } from "./util/clock";
 import { resolveContainerProvider } from "./providers/registry";
 import { getEnvironment } from "./db/environments";
 import { initSentry } from "./sentry";
-import { setSessionSprite } from "./db/sessions";
+import { setSessionSandbox } from "./db/sessions";
 import * as pool from "./containers/pool";
 import { installOtlpExporter } from "./observability/otlp";
 import { redactAppendInput } from "./observability/redactor";
@@ -117,22 +117,22 @@ async function doInit(): Promise<void> {
     console.error("[init] container pool rebuild failed:", err);
   }
 
-  // 3. Sprite orphan reconcile (best-effort, non-blocking)
+  // 3. Sandbox orphan reconcile (best-effort, non-blocking)
   const cfg = getConfig();
   if (cfg.spriteToken) {
-    reconcileOrphans()
+    reconcileOrphanSandboxes()
       .then((r) => {
         if (r.deleted > 0) {
-          console.log(`[init] reconciled ${r.deleted} orphan sprites, kept ${r.kept}`);
+          console.log(`[init] reconciled ${r.deleted} orphan sandboxes, kept ${r.kept}`);
         }
       })
       .catch((err) => {
-        console.warn("[init] orphan reconcile (sprites) failed:", err);
+        console.warn("[init] orphan reconcile (sandboxes) failed:", err);
       });
   }
 
   // 3b. Docker orphan reconcile (best-effort, non-blocking)
-  reconcileDockerOrphans()
+  reconcileDockerOrphanSandboxes()
     .then((r) => {
       if (r.deleted > 0) {
         console.log(`[init] reconciled ${r.deleted} orphan docker containers, kept ${r.kept}`);
@@ -235,28 +235,28 @@ export async function recoverStaleSessions(): Promise<void> {
       // Try to reschedule: find the last unprocessed user.message
       const lastMsg = getLastUnprocessedUserMessage(row.id);
       if (lastMsg) {
-        // If the session had a sprite, verify the container still exists
-        if (row.sprite_name) {
+        // If the session had a sandbox, verify the container still exists
+        if (row.sandbox_name) {
           const envObj = getEnvironment(row.environment_id);
           const provider = await resolveContainerProvider(envObj?.config?.provider);
           try {
-            const containers = await provider.list({ prefix: row.sprite_name });
-            const alive = containers.some((c) => c.name === row.sprite_name);
+            const containers = await provider.list({ prefix: row.sandbox_name });
+            const alive = containers.some((c) => c.name === row.sandbox_name);
             if (!alive) {
-              console.warn(`[init] sprite ${row.sprite_name} for session ${row.id} no longer exists, clearing`);
-              setSessionSprite(row.id, null);
+              console.warn(`[init] sandbox ${row.sandbox_name} for session ${row.id} no longer exists, clearing`);
+              setSessionSandbox(row.id, null);
             } else {
               // Re-register in the in-memory pool so lifecycle/sweeper can see it
               pool.register({
-                spriteName: row.sprite_name,
+                sandboxName: row.sandbox_name,
                 envId: row.environment_id,
                 sessionId: row.id,
                 createdAt: nowMs(),
               });
             }
           } catch (err) {
-            console.warn(`[init] container health check failed for ${row.sprite_name}, clearing:`, err);
-            setSessionSprite(row.id, null);
+            console.warn(`[init] container health check failed for ${row.sandbox_name}, clearing:`, err);
+            setSessionSandbox(row.id, null);
           }
         }
 
@@ -328,10 +328,10 @@ export async function recoverStaleSessions(): Promise<void> {
  * Rebuild the in-memory container pool from DB for non-running sessions.
  *
  * recoverStaleSessions() handles status='running'. This function covers
- * idle/error sessions that still have a sprite_name set — their containers
+ * idle/error sessions that still have a sandbox_name set — their containers
  * survived the restart but the in-memory pool lost track of them.
  *
- * Without this, reconcileOrphans() would delete live containers and
+ * Without this, reconcileOrphanSandboxes() would delete live containers and
  * countInEnv() would under-report, breaking quota enforcement.
  */
 async function rebuildContainerPool(): Promise<void> {
@@ -339,7 +339,7 @@ async function rebuildContainerPool(): Promise<void> {
   // Find all non-running sessions with a container that aren't already in the pool
   const rows = db
     .prepare(
-      `SELECT * FROM sessions WHERE sprite_name IS NOT NULL AND status != 'running' AND archived_at IS NULL`,
+      `SELECT * FROM sessions WHERE sandbox_name IS NOT NULL AND status != 'running' AND archived_at IS NULL`,
     )
     .all() as SessionRow[];
 
@@ -355,25 +355,25 @@ async function rebuildContainerPool(): Promise<void> {
     try {
       const envObj = getEnvironment(row.environment_id);
       const provider = await resolveContainerProvider(envObj?.config?.provider);
-      const containers = await provider.list({ prefix: row.sprite_name! });
-      const alive = containers.some((c) => c.name === row.sprite_name);
+      const containers = await provider.list({ prefix: row.sandbox_name! });
+      const alive = containers.some((c) => c.name === row.sandbox_name);
 
       if (alive) {
         pool.register({
-          spriteName: row.sprite_name!,
+          sandboxName: row.sandbox_name!,
           envId: row.environment_id,
           sessionId: row.id,
           createdAt: nowMs(),
         });
         recovered++;
       } else {
-        // Container is gone — clear the stale sprite_name
-        setSessionSprite(row.id, null);
+        // Container is gone — clear the stale sandbox_name
+        setSessionSandbox(row.id, null);
         cleared++;
       }
     } catch {
-      // Provider unavailable — clear sprite_name so future turns re-create
-      setSessionSprite(row.id, null);
+      // Provider unavailable — clear sandbox_name so future turns re-create
+      setSessionSandbox(row.id, null);
       cleared++;
     }
   }

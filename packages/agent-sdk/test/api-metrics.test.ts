@@ -52,8 +52,8 @@ function freshDbEnv(): void {
 vi.mock("../src/containers/lifecycle", () => ({
   acquireForFirstTurn: vi.fn(async () => "ca-sess-fake"),
   releaseSession: vi.fn(async () => {}),
-  reconcileOrphans: vi.fn(async () => ({ deleted: 0, kept: 0 })),
-  reconcileDockerOrphans: vi.fn(async () => ({ deleted: 0, kept: 0 })),
+  reconcileOrphanSandboxes: vi.fn(async () => ({ deleted: 0, kept: 0 })),
+  reconcileDockerOrphanSandboxes: vi.fn(async () => ({ deleted: 0, kept: 0 })),
 }));
 
 // ─────────────────────────────────────────────────────────────────────────
