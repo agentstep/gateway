@@ -26,7 +26,7 @@ const WINDOWS = [
 export function DashboardPage() {
   const windowMinutes = useAppStore((s) => s.dashboardWindowMinutes);
   const setWindowMinutes = useAppStore((s) => s.setDashboardWindowMinutes);
-  const { tab } = useSearch({ from: "/dashboard" }) as { tab: "agents" | "api" };
+  const { tab } = useSearch({ from: "/analytics" }) as { tab: "agents" | "api" };
 
   return (
     <div className="flex-1 overflow-y-auto px-6 py-6">

@@ -194,7 +194,7 @@ export function OverviewPage() {
           </div>
 
           {/* Requests sparkline */}
-          <Link to="/dashboard" search={{ tab: "agents" }} className="block group">
+          <Link to="/analytics" search={{ tab: "agents" }} className="block group">
             <Card size="sm" className="transition-colors group-hover:ring-foreground/20">
               <CardContent>
                 <div className="flex items-center justify-between">
@@ -288,7 +288,7 @@ export function OverviewPage() {
             <CardContent>
               <div className="flex items-center justify-between">
                 <span className="text-xs font-medium text-muted-foreground">System</span>
-                <Link to="/dashboard" search={{ tab: "agents" }} className="text-[10px] text-muted-foreground hover:text-foreground transition-colors flex items-center gap-0.5">
+                <Link to="/analytics" search={{ tab: "agents" }} className="text-[10px] text-muted-foreground hover:text-foreground transition-colors flex items-center gap-0.5">
                   View analytics
                   <ArrowRight className="size-3" />
                 </Link>

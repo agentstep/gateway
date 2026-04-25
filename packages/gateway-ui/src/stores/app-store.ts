@@ -9,7 +9,7 @@ interface Route {
 
 function getInitialRoute(): Route {
   const path = window.location.pathname;
-  if (path === "/dashboard") {
+  if (path === "/analytics") {
     return {
       sessionId: null,
       settingsOpen: false,
@@ -123,7 +123,7 @@ export const useAppStore = create<AppState>((set) => ({
   dashboardOpen: initial.dashboardOpen,
   setDashboardOpen: (open) => {
     if (open) {
-      window.history.pushState(null, "", "/dashboard");
+      window.history.pushState(null, "", "/analytics");
     } else {
       const sid = useAppStore.getState().activeSessionId;
       window.history.pushState(null, "", sid ? `/sessions/${sid}` : "/");

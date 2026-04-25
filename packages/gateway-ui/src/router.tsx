@@ -83,7 +83,7 @@ const PAGE_TITLES: Record<string, string> = {
   "/skills": "Skills",
   "/memory": "Memory",
   "/playground": "Playground",
-  "/dashboard": "Analytics",
+  "/analytics": "Analytics",
   "/docs": "API Docs",
   "/quickstart": "Quick Start",
 };
@@ -115,7 +115,7 @@ function PageBreadcrumb() {
 function NavbarCenter() {
   const routerState = useRouterState();
   const path = routerState.location.pathname;
-  if (path === "/dashboard") return <DashboardNavTabs />;
+  if (path === "/analytics") return <DashboardNavTabs />;
   if (path === "/files") return <FilesNavTabs />;
   return null;
 }
@@ -136,7 +136,7 @@ function DashboardNavTabs() {
         {DASHBOARD_TABS.map((t) => (
           <button
             key={t.value}
-            onClick={() => nav({ to: "/dashboard", search: { tab: t.value } as never, replace: true })}
+            onClick={() => nav({ to: "/analytics", search: { tab: t.value } as never, replace: true })}
             className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
               activeTab === t.value
                 ? "bg-background text-foreground shadow-sm"
@@ -371,7 +371,7 @@ type DashboardSearch = { tab: "agents" | "api" };
 
 const dashboardRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/dashboard",
+  path: "/analytics",
   validateSearch: (search: Record<string, unknown>): DashboardSearch => ({
     tab: search.tab === "api" ? "api" : "agents",
   }),

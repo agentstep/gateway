@@ -61,7 +61,7 @@ const RESOURCES: NavItem[] = [
 
 const TOOLS: NavItem[] = [
   { label: "Playground", to: "/playground", icon: Play },
-  { label: "Analytics", to: "/dashboard", icon: BarChart3 },
+  { label: "Analytics", to: "/analytics", icon: BarChart3 },
   { label: "API Docs", to: "/docs", icon: BookOpen },
 ];
 
