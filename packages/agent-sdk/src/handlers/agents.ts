@@ -196,7 +196,7 @@ export function handleCreateAgent(request: Request): Promise<Response> {
       name: parsed.data.name,
       model: parsed.data.model,
       system: parsed.data.system ?? null,
-      tools: parsed.data.tools ?? [],
+      tools: parsed.data.tools ?? [{ type: "agent_toolset_20260401" }],
       mcp_servers: parsed.data.mcp_servers ?? {},
       backend: backendName,
       webhook_url: parsed.data.webhook_url ?? null,
