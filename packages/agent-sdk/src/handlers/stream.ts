@@ -1,13 +1,12 @@
 import { ensureInitialized } from "../init";
-import { authenticate } from "../auth/middleware";
-import { isPassthroughAllowedPath } from "../auth/passthrough";
+import { authenticateAndIntercept } from "../auth/middleware";
 import { subscribe, type Subscription } from "../sessions/bus";
 import { getDb } from "../db/client";
 import { getSession } from "../db/sessions";
 import { isProxied, getProxiedTenantId } from "../db/proxy";
 import { resolveRemoteSessionId } from "../db/sync";
 import { forwardToAnthropic } from "../proxy/forward";
-import { toResponse, notFound, unauthorized } from "../errors";
+import { toResponse, notFound } from "../errors";
 import { assertResourceTenant } from "../auth/scope";
 import type { ManagedEvent } from "../types";
 
@@ -35,20 +34,20 @@ export async function prepareSessionStream(
 ): Promise<Response | PreparedStream> {
   try {
     await ensureInitialized();
-    const auth = await authenticate(request);
-
-    // Passthrough: forward the SSE stream directly to Anthropic with
-    // the caller's key. Mirrors the routeWrap interception in http.ts.
-    if (auth.mode === "passthrough") {
-      const url = new URL(request.url);
-      if (!isPassthroughAllowedPath(url.pathname)) throw unauthorized();
-      const res = await forwardToAnthropic(request, url.pathname, {
-        apiKey: auth.passthroughKey,
-      });
-      const headers = new Headers(res.headers);
+    // `authenticateAndIntercept` returns a terminal Response for any
+    // passthrough request — for SSE we re-wrap it to set the
+    // `X-Accel-Buffering: no` header (otherwise reverse proxies will
+    // buffer and break the stream).
+    const result = await authenticateAndIntercept(request);
+    if (result.kind === "response") {
+      const headers = new Headers(result.response.headers);
       headers.set("X-Accel-Buffering", "no");
-      return new Response(res.body, { status: res.status, headers });
+      return new Response(result.response.body, {
+        status: result.response.status,
+        headers,
+      });
     }
+    const auth = result.auth;
 
     // Tenant guard
     const tenantRow = getDb()

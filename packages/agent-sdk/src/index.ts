@@ -28,7 +28,7 @@ export { ensureInitialized } from "./init";
 export { installShutdownHandlers } from "./shutdown";
 
 // Auth
-export { authenticate } from "./auth/middleware";
+export { authenticate, authenticateAndIntercept } from "./auth/middleware";
 
 // Types
 export type {

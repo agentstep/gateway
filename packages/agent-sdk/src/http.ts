@@ -10,10 +10,8 @@
  * Framework-agnostic — uses Web Standard Response only.
  */
 import { ensureInitialized } from "./init";
-import { authenticate } from "./auth/middleware";
-import { isPassthroughAllowedPath } from "./auth/passthrough";
-import { forwardToAnthropic } from "./proxy/forward";
-import { toResponse, ApiError, tooManyRequests, unauthorized } from "./errors";
+import { authenticateAndIntercept } from "./auth/middleware";
+import { toResponse, ApiError, tooManyRequests } from "./errors";
 import { captureException } from "./sentry";
 import { recordApiRequest, normalizeRoute } from "./observability/api-metrics";
 import { checkAndBump } from "./auth/rate_limit";
@@ -32,24 +30,15 @@ export async function routeWrap(
   let status = 500;
   try {
     await ensureInitialized();
-    const auth = await authenticate(request);
-
-    // Passthrough: forward `sk-ant-api*` requests to Anthropic with no
-    // gateway-side state. Allowlist the path here so gateway-only routes
-    // (api-keys, settings, tenants, ...) reject passthrough — otherwise
-    // an Anthropic-key holder could enumerate gateway state. The handler
-    // closure never runs for passthrough requests.
-    if (auth.mode === "passthrough") {
-      const url = new URL(request.url);
-      if (!isPassthroughAllowedPath(url.pathname)) {
-        throw unauthorized();
-      }
-      const res = await forwardToAnthropic(request, url.pathname, {
-        apiKey: auth.passthroughKey,
-      });
-      status = res.status;
-      return res;
+    // `authenticateAndIntercept` returns a terminal Response for any
+    // passthrough request — the handler closure never runs. Gateway-mode
+    // requests fall through with a normal AuthContext.
+    const result = await authenticateAndIntercept(request);
+    if (result.kind === "response") {
+      status = result.response.status;
+      return result.response;
     }
+    const auth = result.auth;
 
     // Per-key RPM rate limit. Fixed 60s window; backend is memory by
     // default, Redis when RATE_LIMIT_BACKEND=redis. null rateLimitRpm

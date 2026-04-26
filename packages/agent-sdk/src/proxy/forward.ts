@@ -67,18 +67,32 @@ export async function forwardToAnthropic(
   const accept = request.headers.get("accept");
   if (accept) headers.set("accept", accept);
 
-  // Determine request body
-  let body: string | undefined;
+  // Determine request body. Multipart uploads (`/v1/files`) have binary
+  // content and a boundary that `request.text()` would mangle on UTF-8
+  // round-trip — pass the original ReadableStream through instead.
+  // `duplex: "half"` is required by undici when sending a streaming body.
+  const isMultipart = (ct ?? "").toLowerCase().startsWith("multipart/");
+  let body: BodyInit | undefined;
   if (request.method !== "GET" && request.method !== "HEAD") {
-    body = opts?.body ?? (await request.text());
+    if (opts?.body !== undefined) {
+      body = opts.body;
+    } else if (isMultipart && request.body) {
+      body = request.body;
+    } else {
+      body = await request.text();
+    }
   }
 
-  const res = await fetch(url.toString(), {
+  const fetchInit: RequestInit & { duplex?: "half" } = {
     method: request.method,
     headers,
     body,
     signal: request.signal,
-  });
+  };
+  if (body && typeof body !== "string") {
+    fetchInit.duplex = "half";
+  }
+  const res = await fetch(url.toString(), fetchInit);
 
   // Pipe response back with original status + headers, stripping hop-by-hop
   const HOP_BY_HOP = new Set([
