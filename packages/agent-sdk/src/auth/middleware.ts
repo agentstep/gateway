@@ -2,10 +2,26 @@
  * Authentication middleware.
  *
  * Extracts an API key from `x-api-key` (preferred per Managed Agents spec)
- * or `Authorization: Bearer <token>`. Hashes with sha256 and looks it up in
- * the `api_keys` table. Returns an AuthContext on success.
+ * or `Authorization: Bearer <token>`.
+ *
+ * Two key spaces:
+ *
+ *   - Gateway keys (`ck_*` shape) — hashed with sha256 and looked up in
+ *     the local `api_keys` table. Returns a normal AuthContext.
+ *
+ *   - Anthropic API keys (`sk-ant-api*` shape) — when
+ *     `anthropic_passthrough_enabled` is true, returns a passthrough
+ *     AuthContext that routeWrap forwards directly to Anthropic. Never
+ *     compared against the local table; the prefix dispatch ensures the
+ *     two spaces can't collide.
+ *
+ * `sk-ant-oat*` (OAuth tokens) do NOT enter the passthrough path — they
+ * fall through to the gateway lookup and 401 (matching the existing
+ * anthropic-provider posture in `handlers/sessions.ts`).
  */
 import { findByRawKey, hydratePermissions } from "../db/api_keys";
+import { getConfig } from "../config";
+import { isAnthropicApiKey } from "./passthrough";
 import type { AuthContext } from "../types";
 import { unauthorized } from "../errors";
 
@@ -22,6 +38,26 @@ export function extractKey(request: Request): string | null {
 export async function authenticate(request: Request): Promise<AuthContext> {
   const key = extractKey(request);
   if (!key) throw unauthorized();
+
+  // Shape-based dispatch: sk-ant-api* keys are *never* looked up in the
+  // local api_keys table — they're either passthrough (when enabled) or
+  // rejected. This eliminates the "lookup miss reveals which keys exist"
+  // side channel and makes the two key spaces strictly disjoint.
+  if (isAnthropicApiKey(key)) {
+    if (!getConfig().anthropicPassthroughEnabled) throw unauthorized();
+    return {
+      keyId: "passthrough",
+      name: "anthropic-passthrough",
+      permissions: { admin: false, scope: null },
+      tenantId: null,
+      isGlobalAdmin: false,
+      budgetUsd: null,
+      rateLimitRpm: null,
+      spentUsd: 0,
+      mode: "passthrough",
+      passthroughKey: key,
+    };
+  }
 
   const row = findByRawKey(key);
   if (!row) throw unauthorized();
@@ -41,5 +77,6 @@ export async function authenticate(request: Request): Promise<AuthContext> {
     budgetUsd: row.budget_usd ?? null,
     rateLimitRpm: row.rate_limit_rpm ?? null,
     spentUsd: row.spent_usd ?? 0,
+    mode: "gateway",
   };
 }

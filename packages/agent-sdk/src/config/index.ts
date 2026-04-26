@@ -31,6 +31,14 @@ export interface Config {
   redactEnvKeys: string[];
   /** Base URL for Ollama API (e.g. http://localhost:11434). */
   ollamaUrl: string;
+  /**
+   * When true, requests presenting an `sk-ant-api*` key are treated as
+   * passthrough: the gateway forwards them to Anthropic using the
+   * caller's own key instead of requiring a gateway-issued key. No
+   * gateway-side state (sessions, vaults, sync rows, tenants) is
+   * created or read. Default off.
+   */
+  anthropicPassthroughEnabled: boolean;
 }
 
 type GlobalCache = typeof globalThis & {
@@ -104,7 +112,17 @@ function loadConfig(): Config {
       process.env.OLLAMA_URL ||
       readSetting("ollama_url") ||
       "http://localhost:11434",
+    anthropicPassthroughEnabled: parseBool(
+      process.env.ANTHROPIC_PASSTHROUGH_ENABLED ??
+        readSetting("anthropic_passthrough_enabled"),
+    ),
   };
+}
+
+function parseBool(v: string | undefined): boolean {
+  if (!v) return false;
+  const s = v.toLowerCase();
+  return s === "1" || s === "true" || s === "yes";
 }
 
 export function getConfig(): Config {

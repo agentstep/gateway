@@ -11,7 +11,9 @@
  */
 import { ensureInitialized } from "./init";
 import { authenticate } from "./auth/middleware";
-import { toResponse, ApiError, tooManyRequests } from "./errors";
+import { isPassthroughAllowedPath } from "./auth/passthrough";
+import { forwardToAnthropic } from "./proxy/forward";
+import { toResponse, ApiError, tooManyRequests, unauthorized } from "./errors";
 import { captureException } from "./sentry";
 import { recordApiRequest, normalizeRoute } from "./observability/api-metrics";
 import { checkAndBump } from "./auth/rate_limit";
@@ -31,6 +33,23 @@ export async function routeWrap(
   try {
     await ensureInitialized();
     const auth = await authenticate(request);
+
+    // Passthrough: forward `sk-ant-api*` requests to Anthropic with no
+    // gateway-side state. Allowlist the path here so gateway-only routes
+    // (api-keys, settings, tenants, ...) reject passthrough — otherwise
+    // an Anthropic-key holder could enumerate gateway state. The handler
+    // closure never runs for passthrough requests.
+    if (auth.mode === "passthrough") {
+      const url = new URL(request.url);
+      if (!isPassthroughAllowedPath(url.pathname)) {
+        throw unauthorized();
+      }
+      const res = await forwardToAnthropic(request, url.pathname, {
+        apiKey: auth.passthroughKey,
+      });
+      status = res.status;
+      return res;
+    }
 
     // Per-key RPM rate limit. Fixed 60s window; backend is memory by
     // default, Redis when RATE_LIMIT_BACKEND=redis. null rateLimitRpm

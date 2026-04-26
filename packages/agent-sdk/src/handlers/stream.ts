@@ -1,12 +1,13 @@
 import { ensureInitialized } from "../init";
 import { authenticate } from "../auth/middleware";
+import { isPassthroughAllowedPath } from "../auth/passthrough";
 import { subscribe, type Subscription } from "../sessions/bus";
 import { getDb } from "../db/client";
 import { getSession } from "../db/sessions";
 import { isProxied, getProxiedTenantId } from "../db/proxy";
 import { resolveRemoteSessionId } from "../db/sync";
 import { forwardToAnthropic } from "../proxy/forward";
-import { toResponse, notFound } from "../errors";
+import { toResponse, notFound, unauthorized } from "../errors";
 import { assertResourceTenant } from "../auth/scope";
 import type { ManagedEvent } from "../types";
 
@@ -35,6 +36,19 @@ export async function prepareSessionStream(
   try {
     await ensureInitialized();
     const auth = await authenticate(request);
+
+    // Passthrough: forward the SSE stream directly to Anthropic with
+    // the caller's key. Mirrors the routeWrap interception in http.ts.
+    if (auth.mode === "passthrough") {
+      const url = new URL(request.url);
+      if (!isPassthroughAllowedPath(url.pathname)) throw unauthorized();
+      const res = await forwardToAnthropic(request, url.pathname, {
+        apiKey: auth.passthroughKey,
+      });
+      const headers = new Headers(res.headers);
+      headers.set("X-Accel-Buffering", "no");
+      return new Response(res.body, { status: res.status, headers });
+    }
 
     // Tenant guard
     const tenantRow = getDb()
