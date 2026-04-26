@@ -748,27 +748,31 @@ export const FileDeletedResponseSchema = registry.register(
 export const VaultCredentialSchema = registry.register(
   "VaultCredential",
   z.object({
+    type: z.literal("vault_credential"),
     id: UlidId,
     vault_id: UlidId,
     display_name: z.string(),
     auth: z.object({
-      type: z.string().openapi({ description: "Auth type, e.g. 'static_bearer'." }),
-      mcp_server_url: z.string().nullable().openapi({ description: "Associated MCP server URL, if any." }),
+      type: z.enum(["static_bearer"]).openapi({ description: "Auth type. Currently only `static_bearer` is supported." }),
+      mcp_server_url: z.string().nullable().openapi({ description: "MCP server URL this credential authenticates with. Null for plain API keys." }),
     }),
+    metadata: z.record(z.string()).optional().openapi({ description: "Arbitrary key-value metadata." }),
     created_at: IsoTimestamp,
     updated_at: IsoTimestamp,
-  }).openapi({ description: "Vault credential metadata. The secret token is NEVER returned in API responses." }),
+    archived_at: IsoTimestamp.nullable(),
+  }).openapi({ description: "Vault credential. Secret fields (token) are write-only — never returned in responses." }),
 );
 
 export const CreateCredentialRequestSchema = registry.register(
   "CreateCredentialRequest",
   z.object({
-    display_name: z.string().min(1).max(200),
+    display_name: z.string().min(1).max(200).openapi({ description: "Human-readable name for this credential.", example: "Linear API key" }),
     auth: z.object({
-      type: z.enum(["static_bearer"]),
-      token: z.string().min(1).openapi({ description: "Secret token value. Stored encrypted; never returned." }),
-      mcp_server_url: z.string().url().optional(),
+      type: z.enum(["static_bearer"]).openapi({ description: "Auth type." }),
+      mcp_server_url: z.string().url().optional().openapi({ description: "MCP server URL this credential authenticates with. Optional for plain API keys.", example: "https://mcp.linear.app/mcp" }),
+      token: z.string().min(1).openapi({ description: "Secret token. Stored encrypted at rest; never returned in responses.", example: "lin_api_xxxxx" }),
     }),
+    metadata: z.record(z.string()).optional().openapi({ description: "Arbitrary key-value metadata." }),
   }),
 );
 
@@ -778,9 +782,10 @@ export const UpdateCredentialRequestSchema = registry.register(
     display_name: z.string().min(1).max(200).optional(),
     auth: z.object({
       type: z.enum(["static_bearer"]).optional(),
-      token: z.string().min(1).optional(),
+      token: z.string().min(1).optional().openapi({ description: "New token value. Write-only." }),
       mcp_server_url: z.string().url().nullish(),
     }).optional(),
+    metadata: z.record(z.string().nullable()).optional().openapi({ description: "Patch semantics: set key to string to upsert, null to delete, omit to preserve." }),
   }),
 );
 
@@ -791,7 +796,7 @@ export const CredentialListResponseSchema = registry.register(
 
 export const CredentialDeletedResponseSchema = registry.register(
   "CredentialDeletedResponse",
-  z.object({ id: UlidId, type: z.literal("credential_deleted") }),
+  z.object({ id: UlidId, type: z.literal("vault_credential_deleted") }),
 );
 
 // ---------------------------------------------------------------------------

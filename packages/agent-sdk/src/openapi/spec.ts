@@ -904,7 +904,10 @@ registry.registerPath({
   tags: ["Credentials"],
   summary: "Create a vault credential",
   description:
-    "Creates a structured credential in the vault. The secret token is encrypted at rest and never returned in API responses.",
+    "Creates a credential in the vault for MCP server authentication or plain API key storage. " +
+    "The token is encrypted at rest and never returned in responses. " +
+    "When `mcp_server_url` is provided, the credential is automatically injected as MCP auth during sessions. " +
+    "Without `mcp_server_url`, the token is injected as an env var derived from `display_name`.",
   security: [{ ApiKey: [] }],
   request: {
     params: z.object({ id: z.string() }),
