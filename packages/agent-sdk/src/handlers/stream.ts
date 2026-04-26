@@ -1,5 +1,5 @@
 import { ensureInitialized } from "../init";
-import { authenticate } from "../auth/middleware";
+import { authenticateAndIntercept } from "../auth/middleware";
 import { subscribe, type Subscription } from "../sessions/bus";
 import { getDb } from "../db/client";
 import { getSession } from "../db/sessions";
@@ -34,7 +34,20 @@ export async function prepareSessionStream(
 ): Promise<Response | PreparedStream> {
   try {
     await ensureInitialized();
-    const auth = await authenticate(request);
+    // `authenticateAndIntercept` returns a terminal Response for any
+    // passthrough request — for SSE we re-wrap it to set the
+    // `X-Accel-Buffering: no` header (otherwise reverse proxies will
+    // buffer and break the stream).
+    const result = await authenticateAndIntercept(request);
+    if (result.kind === "response") {
+      const headers = new Headers(result.response.headers);
+      headers.set("X-Accel-Buffering", "no");
+      return new Response(result.response.body, {
+        status: result.response.status,
+        headers,
+      });
+    }
+    const auth = result.auth;
 
     // Tenant guard
     const tenantRow = getDb()

@@ -1,0 +1,87 @@
+/**
+ * Anthropic API passthrough — shape detection and route allowlist.
+ *
+ * Passthrough lets a client point an Anthropic SDK at the gateway with
+ * their existing `sk-ant-api*` key. The gateway forwards to Anthropic
+ * using that key, with no gateway-side state created. This is a
+ * "drop-in replacement" path — same URLs as Anthropic's Managed Agents
+ * API — so the routing decision happens here rather than at a separate
+ * URL prefix.
+ *
+ * Two invariants keep this safe:
+ *
+ *   1. Shape-based mode selection (not lookup-miss). A key matching
+ *      `sk-ant-api*` is *only* ever treated as a passthrough key — it
+ *      is never compared against the local `api_keys` table. A key
+ *      *not* matching that shape is *only* ever compared against the
+ *      local table. The two key spaces don't overlap (gateway keys are
+ *      `ck_*`), so there's no collision and no side channel that lets
+ *      a caller probe "is this a valid gateway key".
+ *
+ *   2. Route allowlist. Even with a valid `sk-ant-api*` key, only
+ *      routes that mirror Anthropic's API are forwarded. Gateway-only
+ *      routes (api-keys, settings, metrics, tenants, upstream-keys,
+ *      audit, license, traces, providers, models, batch, skills,
+ *      whoami, memory) reject passthrough — otherwise an Anthropic-key
+ *      holder could enumerate gateway state.
+ *
+ * `sk-ant-oat*` (OAuth tokens) intentionally do NOT match — the
+ * existing anthropic-provider sync flow rejects them (see
+ * `handlers/sessions.ts`), so we keep the same posture in passthrough.
+ */
+
+/**
+ * Anthropic API key shape. Matches `sk-ant-api{version-digits}-{rest}`,
+ * which is the format Anthropic issues today. The minimum length after
+ * the prefix is generous — short enough to accept future versions, long
+ * enough that a typo or partial paste won't be forwarded as a key.
+ *
+ * `sk-ant-oat*` (OAuth tokens) does NOT match — that prefix is excluded
+ * by the literal `api` after `sk-ant-`.
+ */
+const ANTHROPIC_API_KEY_RE = /^sk-ant-api[A-Za-z0-9_-]{20,}$/;
+
+export function isAnthropicApiKey(key: string): boolean {
+  return ANTHROPIC_API_KEY_RE.test(key);
+}
+
+/**
+ * Routes that mirror Anthropic's Managed Agents API and may be forwarded
+ * via passthrough. A request whose normalized path matches any of these
+ * patterns will be proxied to `https://api.anthropic.com<path>` using
+ * the caller's `sk-ant-api*` key.
+ *
+ * Gateway-only paths (anything not on this list) reject passthrough
+ * with 401, regardless of feature flag. Don't add a route here unless
+ * Anthropic exposes the equivalent endpoint at the same path.
+ */
+const PASSTHROUGH_ROUTE_PATTERNS: RegExp[] = [
+  // Agents
+  /^\/v1\/agents$/,
+  /^\/v1\/agents\/[^/]+$/,
+  // Sessions + sub-resources
+  /^\/v1\/sessions$/,
+  /^\/v1\/sessions\/[^/]+$/,
+  /^\/v1\/sessions\/[^/]+\/archive$/,
+  /^\/v1\/sessions\/[^/]+\/events$/,
+  /^\/v1\/sessions\/[^/]+\/events\/stream$/,
+  // Vaults + entries + credentials
+  /^\/v1\/vaults$/,
+  /^\/v1\/vaults\/[^/]+$/,
+  /^\/v1\/vaults\/[^/]+\/entries$/,
+  /^\/v1\/vaults\/[^/]+\/entries\/[^/]+$/,
+  /^\/v1\/vaults\/[^/]+\/credentials$/,
+  /^\/v1\/vaults\/[^/]+\/credentials\/[^/]+$/,
+  // Environments
+  /^\/v1\/environments$/,
+  /^\/v1\/environments\/[^/]+$/,
+  /^\/v1\/environments\/[^/]+\/archive$/,
+  // Files
+  /^\/v1\/files$/,
+  /^\/v1\/files\/[^/]+$/,
+  /^\/v1\/files\/[^/]+\/content$/,
+];
+
+export function isPassthroughAllowedPath(pathname: string): boolean {
+  return PASSTHROUGH_ROUTE_PATTERNS.some((re) => re.test(pathname));
+}

@@ -465,6 +465,20 @@ export interface AuthContext {
   rateLimitRpm: number | null;
   /** Running total of USD spent by this key. Updated transactionally alongside session usage. */
   spentUsd: number;
+  /**
+   * Auth mode. "gateway" is a gateway-issued key with full
+   * tenant/scope/budget enforcement. "passthrough" is a client-supplied
+   * Anthropic key (sk-ant-api*) — gateway acts as a transparent proxy
+   * with no DB writes; routeWrap forwards the request directly. Only
+   * allowed on Anthropic-compatible routes (see auth/passthrough.ts).
+   *
+   * Required (not optional) so any new AuthContext constructor must
+   * make a deliberate choice — drift would otherwise let a passthrough
+   * key fall through to a tenant-scoped handler.
+   */
+  mode: "gateway" | "passthrough";
+  /** The raw upstream key when mode === "passthrough". Never logged. */
+  passthroughKey?: string;
 }
 
 // ---------------------------------------------------------------------------

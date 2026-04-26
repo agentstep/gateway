@@ -112,10 +112,27 @@ import {
 
 // Security scheme: the Managed Agents spec uses `x-api-key` header auth
 // (with optional `Authorization: Bearer` fallback — we document the primary).
+//
+// Two key shapes are accepted:
+//   - Gateway-issued keys (`ck_*`) — full auth context (tenant, scope,
+//     budget, rate limit) and access to every documented route.
+//   - Anthropic API keys (`sk-ant-api*`) — accepted on Anthropic-mirror
+//     routes ONLY (agents, sessions, events, vaults, environments,
+//     files) when the gateway is started with
+//     `ANTHROPIC_PASSTHROUGH_ENABLED=true`. The request is forwarded
+//     transparently to api.anthropic.com using the caller's key; the
+//     gateway never looks the key up locally and never writes any row.
+//     Gateway-only routes (api-keys, settings, metrics, tenants,
+//     upstream-keys, audit, license, traces, providers, models, skills,
+//     whoami, batch) reject `sk-ant-api*` with 401.
 registry.registerComponent("securitySchemes", "ApiKey", {
   type: "apiKey",
   in: "header",
   name: "x-api-key",
+  description:
+    "Gateway-issued API key (`ck_*`). When passthrough is enabled, " +
+    "`sk-ant-api*` keys are also accepted on Anthropic-mirror routes " +
+    "and forwarded transparently to api.anthropic.com.",
 });
 
 // Shared error responses — every authed route can emit these

@@ -68,6 +68,7 @@ The gateway implements the public Anthropic Managed Agents API shape — `/v1/ag
 
 1. **Run agents entirely locally.** Pick a container provider (docker, apple-container, …), a claude / codex / gemini / … engine, and the gateway manages sandboxes + turns.
 2. **Sync-and-proxy to Anthropic's hosted managed agents.** Create an environment with `provider: "anthropic"` — the gateway syncs your agent config (tools, MCP servers, model) to Anthropic, creates a hosted session, and proxies execution traffic. Best of both worlds: Anthropic manages the sandbox; your config lives locally.
+3. **Anthropic API key passthrough.** Set `ANTHROPIC_PASSTHROUGH_ENABLED=true` (or write the `anthropic_passthrough_enabled` setting). Callers presenting their own `sk-ant-api*` key in `x-api-key` are forwarded to Anthropic transparently — no gateway-issued key required, no local sessions/sync rows created. Same URLs, so any Anthropic SDK works as a drop-in. Requests are still recorded in `/v1/metrics/api` (aggregated by route) so you get observability for free. Gateway-only routes (`/v1/api-keys`, `/v1/settings`, `/v1/tenants`, …) reject `sk-ant-api*` keys with 401.
 
 See [`docs/anthropic-integration.md`](docs/anthropic-integration.md) for the sync protocol details.
 
@@ -92,6 +93,7 @@ All commands accept `--remote <url>` (talk to a remote gateway) and `-o json` (s
 - **Vault encryption.** Values are AES-256-GCM encrypted with a per-instance key in `.env`. The API never returns plaintext vault entries.
 - **Settings masking.** `/v1/settings/:key` returns `sk-ant••••••••••Leak`-style masks for secret-shaped keys.
 - **OAuth-token detection.** Pasted `sk-ant-oat*` tokens are remapped to `CLAUDE_CODE_OAUTH_TOKEN` (and blocked entirely when using the Anthropic provider, which requires a real API key).
+- **Passthrough auth isolation.** When `ANTHROPIC_PASSTHROUGH_ENABLED=true`, `sk-ant-api*` keys are routed by *shape* — never compared against the local `api_keys` table — and intercepted before any handler runs. Passthrough requests can never reach gateway-only routes or write any local row. Random strings 401 locally and are never forwarded upstream.
 
 Found a security issue? See [`SECURITY.md`](SECURITY.md).
 

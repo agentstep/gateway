@@ -10,7 +10,7 @@
  * Framework-agnostic — uses Web Standard Response only.
  */
 import { ensureInitialized } from "./init";
-import { authenticate } from "./auth/middleware";
+import { authenticateAndIntercept } from "./auth/middleware";
 import { toResponse, ApiError, tooManyRequests } from "./errors";
 import { captureException } from "./sentry";
 import { recordApiRequest, normalizeRoute } from "./observability/api-metrics";
@@ -30,7 +30,15 @@ export async function routeWrap(
   let status = 500;
   try {
     await ensureInitialized();
-    const auth = await authenticate(request);
+    // `authenticateAndIntercept` returns a terminal Response for any
+    // passthrough request — the handler closure never runs. Gateway-mode
+    // requests fall through with a normal AuthContext.
+    const result = await authenticateAndIntercept(request);
+    if (result.kind === "response") {
+      status = result.response.status;
+      return result.response;
+    }
+    const auth = result.auth;
 
     // Per-key RPM rate limit. Fixed 60s window; backend is memory by
     // default, Redis when RATE_LIMIT_BACKEND=redis. null rateLimitRpm

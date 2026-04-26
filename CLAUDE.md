@@ -78,6 +78,10 @@ The turn driver (`packages/agent-sdk/src/sessions/driver.ts`) orchestrates every
 
 All handlers use `routeWrap()` from `http.ts` which handles init-on-first-request, auth, and error envelopes. Hono, Fastify, Next.js adapters, and the CLI's LocalBackend all call these same handler functions.
 
+### Anthropic API key passthrough
+
+Gated by `anthropic_passthrough_enabled` (env or settings, default off). When on, `sk-ant-api*` keys in `x-api-key` are routed by *shape* in `auth/middleware.ts` — never compared to the local `api_keys` table — and intercepted in `routeWrap` (and `prepareSessionStream` for SSE) before any handler runs. Pure proxy: zero DB writes. Gateway-only routes (api-keys, settings, metrics, tenants, upstream-keys, audit, ...) reject `sk-ant-api*` via the allowlist in `auth/passthrough.ts`. Random strings 401 locally.
+
 ### DB
 
 libsql (SQLite) with WAL mode. Schema is idempotent (`CREATE TABLE IF NOT EXISTS` in `db/migrations.ts`). On first run, auto-seeds an API key and writes it to `.env`.
