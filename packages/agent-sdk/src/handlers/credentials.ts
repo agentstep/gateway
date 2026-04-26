@@ -24,7 +24,7 @@ const CreateCredentialSchema = z.object({
   display_name: z.string().min(1).max(200),
   auth: z.object({
     type: z.enum(["static_bearer"]),
-    mcp_server_url: z.string().url(),
+    mcp_server_url: z.string().url().optional(),
     token: z.string().min(1),
   }),
   metadata: z.record(z.string()).optional(),
