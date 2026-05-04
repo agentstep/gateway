@@ -1,0 +1,234 @@
+---
+title: Multi-Agent Threads
+description: Coordinate multiple agents within a single session. Let a coordinator agent delegate scoped sub-tasks to specialist agents and roll their results back into the main turn.
+---
+
+A coordinator agent can delegate work to other agents by calling the synthetic `spawn_agent` tool. The gateway creates a child session for the spawned agent, runs it to completion, and returns its final reply as the tool result. Each spawned agent runs with its own context window, system prompt, model, tools, MCP servers, and skills — only the textual answer flows back to the coordinator.
+
+Multi-agent threads work best when an overall goal decomposes into multiple well-scoped tasks:
+
+- **Code review** — a reviewer agent with a focused system prompt and read-only tools.
+- **Test generation** — a test agent that writes and runs tests without touching production code.
+- **Research** — a search agent with web tools that summarizes findings back to the coordinator.
+
+<Note>
+Multi-agent threads are currently supported on the `claude` engine only. Other engines manage their own tooling and ignore `threads_enabled`.
+</Note>
+
+## How it works
+
+1. The coordinator agent is created with `threads_enabled: true` and an optional `callable_agents` allow-list.
+2. At session start, the gateway installs `spawn_agent` as a custom tool on the coordinator's container.
+3. When the coordinator calls `spawn_agent`, the driver intercepts the call before it surfaces to your client. It creates a **child session** for the requested agent and runs it to completion.
+4. The child's last `agent.message` text is returned as the `spawn_agent` tool result. The coordinator continues its turn with that text in context.
+5. Token usage and tool-call counts from the child are rolled up into the parent session's stats so dashboards reflect the full cost of the user turn.
+
+The coordinator never sees the child's internal reasoning or tool calls — only the final text. Each child runs in an isolated session with its own event log; you can stream or list those events independently via the [child threads endpoint](#list-child-threads).
+
+## Enable multi-agent on an agent
+
+Set `threads_enabled: true` and (optionally) declare a list of agents the coordinator is allowed to spawn:
+
+```http
+POST /v1/agents
+```
+
+```json
+{
+  "name": "engineering-lead",
+  "model": "claude-opus-4-5",
+  "engine": "claude",
+  "system": "You coordinate engineering work. Delegate code review to the reviewer agent and test writing to the test-writer agent. Use the spawn_agent tool with the agent's id and a focused prompt.",
+  "threads_enabled": true,
+  "callable_agents": [
+    { "type": "agent", "id": "agent_01reviewer" },
+    { "type": "agent", "id": "agent_01testwriter", "version": 4 }
+  ]
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `threads_enabled` | boolean | When `true`, the gateway installs `spawn_agent` as a synthetic custom tool on the agent's container. Default `false`. |
+| `callable_agents` | array | Allow-list of agents this coordinator may spawn. Each entry is `{ type: "agent", id, version? }`. If omitted or empty, **any agent in the tenant** may be spawned. If non-empty, calls to `spawn_agent` with an `agent_id` outside the list return an error result to the coordinator. |
+
+When `callable_agents[].version` is omitted the child uses the target agent's current version at spawn time. Pin a specific version to keep a coordinator reproducible across agent edits.
+
+Both fields are settable at create time and updateable via `PATCH /v1/agents/:id`. Like any other agent edit, the change creates a new agent version; existing sessions continue running against their pinned version.
+
+## The `spawn_agent` tool
+
+When `threads_enabled` is `true`, the gateway injects this custom tool into the coordinator's tool list:
+
+```json
+{
+  "name": "spawn_agent",
+  "description": "Spawn a sub-agent to handle a task. Returns the sub-agent's response.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "agent_id": { "type": "string", "description": "ID of the agent to spawn" },
+      "prompt":   { "type": "string", "description": "Task for the sub-agent" }
+    },
+    "required": ["agent_id", "prompt"]
+  }
+}
+```
+
+You don't need to declare `spawn_agent` in `tools` yourself, and you don't handle it client-side. The driver intercepts the `agent.custom_tool_use` for `spawn_agent` server-side and never asks your integration to fulfil it (unlike user-defined custom tools).
+
+## Child session inheritance
+
+When the coordinator calls `spawn_agent`, the gateway creates a child session that inherits from the parent:
+
+| Inherited | Behavior |
+|---|---|
+| `environment_id` | Child runs in the same environment definition as the parent. |
+| `vault_ids` | All vaults attached to the parent are attached to the child, so secrets are available in both. |
+| `parent_session_id` | Set on the child to the spawning session's ID. |
+| `thread_depth` | Parent depth + 1. Top-level sessions have depth `0`. |
+| `metadata.parent_session_id` | Mirrored into the child's metadata for convenience. |
+| `title` | Set to `Thread from <parent-session-id>` for easy spotting in the UI. |
+
+Containers are **not** shared. The child gets its own container, provisioned with the spawned agent's engine, tools, skills, and MCP servers. This isolation is what lets the child run in parallel without polluting the coordinator's filesystem or context.
+
+### Depth limit
+
+Threads can nest, but only up to a maximum depth of **3**. A spawned agent may itself call `spawn_agent` (if its own `threads_enabled` flag is set) up to that limit; the next call returns an error result instead of creating a child.
+
+```text
+parent (depth 0) → child (depth 1) → grandchild (depth 2) → great-grandchild (depth 3, errors)
+```
+
+### Timeout
+
+Each `spawn_agent` invocation waits up to **5 minutes** for the child to reach an idle status. If the child is still running when the timer expires, the gateway interrupts it and returns whatever final agent message it produced (or `"(no response from sub-agent)"` if there is none).
+
+## Thread events
+
+Two `session.*` events are appended to the **parent** session's event log around each spawn so streaming clients can render the spawn in real time:
+
+### `session.thread_started`
+
+Emitted immediately after the child session is created.
+
+```json
+{
+  "type": "session.thread_started",
+  "payload": {
+    "child_session_id": "session_01CHILD...",
+    "agent_id": "agent_01reviewer"
+  }
+}
+```
+
+### `session.thread_completed`
+
+Emitted after the child reaches idle (or is interrupted on timeout). The `result` field is the same text the coordinator receives as its tool result, and `child_usage` is the rolled-up cost of the child run.
+
+```json
+{
+  "type": "session.thread_completed",
+  "payload": {
+    "child_session_id": "session_01CHILD...",
+    "result": "I reviewed the diff. The auth middleware...",
+    "child_usage": {
+      "input_tokens": 4200,
+      "output_tokens": 380,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 0,
+      "cost_usd": 0.0042,
+      "tool_calls_count": 3
+    }
+  }
+}
+```
+
+Both events carry the parent turn's trace context (`trace_id`, `span_id`, `parent_span_id`), so the cross-session fan-out renders as one trace tree in your observability tools.
+
+## Cost roll-up
+
+The child's `usage_*` counters and `tool_calls_count` are added to the parent session's stats when the child completes. `turn_count` is **not** rolled up — turns are kept separate so the parent's turn count remains an honest count of user-initiated turns. This is what lets a single user turn that fans out to multiple sub-agents show its full cost on the parent row.
+
+## List child threads
+
+Retrieve the sessions spawned from a parent:
+
+```http
+GET /v1/sessions/:id/threads
+```
+
+| Parameter | Type | Description |
+|---|---|---|
+| `limit` | number | Results per page (1–100, default 20). |
+| `order` | `asc` \| `desc` | Sort by creation time. Default `desc`. |
+
+Returns the standard session list shape:
+
+```json
+{
+  "data": [
+    {
+      "id": "session_01CHILD...",
+      "type": "session",
+      "agent": { "type": "agent", "id": "agent_01reviewer", "version": 2 },
+      "parent_session_id": "session_01PARENT...",
+      "thread_depth": 1,
+      "status": "idle",
+      "stop_reason": "end_turn",
+      "stats": { "turn_count": 1, "tool_calls_count": 3 },
+      "usage": { "input_tokens": 4200, "output_tokens": 380, "cost_usd": 0.0042 }
+    }
+  ],
+  "next_page": null
+}
+```
+
+You can stream a child's events directly with `GET /v1/sessions/:child_id/stream` exactly as you would for any session — the parent/child relationship doesn't change the event API.
+
+## End-to-end example
+
+Define a reviewer agent, then a coordinator that calls it:
+
+```bash
+# 1. Create the specialist
+REVIEWER=$(curl -fsS https://gateway.example.com/v1/agents \
+  -H "x-api-key: $GATEWAY_API_KEY" -H "content-type: application/json" \
+  -d '{
+    "name": "reviewer",
+    "model": "claude-sonnet-4-5",
+    "engine": "claude",
+    "system": "You are a senior engineer. Review the diff and output structured feedback. Read-only — never modify files."
+  }')
+REVIEWER_ID=$(echo "$REVIEWER" | jq -r .id)
+
+# 2. Create the coordinator with threads enabled
+curl -fsS https://gateway.example.com/v1/agents \
+  -H "x-api-key: $GATEWAY_API_KEY" -H "content-type: application/json" \
+  -d "{
+    \"name\": \"engineering-lead\",
+    \"model\": \"claude-opus-4-5\",
+    \"engine\": \"claude\",
+    \"system\": \"You coordinate engineering work. Delegate code review to the reviewer agent (id: $REVIEWER_ID) using spawn_agent.\",
+    \"threads_enabled\": true,
+    \"callable_agents\": [{\"type\": \"agent\", \"id\": \"$REVIEWER_ID\"}]
+  }"
+```
+
+Once the coordinator session is running, every `spawn_agent` invocation is reflected on the parent's event stream:
+
+```text
+event: session.thread_started
+data: {"payload":{"child_session_id":"session_01CHILD...","agent_id":"agent_01reviewer"}}
+
+event: session.thread_completed
+data: {"payload":{"child_session_id":"session_01CHILD...","result":"...","child_usage":{...}}}
+```
+
+## Limits and constraints
+
+- **Engine:** `claude` only. Setting `threads_enabled` on a non-claude agent has no effect — the synthetic tool is not installed for those engines.
+- **Depth:** Hard cap of 3 nested levels.
+- **Timeout:** Each spawn waits up to 5 minutes for the child to reach idle.
+- **Allow-list:** When `callable_agents` is non-empty, calls outside the list return an error result to the coordinator (the parent turn does not fail — the model sees the error and can recover).
+- **Container isolation:** Children get their own container; nothing on the parent's filesystem is visible to the child unless both happen to mount the same resources.

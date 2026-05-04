@@ -45,9 +45,9 @@ The response body is an `Agent` object at `version: 1`.
 | `webhook_url` | string \| null | `null` | URL that receives session lifecycle events. |
 | `webhook_events` | string[] | `["session.status_idle","session.status_running","session.error"]` | Which events to deliver. |
 | `webhook_secret` | string | — | HMAC-SHA256 shared secret (min 32 chars). When set, deliveries include `X-AgentStep-Signature: sha256=<hex>`. The secret is never returned by the API — only `webhook_signing_enabled: true/false` is surfaced. |
-| `threads_enabled` | boolean | `false` | Adds a synthetic `spawn_agent` custom tool so the agent can delegate sub-tasks. |
+| `threads_enabled` | boolean | `false` | Adds a synthetic `spawn_agent` custom tool so the agent can delegate sub-tasks. See [Multi-Agent Threads](/build-agents/multi-agent). |
 | `confirmation_mode` | boolean | `false` | Enables the permission bridge. Claude runs with `default` permission mode and pauses before destructive tool calls. |
-| `callable_agents` | array | `[]` | Agents this agent may spawn when `threads_enabled` is `true`. Each entry is `{type:"agent", id, version?}`. |
+| `callable_agents` | array | `[]` | Agents this agent may spawn when `threads_enabled` is `true`. Each entry is `{type:"agent", id, version?}`. See [Multi-Agent Threads](/build-agents/multi-agent). |
 | `model_config` | object | `{}` | Engine-level model hints. Currently supports `speed: "standard" \| "fast"` (maps to `--fast` on the Claude CLI). |
 
 ### Engine constraints

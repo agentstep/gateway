@@ -227,6 +227,42 @@ An error occurred during processing.
 }
 ```
 
+### `session.thread_started`
+
+The coordinator agent spawned a child session via `spawn_agent`. See [Multi-Agent Threads](/build-agents/multi-agent).
+
+```json
+{
+  "type": "session.thread_started",
+  "payload": {
+    "child_session_id": "session_01CHILD...",
+    "agent_id": "agent_01reviewer"
+  }
+}
+```
+
+### `session.thread_completed`
+
+A spawned child session reached idle. The `result` field is the text returned to the coordinator as the `spawn_agent` tool result; `child_usage` rolls up the child's token and tool-call counters.
+
+```json
+{
+  "type": "session.thread_completed",
+  "payload": {
+    "child_session_id": "session_01CHILD...",
+    "result": "...",
+    "child_usage": {
+      "input_tokens": 4200,
+      "output_tokens": 380,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 0,
+      "cost_usd": 0.0042,
+      "tool_calls_count": 3
+    }
+  }
+}
+```
+
 ### `session.file_synced`
 
 A file was auto-extracted from the container after the turn completed.

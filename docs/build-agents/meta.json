@@ -5,6 +5,7 @@
     "environments",
     "tools",
     "skills",
-    "mcp-connector"
+    "mcp-connector",
+    "multi-agent"
   ]
 }
