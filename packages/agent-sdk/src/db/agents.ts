@@ -233,6 +233,36 @@ export function archiveAgent(id: string): boolean {
   return res.changes > 0;
 }
 
+export function listAgentVersions(agentId: string, opts: {
+  limit?: number;
+  cursor?: number; // version number cursor (descending)
+}): Agent[] {
+  const db = getDrizzle();
+  const limit = Math.min(Math.max(opts.limit ?? 20, 1), 100);
+
+  const row = db
+    .select()
+    .from(schema.agents)
+    .where(eq(schema.agents.id, agentId))
+    .get() as AgentRow | undefined;
+  if (!row) return [];
+
+  const conditions = [eq(schema.agentVersions.agent_id, agentId)];
+  if (opts.cursor) {
+    conditions.push(lt(schema.agentVersions.version, opts.cursor));
+  }
+
+  const versions = db
+    .select()
+    .from(schema.agentVersions)
+    .where(and(...conditions))
+    .orderBy(desc(schema.agentVersions.version))
+    .limit(limit)
+    .all() as AgentVersionRow[];
+
+  return versions.map((ver) => hydrate(row, ver));
+}
+
 export function listAgents(opts: {
   limit?: number;
   order?: "asc" | "desc";

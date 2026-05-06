@@ -11,6 +11,8 @@ import {
   handleGetAgent,
   handleUpdateAgent,
   handleDeleteAgent,
+  handleArchiveAgent,
+  handleListAgentVersions,
   handleCreateEnvironment,
   handleListEnvironments,
   handleGetEnvironment,
@@ -171,6 +173,9 @@ app.get("/v1/docs", () => handleGetDocs());
 // ── Agents ───────────────────────────────────────────────────────────────
 app.post("/v1/agents", (c) => handleCreateAgent(c.req.raw));
 app.get("/v1/agents", (c) => handleListAgents(c.req.raw));
+// Sub-resource routes must be registered BEFORE the generic :id routes
+app.post("/v1/agents/:id/archive", (c) => handleArchiveAgent(c.req.raw, c.req.param("id")));
+app.get("/v1/agents/:id/versions", (c) => handleListAgentVersions(c.req.raw, c.req.param("id")));
 app.get("/v1/agents/:id", (c) => handleGetAgent(c.req.raw, c.req.param("id")));
 app.post("/v1/agents/:id", (c) => handleUpdateAgent(c.req.raw, c.req.param("id")));
 app.delete("/v1/agents/:id", (c) => handleDeleteAgent(c.req.raw, c.req.param("id")));

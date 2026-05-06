@@ -229,7 +229,7 @@ describe("Agents", () => {
     const agent = await createTestAgent({ name: "OldName" });
     const { handleUpdateAgent } = await import("../src/handlers/agents");
     const res = await handleUpdateAgent(
-      req(`/v1/agents/${agent.id}`, { method: "PATCH", body: { name: "NewName" } }),
+      req(`/v1/agents/${agent.id}`, { method: "PATCH", body: { version: 1, name: "NewName" } }),
       agent.id as string,
     );
     expect(res.status).toBe(200);
@@ -243,7 +243,7 @@ describe("Agents", () => {
     expect(agent.version).toBe(1);
     const { handleUpdateAgent } = await import("../src/handlers/agents");
     const res = await handleUpdateAgent(
-      req(`/v1/agents/${agent.id}`, { method: "PATCH", body: { model: "claude-opus-4-6" } }),
+      req(`/v1/agents/${agent.id}`, { method: "PATCH", body: { version: 1, model: "claude-opus-4-6" } }),
       agent.id as string,
     );
     expect(res.status).toBe(200);
@@ -2500,7 +2500,7 @@ describe("Agent Skills CRUD", () => {
       { name: "added-skill", source: "x/y@added-skill", content: "# Added", installed_at: new Date().toISOString() },
     ];
     const updateRes = await handleUpdateAgent(
-      req(`/v1/agents/${agent.id}`, { body: { skills: newSkills } }),
+      req(`/v1/agents/${agent.id}`, { body: { version: 1, skills: newSkills } }),
       agent.id as string,
     );
     expect(updateRes.status).toBe(200);
@@ -2526,7 +2526,7 @@ describe("Agent Skills CRUD", () => {
 
     // Remove one skill
     await handleUpdateAgent(
-      req(`/v1/agents/${agent.id}`, { body: { skills: [skills[0]] } }),
+      req(`/v1/agents/${agent.id}`, { body: { version: 1, skills: [skills[0]] } }),
       agent.id as string,
     );
 
@@ -2960,7 +2960,7 @@ describe("Agents — Additional Coverage", () => {
     const agent = await createTestAgent();
     const { handleUpdateAgent } = await import("../src/handlers/agents");
     const res = await handleUpdateAgent(
-      req(`/v1/agents/${agent.id}`, { body: { name: "NewName", model: "claude-opus-4-6" } }),
+      req(`/v1/agents/${agent.id}`, { body: { version: 1, name: "NewName", model: "claude-opus-4-6" } }),
       agent.id as string,
     );
     expect(res.status).toBe(200);
@@ -2975,11 +2975,11 @@ describe("Agents — Additional Coverage", () => {
     const agent = await createTestAgent();
     const { handleUpdateAgent, handleGetAgent } = await import("../src/handlers/agents");
     await handleUpdateAgent(
-      req(`/v1/agents/${agent.id}`, { body: { name: "V2" } }),
+      req(`/v1/agents/${agent.id}`, { body: { version: 1, name: "V2" } }),
       agent.id as string,
     );
     await handleUpdateAgent(
-      req(`/v1/agents/${agent.id}`, { body: { name: "V3" } }),
+      req(`/v1/agents/${agent.id}`, { body: { version: 2, name: "V3" } }),
       agent.id as string,
     );
     const res = await handleGetAgent(req(`/v1/agents/${agent.id}`), agent.id as string);
@@ -2993,7 +2993,7 @@ describe("Agents — Additional Coverage", () => {
     const agent = await createTestAgent({ name: "VersionTest" });
     const { handleUpdateAgent, handleGetAgent } = await import("../src/handlers/agents");
     await handleUpdateAgent(
-      req(`/v1/agents/${agent.id}`, { body: { name: "Updated" } }),
+      req(`/v1/agents/${agent.id}`, { body: { version: 1, name: "Updated" } }),
       agent.id as string,
     );
     // Get latest — should be version 2

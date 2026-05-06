@@ -337,7 +337,7 @@ describe("Agent CRUD", () => {
     expect(agent.version).toBe(1);
 
     const updateRes = await handleUpdateAgent(
-      req(`/v1/agents/${agent.id}`, { method: "PATCH", body: { model: "claude-opus-4-5" } }),
+      req(`/v1/agents/${agent.id}`, { method: "PATCH", body: { version: 1, model: "claude-opus-4-5" } }),
       agent.id,
     );
     expect(updateRes.status).toBe(200);

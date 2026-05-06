@@ -454,7 +454,7 @@ describe("Agent CLI Operations", () => {
       handleUpdateAgent,
       "POST",
       `/v1/agents/${agent.id}`,
-      { name: "UpdatedName", system: "new system prompt" },
+      { version: 1, name: "UpdatedName", system: "new system prompt" },
       agent.id as string,
     );
     expect(result.name).toBe("UpdatedName");

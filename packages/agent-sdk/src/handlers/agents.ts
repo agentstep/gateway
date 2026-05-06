@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { routeWrap, jsonOk, paginatedOk, decodeCursor } from "../http";
 import { getDb } from "../db/client";
-import { createAgent, getAgent, updateAgent, archiveAgent, listAgents } from "../db/agents";
+import { createAgent, getAgent, updateAgent, archiveAgent, listAgents, listAgentVersions } from "../db/agents";
 import { resolveBackend } from "../backends/registry";
 import { isProxied, markProxied, unmarkProxied, getProxiedTenantId } from "../db/proxy";
 import { forwardToAnthropic, validateAnthropicProxy } from "../proxy/forward";
@@ -133,6 +133,7 @@ const CreateSchema = z.object({
 }, "Total skills content exceeds 1MB limit");
 
 const UpdateSchema = z.object({
+  version: z.number().int().min(1),
   name: z.string().min(1).optional(),
   model: z.union([
     z.string().min(1),
@@ -311,7 +312,7 @@ export function handleUpdateAgent(request: Request, id: string): Promise<Respons
       assertProxiedAgentTenant(auth, id);
       return forwardToAnthropic(request, `/v1/agents/${id}`);
     }
-    loadAgentForCaller(auth, id); // tenant guard
+    const current = loadAgentForCaller(auth, id); // tenant guard
     const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
 
     if (body && typeof body === "object" && "backend" in body) {
@@ -320,6 +321,11 @@ export function handleUpdateAgent(request: Request, id: string): Promise<Respons
 
     const parsed = UpdateSchema.safeParse(body);
     if (!parsed.success) throw badRequest(parsed.error.message);
+
+    // Optimistic concurrency: version must match current
+    if (current.version !== parsed.data.version) {
+      throw conflict(`Version mismatch: expected ${current.version}, got ${parsed.data.version}`);
+    }
 
     // Normalize model input: accept string or { id, speed? }
     let modelId: string | undefined;
@@ -387,5 +393,45 @@ export function handleDeleteAgent(request: Request, id: string): Promise<Respons
     const ok = archiveAgent(id);
     if (!ok) throw notFound(`agent ${id} not found`);
     return jsonOk({ id, type: "agent_deleted" });
+  });
+}
+
+export function handleArchiveAgent(request: Request, id: string): Promise<Response> {
+  return routeWrap(request, async ({ auth }) => {
+    if (isProxied(id)) {
+      assertProxiedAgentTenant(auth, id);
+      const res = await forwardToAnthropic(request, `/v1/agents/${id}/archive`);
+      if (res.ok) unmarkProxied(id);
+      return res;
+    }
+    loadAgentForCaller(auth, id); // tenant guard
+    const ok = archiveAgent(id);
+    if (!ok) throw notFound(`agent ${id} not found`);
+    const agent = getAgent(id)!;
+    return jsonOk(agent);
+  });
+}
+
+export function handleListAgentVersions(request: Request, id: string): Promise<Response> {
+  return routeWrap(request, async ({ auth, request: req }) => {
+    loadAgentForCaller(auth, id); // tenant guard
+    const url = new URL(req.url);
+    const limit = url.searchParams.get("limit");
+    const cursorRaw = decodeCursor(url.searchParams.get("page"));
+    const cursor = cursorRaw ? Number(cursorRaw) : undefined;
+
+    const requestedLimit = limit ? Number(limit) : 20;
+    const data = listAgentVersions(id, {
+      limit: requestedLimit,
+      cursor,
+    });
+
+    // Pagination: use version number as cursor (base64url encoded)
+    const hasMore = data.length === requestedLimit;
+    const nextPage =
+      hasMore && data.length > 0
+        ? Buffer.from(String(data[data.length - 1].version)).toString("base64url")
+        : null;
+    return jsonOk({ data, next_page: nextPage });
   });
 }
