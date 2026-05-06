@@ -169,12 +169,14 @@ export const events = sqliteTable("events", {
 
 export const vaults = sqliteTable("vaults", {
   id: text("id").primaryKey(),
-  agent_id: text("agent_id").notNull(),
+  agent_id: text("agent_id"),
   name: text("name").notNull(),
+  metadata_json: text("metadata_json").notNull().default("{}"),
   // v0.5 ALTER TABLE addition:
   tenant_id: text("tenant_id"),
   created_at: integer("created_at").notNull(),
   updated_at: integer("updated_at").notNull(),
+  archived_at: integer("archived_at"),
 });
 
 // ── vault_entries ─────────────────────────────────────────────────────

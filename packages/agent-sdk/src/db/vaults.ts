@@ -5,7 +5,7 @@ import { DEFAULT_TENANT_ID } from "./tenants";
  * Data persists across sessions. When `vault_ids` is set on a session,
  * the driver provisions vault data into the container at turn start.
  */
-import { eq, and, asc, desc } from "drizzle-orm";
+import { eq, and, asc, desc, isNull } from "drizzle-orm";
 import { getDrizzle, schema } from "./drizzle";
 import { newId } from "../util/ids";
 import { nowMs, toIso } from "../util/clock";
@@ -13,19 +13,25 @@ import { encryptValue, decryptValue } from "./vault-crypto";
 import type { Vault, VaultEntry, VaultRow } from "../types";
 
 function hydrateVault(row: VaultRow): Vault {
+  let metadata: Record<string, string> = {};
+  try { metadata = JSON.parse(row.metadata_json || "{}"); } catch { /* ignore */ }
   return {
+    type: "vault",
     id: row.id,
     agent_id: row.agent_id,
     name: row.name,
     display_name: row.name,
+    metadata,
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
+    archived_at: row.archived_at ? toIso(row.archived_at) : null,
   };
 }
 
 export function createVault(input: {
-  agent_id: string;
+  agent_id?: string | null;
   name: string;
+  metadata?: Record<string, string>;
   /** v0.5: tenant ownership. Null = legacy/global (pre-migration). */
   tenant_id?: string | null;
 }): Vault {
@@ -35,8 +41,9 @@ export function createVault(input: {
 
   db.insert(schema.vaults).values({
     id,
-    agent_id: input.agent_id,
+    agent_id: input.agent_id ?? null,
     name: input.name,
+    metadata_json: JSON.stringify(input.metadata ?? {}),
     tenant_id: input.tenant_id ?? DEFAULT_TENANT_ID,
     created_at: now,
     updated_at: now,
@@ -76,6 +83,36 @@ export function listVaults(opts: {
       : db.select().from(schema.vaults).orderBy(desc(schema.vaults.created_at)).all()
   ) as VaultRow[];
   return rows.map(hydrateVault);
+}
+
+export function updateVault(id: string, fields: {
+  display_name?: string;
+  metadata?: Record<string, string>;
+}): Vault | null {
+  const db = getDrizzle();
+  const now = nowMs();
+  const updates: Record<string, unknown> = { updated_at: now };
+  if (fields.display_name !== undefined) {
+    updates.name = fields.display_name;
+  }
+  if (fields.metadata !== undefined) {
+    updates.metadata_json = JSON.stringify(fields.metadata);
+  }
+  db.update(schema.vaults)
+    .set(updates)
+    .where(eq(schema.vaults.id, id))
+    .run();
+  return getVault(id);
+}
+
+export function archiveVault(id: string): boolean {
+  const db = getDrizzle();
+  const res = db
+    .update(schema.vaults)
+    .set({ archived_at: nowMs() })
+    .where(and(eq(schema.vaults.id, id), isNull(schema.vaults.archived_at)))
+    .run();
+  return res.changes > 0;
 }
 
 export function deleteVault(id: string): boolean {

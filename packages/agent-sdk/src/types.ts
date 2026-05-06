@@ -319,22 +319,27 @@ export interface Session {
 
 export interface VaultRow {
   id: string;
-  agent_id: string;
+  agent_id: string | null;
   name: string;
+  metadata_json: string;
   /** v0.5: tenant ownership. Null = legacy/global (pre-migration). */
   tenant_id: string | null;
   created_at: number;
   updated_at: number;
+  archived_at: number | null;
 }
 
 export interface Vault {
+  type: "vault";
   id: string;
-  agent_id: string;
+  agent_id: string | null;
   name: string;
   /** Anthropic-compatible alias for `name`. */
   display_name: string;
+  metadata: Record<string, string>;
   created_at: string;
   updated_at: string;
+  archived_at: string | null;
 }
 
 export interface VaultEntryRow {

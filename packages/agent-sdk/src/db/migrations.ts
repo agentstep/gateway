@@ -679,4 +679,41 @@ export function runMigrations(db: InstanceType<typeof Database>): void {
   if (!sessColsQuota.some((c) => c.name === "max_wall_duration_ms")) {
     db.exec(`ALTER TABLE sessions ADD COLUMN max_wall_duration_ms INTEGER DEFAULT NULL`);
   }
+
+  // Vault metadata + archive + optional agent_id.
+  // agent_id was originally NOT NULL — SQLite requires table recreation to
+  // drop the constraint. We detect by checking the column's `notnull` flag.
+  {
+    const cols = db.prepare("PRAGMA table_info(vaults)").all() as Array<{ name: string; notnull: number }>;
+    const names = new Set(cols.map((c) => c.name));
+    if (!names.has("metadata_json")) {
+      db.exec("ALTER TABLE vaults ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'");
+    }
+    if (!names.has("archived_at")) {
+      db.exec("ALTER TABLE vaults ADD COLUMN archived_at INTEGER");
+    }
+    // Make agent_id nullable (recreate table if still NOT NULL)
+    const agentIdCol = cols.find((c) => c.name === "agent_id");
+    if (agentIdCol && agentIdCol.notnull === 1) {
+      db.exec(`
+        CREATE TABLE vaults_new (
+          id TEXT PRIMARY KEY,
+          agent_id TEXT,
+          name TEXT NOT NULL,
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          tenant_id TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          archived_at INTEGER
+        );
+        INSERT INTO vaults_new SELECT id, agent_id, name,
+          COALESCE(metadata_json, '{}'), tenant_id, created_at, updated_at,
+          archived_at FROM vaults;
+        DROP TABLE vaults;
+        ALTER TABLE vaults_new RENAME TO vaults;
+      `);
+      // Recreate index that was dropped with the old table
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_vaults_tenant ON vaults(tenant_id)`);
+    }
+  }
 }

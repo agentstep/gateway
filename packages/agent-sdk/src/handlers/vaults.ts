@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { routeWrap, jsonOk, paginatedOk } from "../http";
 import { getDb } from "../db/client";
-import { createVault, getVault, deleteVault, listVaults, listEntries, getEntry, setEntry, deleteEntry } from "../db/vaults";
+import { createVault, getVault, updateVault, archiveVault, deleteVault, listVaults, listEntries, getEntry, setEntry, deleteEntry } from "../db/vaults";
 import { getAgent } from "../db/agents";
 import { badRequest, notFound, conflict } from "../errors";
 import { assertResourceTenant, resolveCreateTenant, tenantFilter } from "../auth/scope";
@@ -41,14 +41,17 @@ function maskValue(value: string): string {
 }
 
 const CreateVaultSchema = z.object({
-  agent_id: z.string().min(1),
+  agent_id: z.string().min(1).optional(),
   name: z.string().min(1).optional(),
   /** Anthropic-compatible alias for `name`. */
   display_name: z.string().min(1).optional(),
+  metadata: z.record(z.string().max(512)).optional(),
   /** v0.5: required for global admin, ignored for tenant users. */
   tenant_id: z.string().optional(),
 }).refine(data => data.name || data.display_name, {
   message: "Either name or display_name is required",
+}).refine(data => !data.metadata || Object.keys(data.metadata).length <= 16, {
+  message: "metadata must have at most 16 key-value pairs",
 });
 
 const PutEntrySchema = z.object({
@@ -61,40 +64,46 @@ export function handleCreateVault(request: Request): Promise<Response> {
     const parsed = CreateVaultSchema.safeParse(body);
     if (!parsed.success) throw badRequest(parsed.error.message);
 
-    // Agent tenant becomes the vault tenant — a vault always lives in its
-    // agent's tenant. Tenant users can only attach to their own agents
-    // (we raise 404 on cross-tenant); global admins must supply tenant_id
-    // and it must match the agent's tenant.
-    const agentTenantId = getAgentTenantId(parsed.data.agent_id);
-    if (agentTenantId === undefined) {
-      throw notFound(`agent not found: ${parsed.data.agent_id}`);
-    }
-    assertResourceTenant(auth, agentTenantId, `agent not found: ${parsed.data.agent_id}`);
-    const agent = getAgent(parsed.data.agent_id);
-    if (!agent) throw notFound(`agent not found: ${parsed.data.agent_id}`);
+    let createTenantId: string;
 
-    const createTenantId = resolveCreateTenant(auth, parsed.data.tenant_id);
-    if (createTenantId !== agentTenantId) {
-      throw badRequest(
-        `vault tenant_id must match agent tenant_id (${agentTenantId})`,
-      );
+    if (parsed.data.agent_id) {
+      // Agent-scoped vault: tenant comes from the agent.
+      const agentTenantId = getAgentTenantId(parsed.data.agent_id);
+      if (agentTenantId === undefined) {
+        throw notFound(`agent not found: ${parsed.data.agent_id}`);
+      }
+      assertResourceTenant(auth, agentTenantId, `agent not found: ${parsed.data.agent_id}`);
+      const agent = getAgent(parsed.data.agent_id);
+      if (!agent) throw notFound(`agent not found: ${parsed.data.agent_id}`);
+
+      createTenantId = resolveCreateTenant(auth, parsed.data.tenant_id);
+      if (createTenantId !== agentTenantId) {
+        throw badRequest(
+          `vault tenant_id must match agent tenant_id (${agentTenantId})`,
+        );
+      }
+
+      // Check for duplicate vault name on same agent
+      const vaultName = (parsed.data.name ?? parsed.data.display_name)!;
+      const existing = listVaults({ agent_id: parsed.data.agent_id, tenantFilter: tenantFilter(auth) });
+      if (existing.some(v => v.name === vaultName)) {
+        throw conflict(`Vault "${vaultName}" already exists for this agent`);
+      }
+    } else {
+      // Standalone vault: tenant from auth context
+      createTenantId = resolveCreateTenant(auth, parsed.data.tenant_id);
     }
 
     // Resolve name from either field (name takes precedence)
     const vaultName = (parsed.data.name ?? parsed.data.display_name)!;
 
-    // Check for duplicate vault name on same agent
-    const existing = listVaults({ agent_id: parsed.data.agent_id, tenantFilter: tenantFilter(auth) });
-    if (existing.some(v => v.name === vaultName)) {
-      throw conflict(`Vault "${vaultName}" already exists for this agent`);
-    }
-
     const vault = createVault({
-      agent_id: parsed.data.agent_id,
+      agent_id: parsed.data.agent_id ?? null,
       name: vaultName,
+      metadata: parsed.data.metadata,
       tenant_id: createTenantId,
     });
-    return jsonOk({ ...vault, display_name: vault.name }, 201);
+    return jsonOk(vault, 201);
   });
 }
 
@@ -120,6 +129,38 @@ export function handleDeleteVault(request: Request, id: string): Promise<Respons
     const deleted = deleteVault(id);
     if (!deleted) throw notFound(`vault not found: ${id}`);
     return jsonOk({ id, type: "vault_deleted" });
+  });
+}
+
+const UpdateVaultSchema = z.object({
+  display_name: z.string().min(1).max(255).optional(),
+  metadata: z.record(z.string().max(512)).optional(),
+}).refine(data => !data.metadata || Object.keys(data.metadata).length <= 16, {
+  message: "metadata must have at most 16 key-value pairs",
+});
+
+export function handleUpdateVault(request: Request, id: string): Promise<Response> {
+  return routeWrap(request, async ({ auth }) => {
+    loadVaultForCaller(auth, id); // tenant guard
+    const body = await request.json();
+    const parsed = UpdateVaultSchema.safeParse(body);
+    if (!parsed.success) throw badRequest(parsed.error.message);
+    const vault = updateVault(id, {
+      display_name: parsed.data.display_name,
+      metadata: parsed.data.metadata,
+    });
+    if (!vault) throw notFound(`vault not found: ${id}`);
+    return jsonOk(vault);
+  });
+}
+
+export function handleArchiveVault(request: Request, id: string): Promise<Response> {
+  return routeWrap(request, async ({ auth }) => {
+    loadVaultForCaller(auth, id); // tenant guard
+    const ok = archiveVault(id);
+    if (!ok) throw notFound(`vault not found: ${id}`);
+    const vault = getVault(id)!;
+    return jsonOk(vault);
   });
 }
 

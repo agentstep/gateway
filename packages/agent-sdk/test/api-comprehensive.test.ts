@@ -2203,13 +2203,17 @@ describe("Edge Cases", () => {
     expect(body.data).toEqual([]);
   });
 
-  it("creating vault without agent_id -> 400", async () => {
+  it("creating standalone vault without agent_id -> 201", async () => {
     await bootDb();
     const { handleCreateVault } = await import("../src/handlers/vaults");
     const res = await handleCreateVault(
-      req("/v1/vaults", { body: { name: "no-agent" } }),
+      req("/v1/vaults", { body: { name: "standalone" } }),
     );
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.type).toBe("vault");
+    expect(body.agent_id).toBeNull();
+    expect(body.name).toBe("standalone");
   });
 
   it("put entry with missing value -> 400", async () => {

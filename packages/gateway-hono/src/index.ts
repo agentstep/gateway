@@ -41,6 +41,8 @@ import {
   handleCreateVault,
   handleListVaults,
   handleGetVault,
+  handleUpdateVault,
+  handleArchiveVault,
   handleDeleteVault,
   handleListEntries,
   handleGetEntry,
@@ -267,7 +269,10 @@ app.get("/v1/sessions/:id/threads", (c) => handleListThreads(c.req.raw, c.req.pa
 // ── Vaults ───────────────────────────────────────────────────────────────
 app.post("/v1/vaults", (c) => handleCreateVault(c.req.raw));
 app.get("/v1/vaults", (c) => handleListVaults(c.req.raw));
+// Sub-resource routes must be registered BEFORE the generic :id routes
+app.post("/v1/vaults/:id/archive", (c) => handleArchiveVault(c.req.raw, c.req.param("id")));
 app.get("/v1/vaults/:id", (c) => handleGetVault(c.req.raw, c.req.param("id")));
+app.post("/v1/vaults/:id", (c) => handleUpdateVault(c.req.raw, c.req.param("id")));
 app.delete("/v1/vaults/:id", (c) => handleDeleteVault(c.req.raw, c.req.param("id")));
 
 // Vault credentials (Anthropic-compatible) — registered BEFORE :key routes
