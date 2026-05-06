@@ -34,6 +34,7 @@ import {
   VaultListResponseSchema,
   VaultEntryListResponseSchema,
   CreateVaultRequestSchema,
+  UpdateVaultRequestSchema,
   SetVaultEntryRequestSchema,
   VaultDeletedResponseSchema,
   VaultEntryDeletedResponseSchema,
@@ -261,6 +262,48 @@ registry.registerPath({
   },
 });
 
+registry.registerPath({
+  method: "post",
+  path: "/v1/agents/{id}/archive",
+  tags: ["Agents"],
+  summary: "Archive an agent (returns the archived agent)",
+  description:
+    "Archives the agent and returns the full agent object with `archived_at` set.",
+  security: [{ ApiKey: [] }],
+  request: { params: z.object({ id: z.string() }) },
+  responses: {
+    200: {
+      description: "Agent archived",
+      content: { "application/json": { schema: AgentSchema } },
+    },
+    ...ErrorResponses,
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/v1/agents/{id}/versions",
+  tags: ["Agents"],
+  summary: "List agent versions",
+  description:
+    "Returns a paginated list of all versions of this agent, ordered by version number descending.",
+  security: [{ ApiKey: [] }],
+  request: {
+    params: z.object({ id: z.string() }),
+    query: z.object({
+      limit: z.coerce.number().int().min(1).max(100).optional(),
+      page: z.string().optional().describe("Cursor for pagination (base64url-encoded version number)"),
+    }),
+  },
+  responses: {
+    200: {
+      description: "A page of agent versions",
+      content: { "application/json": { schema: AgentListResponseSchema } },
+    },
+    ...ErrorResponses,
+  },
+});
+
 // ---------------------------------------------------------------------------
 // /v1/environments
 // ---------------------------------------------------------------------------
@@ -427,7 +470,8 @@ registry.registerPath({
       agent_id: z.string().optional(),
       agent_version: z.coerce.number().int().optional(),
       environment_id: z.string().optional(),
-      status: SessionStatusSchema.optional(),
+      status: SessionStatusSchema.optional().describe("Filter by single status (deprecated, use statuses)"),
+      statuses: z.string().optional().describe("Comma-separated or repeated status filter, e.g. statuses=idle,running"),
       "created_at[gt]": z.string().optional(),
       "created_at[gte]": z.string().optional(),
       "created_at[lt]": z.string().optional(),
@@ -879,6 +923,29 @@ registry.registerPath({
 });
 
 registry.registerPath({
+  method: "post",
+  path: "/v1/vaults/{id}",
+  tags: ["Vaults"],
+  summary: "Update a vault",
+  description: "Updates vault display_name and/or metadata.",
+  security: [{ ApiKey: [] }],
+  request: {
+    params: z.object({ id: z.string() }),
+    body: {
+      required: true,
+      content: { "application/json": { schema: UpdateVaultRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Vault updated",
+      content: { "application/json": { schema: VaultSchema } },
+    },
+    ...ErrorResponses,
+  },
+});
+
+registry.registerPath({
   method: "delete",
   path: "/v1/vaults/{id}",
   tags: ["Vaults"],
@@ -889,6 +956,23 @@ registry.registerPath({
     200: {
       description: "Vault deleted",
       content: { "application/json": { schema: VaultDeletedResponseSchema } },
+    },
+    ...ErrorResponses,
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/vaults/{id}/archive",
+  tags: ["Vaults"],
+  summary: "Archive a vault",
+  description: "Archives the vault and returns the full vault object with `archived_at` set.",
+  security: [{ ApiKey: [] }],
+  request: { params: z.object({ id: z.string() }) },
+  responses: {
+    200: {
+      description: "Vault archived",
+      content: { "application/json": { schema: VaultSchema } },
     },
     ...ErrorResponses,
   },

@@ -137,13 +137,27 @@ export const ModelConfigSchema = registry.register(
 export const AgentSchema = registry.register(
   "Agent",
   z.object({
+    type: z.literal("agent"),
     id: UlidId,
     version: z.number().int().positive(),
     name: z.string(),
-    model: z.string(),
+    description: z.string().openapi({ description: "Human-readable description of the agent." }),
+    model: z.object({
+      id: z.string(),
+      speed: z.enum(["standard", "fast"]).optional(),
+    }).openapi({ description: "Model configuration. `id` is the canonical model identifier." }),
     system: z.string().nullable(),
     tools: z.array(ToolConfigSchema),
-    mcp_servers: z.record(McpServerConfigSchema),
+    mcp_servers: z.array(z.object({
+      name: z.string(),
+      type: z.string(),
+      url: z.string().optional(),
+    }).catchall(z.unknown())).openapi({
+      description: "MCP servers configured for this agent. Each entry has a name, type, and optional url.",
+    }),
+    metadata: z.record(z.string()).openapi({
+      description: "Key-value metadata attached to the agent. Values must be strings.",
+    }),
     engine: z.enum(["claude", "opencode", "codex", "anthropic", "gemini", "factory", "pi"]).openapi({
       description:
         "Which agent harness powers this agent. `claude` drives `claude -p`; `opencode` drives sst/opencode-ai's `opencode run`; `gemini` drives Google's `gemini -p`; `factory` drives Factory's `droid exec`; `pi` drives the pi.dev coding agent (`pi --mode json`). Immutable after agent creation.",
@@ -154,11 +168,21 @@ export const AgentSchema = registry.register(
     webhook_events: z.array(z.string()).openapi({
       description: "Event types that trigger webhook delivery. Defaults to status + error events.",
     }),
+    webhook_signing_enabled: z.boolean().openapi({
+      description: "Whether a webhook shared secret is configured. The secret itself is never returned.",
+    }),
     threads_enabled: z.boolean().openapi({
       description: "Whether this agent can spawn sub-agents via the spawn_agent tool.",
     }),
     confirmation_mode: z.boolean().openapi({
       description: "Whether this agent requires tool confirmation via user.tool_confirmation events. When true, claude runs with --permission-mode default and a PermissionRequest hook bridges tool approvals to the MA API.",
+    }),
+    callable_agents: z.array(z.object({
+      type: z.literal("agent"),
+      id: z.string(),
+      version: z.number().int().optional(),
+    })).openapi({
+      description: "Agents that can be called by this agent via the spawn_agent tool.",
     }),
     skills: z.array(AgentSkillSchema).openapi({
       description: "Skills injected into the container at session start. For Claude backend, written to .claude/skills/<name>/SKILL.md. For all backends, also written to .agents/skills/<name>/SKILL.md. Non-Claude backends also receive skills prepended to the system prompt.",
@@ -168,6 +192,7 @@ export const AgentSchema = registry.register(
     }),
     created_at: IsoTimestamp,
     updated_at: IsoTimestamp,
+    archived_at: IsoTimestamp.nullable(),
   }),
 );
 
@@ -176,10 +201,28 @@ export const CreateAgentRequestSchema = registry.register(
   z
     .object({
       name: z.string().min(1).openapi({ example: "my-agent" }),
-      model: z.string().min(1).openapi({ example: "claude-sonnet-4-6" }),
+      model: z.union([
+        z.string().min(1),
+        z.object({ id: z.string().min(1), speed: z.enum(["standard", "fast"]).optional() }),
+      ]).openapi({ description: "Model identifier as a string, or an object with `id` and optional `speed`.", example: "claude-sonnet-4-6" }),
+      description: z.string().max(2048).optional().openapi({
+        description: "Human-readable description of the agent.",
+      }),
+      metadata: z.record(z.string(), z.string().max(512)).optional().openapi({
+        description: "Key-value metadata. Max 16 keys, values max 512 chars.",
+      }),
       system: z.string().nullish().openapi({ example: "You are a helpful assistant." }),
       tools: z.array(ToolConfigSchema).optional(),
-      mcp_servers: z.record(McpServerConfigSchema).optional(),
+      mcp_servers: z.union([
+        z.record(McpServerConfigSchema),
+        z.array(z.object({
+          name: z.string(),
+          type: z.string().optional(),
+          url: z.string().optional(),
+        }).catchall(z.unknown())),
+      ]).optional().openapi({
+        description: "MCP servers as a name-keyed record or an array of objects with name/type/url.",
+      }),
       engine: z.enum(["claude", "opencode", "codex", "anthropic", "gemini", "factory", "pi"]).optional().openapi({
         description:
           "Agent harness. Defaults to `claude`. Opencode agents must set `model` to a `provider/model` string (e.g. `anthropic/claude-sonnet-4-6`) and must NOT declare `tools` — opencode manages its tool surface internally. Gemini agents require GEMINI_API_KEY. Factory agents require FACTORY_API_KEY. Pi agents (pi.dev) require at least one of ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY.",
@@ -217,11 +260,34 @@ export const CreateAgentRequestSchema = registry.register(
 export const UpdateAgentRequestSchema = registry.register(
   "UpdateAgentRequest",
   z.object({
+    version: z.number().int().min(1).openapi({
+      description: "Current agent version for optimistic concurrency. Must match the agent's current version.",
+    }),
     name: z.string().min(1).optional(),
-    model: z.string().min(1).optional(),
+    model: z.union([
+      z.string().min(1),
+      z.object({ id: z.string().min(1), speed: z.enum(["standard", "fast"]).optional() }),
+    ]).optional().openapi({
+      description: "Model identifier as a string, or an object with `id` and optional `speed`.",
+    }),
+    description: z.string().max(2048).optional().openapi({
+      description: "Human-readable description of the agent.",
+    }),
+    metadata: z.record(z.string(), z.string().max(512)).optional().openapi({
+      description: "Key-value metadata. Max 16 keys, values max 512 chars.",
+    }),
     system: z.string().nullish(),
     tools: z.array(ToolConfigSchema).optional(),
-    mcp_servers: z.record(McpServerConfigSchema).optional(),
+    mcp_servers: z.union([
+      z.record(McpServerConfigSchema),
+      z.array(z.object({
+        name: z.string(),
+        type: z.string().optional(),
+        url: z.string().optional(),
+      }).catchall(z.unknown())),
+    ]).optional().openapi({
+      description: "MCP servers as a name-keyed record or an array of objects with name/type/url.",
+    }),
     skills: z.array(AgentSkillSchema).max(20).optional().openapi({
       description: "Updated skills list. Replaces the existing skills entirely.",
     }),
@@ -275,6 +341,7 @@ export const EnvironmentConfigSchema = registry.register(
 export const EnvironmentSchema = registry.register(
   "Environment",
   z.object({
+    type: z.literal("environment"),
     id: UlidId,
     name: z.string(),
     description: z.string().nullable().openapi({
@@ -570,11 +637,17 @@ export const ManagedEventSchema = registry.register(
 export const VaultSchema = registry.register(
   "Vault",
   z.object({
+    type: z.literal("vault"),
     id: UlidId,
-    agent_id: UlidId,
+    agent_id: UlidId.nullable().openapi({ description: "Owning agent ID. Null for unscoped vaults." }),
     name: z.string(),
+    display_name: z.string().openapi({ description: "Anthropic-compatible alias for `name`." }),
+    metadata: z.record(z.string()).openapi({
+      description: "Key-value metadata attached to the vault. Values must be strings.",
+    }),
     created_at: IsoTimestamp,
     updated_at: IsoTimestamp,
+    archived_at: IsoTimestamp.nullable(),
   }),
 );
 
@@ -589,8 +662,20 @@ export const VaultEntrySchema = registry.register(
 export const CreateVaultRequestSchema = registry.register(
   "CreateVaultRequest",
   z.object({
-    agent_id: UlidId.openapi({ example: "agent_01ABCDEFG..." }),
+    agent_id: UlidId.optional().openapi({ example: "agent_01ABCDEFG...", description: "Owning agent ID. Optional for unscoped vaults." }),
     name: z.string().min(1).openapi({ example: "my-vault" }),
+  }),
+);
+
+export const UpdateVaultRequestSchema = registry.register(
+  "UpdateVaultRequest",
+  z.object({
+    display_name: z.string().min(1).max(255).optional().openapi({
+      description: "Update the vault display name.",
+    }),
+    metadata: z.record(z.string().max(512)).optional().openapi({
+      description: "Replaces the metadata entirely. Max 16 key-value pairs.",
+    }),
   }),
 );
 
