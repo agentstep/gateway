@@ -102,6 +102,7 @@ export const environments = sqliteTable("environments", {
   // v0.5 ALTER TABLE addition:
   tenant_id: text("tenant_id"),
   created_at: integer("created_at").notNull(),
+  updated_at: integer("updated_at").notNull(),
   archived_at: integer("archived_at"),
 });
 

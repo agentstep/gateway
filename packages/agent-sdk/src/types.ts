@@ -186,7 +186,9 @@ export interface EnvironmentRow {
   checkpoint_id: string | null;
   /** v0.5: tenant ownership. Null = legacy/global (pre-migration). */
   tenant_id: string | null;
+
   created_at: number;
+  updated_at: number;
   archived_at: number | null;
 }
 
@@ -200,6 +202,7 @@ export interface Environment {
   state: EnvironmentState;
   state_message: string | null;
   created_at: string;
+  updated_at: string;
   archived_at: string | null;
 }
 

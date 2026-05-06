@@ -62,6 +62,7 @@ export function runMigrations(db: InstanceType<typeof Database>): void {
       template_sandbox TEXT,
       checkpoint_id TEXT,
       created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL DEFAULT 0,
       archived_at INTEGER
     );
 
@@ -678,6 +679,16 @@ export function runMigrations(db: InstanceType<typeof Database>): void {
   }
   if (!sessColsQuota.some((c) => c.name === "max_wall_duration_ms")) {
     db.exec(`ALTER TABLE sessions ADD COLUMN max_wall_duration_ms INTEGER DEFAULT NULL`);
+  }
+
+  // Environment updated_at (Anthropic spec alignment).
+  {
+    const cols = db.prepare("PRAGMA table_info(environments)").all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === "updated_at")) {
+      db.exec("ALTER TABLE environments ADD COLUMN updated_at INTEGER");
+      // Back-fill: set updated_at = created_at for existing rows.
+      db.exec("UPDATE environments SET updated_at = created_at WHERE updated_at IS NULL");
+    }
   }
 
   // Vault metadata + archive + optional agent_id.

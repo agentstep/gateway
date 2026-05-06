@@ -105,8 +105,8 @@ async function createTestEnv(overrides: Record<string, unknown> = {}): Promise<R
   // Stamp tenant_default so the agent (stamped by the handler) and the env
   // match when a session is created across them (v0.5).
   db.prepare(
-    `INSERT INTO environments (id, name, config_json, state, tenant_id, created_at) VALUES (?, ?, ?, 'ready', 'tenant_default', ?)`,
-  ).run(id, name, JSON.stringify(config), now);
+    `INSERT INTO environments (id, name, config_json, state, tenant_id, created_at, updated_at) VALUES (?, ?, ?, 'ready', 'tenant_default', ?, ?)`,
+  ).run(id, name, JSON.stringify(config), now, now);
 
   return {
     id,

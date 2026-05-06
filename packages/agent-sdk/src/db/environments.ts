@@ -16,6 +16,7 @@ function hydrate(row: EnvironmentRow): Environment {
     state: row.state,
     state_message: row.state_message,
     created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at),
     archived_at: row.archived_at ? toIso(row.archived_at) : null,
   };
 }
@@ -41,6 +42,7 @@ export function createEnvironment(input: {
     tenant_id: input.tenant_id ?? DEFAULT_TENANT_ID,
     state: "preparing",
     created_at: now,
+    updated_at: now,
   }).run();
 
   return getEnvironment(id)!;
@@ -79,6 +81,7 @@ export function updateEnvironment(
       description: newDescription ?? null,
       config_json: newConfigJson,
       metadata_json: newMetadataJson,
+      updated_at: nowMs(),
     })
     .where(eq(schema.environments.id, id))
     .run();
