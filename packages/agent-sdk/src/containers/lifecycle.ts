@@ -163,9 +163,16 @@ export async function acquireForFirstTurn(sessionId: string): Promise<string> {
   }
 
   const config = getConfig();
+  const envObj = getEnvironment(row.environment_id);
+  // Per-env max_sandboxes overrides the global maxSandboxesPerEnv.
+  const maxSandboxes = envObj?.config?.max_sandboxes ?? config.maxSandboxesPerEnv;
   // Count warm containers against the limit (they hold real provider resources).
-  if (pool.countInEnv(env.id) + countWarm(env.id) >= config.maxSandboxesPerEnv) {
-    throw new ApiError(503, "server_busy", "env sandbox pool exhausted");
+  const active = pool.countInEnv(env.id);
+  const warmCount = countWarm(env.id);
+  if (active + warmCount >= maxSandboxes) {
+    throw new ApiError(503, "server_busy",
+      `environment ${env.id} sandbox pool exhausted (${active} active + ${warmCount} warm, limit ${maxSandboxes})`
+    );
   }
 
   const agent = getAgent(row.agent_id, row.agent_version);
@@ -176,7 +183,6 @@ export async function acquireForFirstTurn(sessionId: string): Promise<string> {
 
   // Resolve the container provider from the environment config.
   // Defaults to "sprites" for backward compatibility.
-  const envObj = getEnvironment(row.environment_id);
   const provider = await resolveContainerProvider(envObj?.config?.provider);
 
   // Resolve vault secrets for provider auth (vault > process.env)
@@ -452,9 +458,11 @@ export async function replenishWarmPool(
   // Check capacity — warm + inflight must be below target before we start another
   if (countWarm(envId) + countInflight(envId) >= target) return;
 
-  // Also check global env capacity
+  // Also check env capacity (per-env override or global default)
   const cfg = getConfig();
-  if (pool.countInEnv(envId) + countWarm(envId) + countInflight(envId) >= cfg.maxSandboxesPerEnv) return;
+  const envObj = getEnvironment(envId);
+  const maxSandboxes = envObj?.config?.max_sandboxes ?? cfg.maxSandboxesPerEnv;
+  if (pool.countInEnv(envId) + countWarm(envId) + countInflight(envId) >= maxSandboxes) return;
 
   incrementInflight(envId);
   try {
@@ -534,10 +542,10 @@ async function fillOneEnv(env: import("../types").Environment): Promise<void> {
     const provider = await resolveContainerProvider(env.config?.provider);
     if (!provider.supportsWarmPool) return;
 
-    // We need a backend to know which engine to prep. For multi-backend envs
-    // we don't know the engine at fill time — use the default (claude).
+    // Use the environment's default_engine if configured, otherwise fall back to "claude".
     // Sessions with a different engine will fall through to cold-create.
-    const backend = resolveBackend("claude");
+    const engine = env.config?.default_engine ?? "claude";
+    const backend = resolveBackend(engine);
 
     const needed = target - countWarm(env.id) - countInflight(env.id);
     for (let i = 0; i < needed; i++) {

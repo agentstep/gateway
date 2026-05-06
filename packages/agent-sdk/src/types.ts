@@ -172,6 +172,12 @@ export interface EnvironmentConfig {
       };
   /** Per-environment warm pool size override. Null/undefined = use global `WARM_POOL_SIZE`. */
   warm_pool_size?: number;
+  /** Per-environment idle timeout override (ms). Null/undefined = use global `sessionMaxAgeMs`. */
+  idle_timeout_ms?: number;
+  /** Per-environment max sandboxes override. Null/undefined = use global `maxSandboxesPerEnv`. */
+  max_sandboxes?: number;
+  /** Default engine for warm pool containers. Null/undefined = "claude". */
+  default_engine?: string;
 }
 
 export interface EnvironmentRow {

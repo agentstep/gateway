@@ -19,7 +19,8 @@ export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 export NODE_COMPILE_CACHE=/tmp/v8-cache
 mkdir -p /tmp/v8-cache
 # Install claude CLI if not present
-if ! command -v claude >/dev/null 2>&1; then npm install -g @anthropic-ai/claude-code 2>/dev/null; fi
+if ! command -v claude >/dev/null 2>&1; then npm install -g @anthropic-ai/claude-code; fi
+claude --version >&2 2>/dev/null || true
 # Read env vars from stdin until blank line, save remaining stdin to temp file
 PROMPT_FILE=$(mktemp)
 while IFS= read -r line; do [ -z "$line" ] && break; export "$line"; done

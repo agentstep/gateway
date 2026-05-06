@@ -130,10 +130,14 @@ async function evictIdleSessions(): Promise<void> {
         const row = getSessionRow(sessionId);
         if (!row || row.status !== "idle" || row.archived_at != null) return;
 
+        // Per-env idle_timeout_ms overrides the global sessionMaxAgeMs.
+        const env = getEnvironment(row.environment_id);
+        const maxAge = env?.config?.idle_timeout_ms ?? cfg.sessionMaxAgeMs;
+
         // Re-check the TTL inside the lock — if another code path already
         // bumped idle_since forward (turn completed), bail.
         const base = row.idle_since ?? row.created_at;
-        if (base + cfg.sessionMaxAgeMs >= now) return;
+        if (base + maxAge >= now) return;
 
         await releaseSession(sessionId);
 
