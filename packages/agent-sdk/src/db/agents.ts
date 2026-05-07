@@ -27,6 +27,25 @@ function hydrate(row: AgentRow, ver: AgentVersionRow): Agent {
         ...(typeof cfg === "string" ? { url: cfg } : (cfg as Record<string, unknown>)),
       }));
 
+  // Hydrate multiagent config. If multiagent is set, derive threads_enabled
+  // and callable_agents from it for backward compatibility.
+  const multiagent = ver.multiagent_json
+    ? (JSON.parse(ver.multiagent_json) as Agent["multiagent"])
+    : undefined;
+
+  let threadsEnabled = Boolean(ver.threads_enabled);
+  let callableAgents: Agent["callable_agents"] = ver.callable_agents_json
+    ? JSON.parse(ver.callable_agents_json)
+    : [];
+
+  if (multiagent) {
+    threadsEnabled = true;
+    // Build callable_agents from multiagent.agents for backward compat
+    callableAgents = multiagent.agents
+      .filter((a): a is { type: "agent"; id: string; version?: number } => a.type === "agent")
+      .map((a) => ({ type: "agent" as const, id: a.id, version: a.version }));
+  }
+
   return {
     type: "agent" as const,
     id: row.id,
@@ -42,9 +61,10 @@ function hydrate(row: AgentRow, ver: AgentVersionRow): Agent {
     webhook_url: ver.webhook_url ?? null,
     webhook_events: ver.webhook_events_json ? (JSON.parse(ver.webhook_events_json) as string[]) : ["session.status_idle", "session.status_running", "session.error"],
     webhook_signing_enabled: ver.webhook_secret != null && ver.webhook_secret.length > 0,
-    threads_enabled: Boolean(ver.threads_enabled),
+    threads_enabled: threadsEnabled,
     confirmation_mode: Boolean(ver.confirmation_mode),
-    callable_agents: ver.callable_agents_json ? JSON.parse(ver.callable_agents_json) : [],
+    callable_agents: callableAgents,
+    multiagent,
     skills: ver.skills_json ? (JSON.parse(ver.skills_json) as AgentSkill[]) : [],
     model_config: modelConfig,
     fallback_json: row.fallback_json ?? null,
@@ -70,6 +90,10 @@ export function createAgent(input: {
   threads_enabled?: boolean;
   confirmation_mode?: boolean;
   callable_agents?: Array<{ type: "agent"; id: string; version?: number }>;
+  multiagent?: {
+    type: "coordinator";
+    agents: Array<{ type: "agent"; id: string; version?: number } | { type: "self" }>;
+  };
   skills?: AgentSkill[];
   model_config?: ModelConfig;
   /** v0.5: tenant ownership. Null = legacy/global (pre-migration). */
@@ -105,6 +129,7 @@ export function createAgent(input: {
       threads_enabled: input.threads_enabled ? 1 : 0,
       confirmation_mode: input.confirmation_mode ? 1 : 0,
       callable_agents_json: input.callable_agents?.length ? JSON.stringify(input.callable_agents) : null,
+      multiagent_json: input.multiagent ? JSON.stringify(input.multiagent) : null,
       skills_json: JSON.stringify(input.skills ?? []),
       model_config_json: JSON.stringify(input.model_config ?? {}),
       created_at: now,
@@ -160,6 +185,10 @@ export function updateAgent(
     threads_enabled?: boolean;
     confirmation_mode?: boolean;
     callable_agents?: Array<{ type: "agent"; id: string; version?: number }>;
+    multiagent?: {
+      type: "coordinator";
+      agents: Array<{ type: "agent"; id: string; version?: number } | { type: "self" }>;
+    } | null;
     skills?: AgentSkill[];
     model_config?: ModelConfig;
   },
@@ -203,6 +232,9 @@ export function updateAgent(
       threads_enabled: input.threads_enabled !== undefined ? (input.threads_enabled ? 1 : 0) : (existing.threads_enabled ? 1 : 0),
       confirmation_mode: input.confirmation_mode !== undefined ? (input.confirmation_mode ? 1 : 0) : (existing.confirmation_mode ? 1 : 0),
       callable_agents_json: input.callable_agents !== undefined ? (input.callable_agents.length ? JSON.stringify(input.callable_agents) : null) : (existing.callable_agents.length ? JSON.stringify(existing.callable_agents) : null),
+      multiagent_json: input.multiagent !== undefined
+        ? (input.multiagent ? JSON.stringify(input.multiagent) : null)
+        : (existing.multiagent ? JSON.stringify(existing.multiagent) : null),
       skills_json: JSON.stringify(input.skills ?? existing.skills),
       model_config_json: JSON.stringify(input.model_config !== undefined ? input.model_config : existing.model_config),
       created_at: now,

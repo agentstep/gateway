@@ -100,6 +100,13 @@ const CreateSchema = z.object({
     id: z.string(),
     version: z.number().int().optional(),
   })).optional(),
+  multiagent: z.object({
+    type: z.literal("coordinator"),
+    agents: z.array(z.union([
+      z.object({ type: z.literal("agent"), id: z.string(), version: z.number().int().optional() }),
+      z.object({ type: z.literal("self") }),
+    ])).max(20),
+  }).optional(),
   skills: z.array(SkillSchema).max(20).optional(),
   model_config: ModelConfigSchema.optional(),
   /** v0.5: required for global admin, ignored for tenant users. */
@@ -138,6 +145,13 @@ const UpdateSchema = z.object({
     id: z.string(),
     version: z.number().int().optional(),
   })).optional(),
+  multiagent: z.object({
+    type: z.literal("coordinator"),
+    agents: z.array(z.union([
+      z.object({ type: z.literal("agent"), id: z.string(), version: z.number().int().optional() }),
+      z.object({ type: z.literal("self") }),
+    ])).max(20),
+  }).nullish(),
   skills: z.array(SkillSchema).max(20).optional(),
   model_config: ModelConfigSchema.optional(),
 }).refine(data => {
@@ -235,9 +249,10 @@ export function handleCreateAgent(request: Request): Promise<Response> {
       webhook_url: parsed.data.webhook_url ?? null,
       webhook_events: parsed.data.webhook_events,
       webhook_secret: parsed.data.webhook_secret ?? null,
-      threads_enabled: parsed.data.threads_enabled ?? false,
+      threads_enabled: parsed.data.threads_enabled ?? (parsed.data.multiagent ? true : false),
       confirmation_mode: parsed.data.confirmation_mode ?? false,
       callable_agents: parsed.data.callable_agents,
+      multiagent: parsed.data.multiagent,
       skills: parsed.data.skills?.map(s => ({
         ...s,
         installed_at: s.installed_at ?? nowIso,
@@ -336,6 +351,7 @@ export function handleUpdateAgent(request: Request, id: string): Promise<Respons
       webhook_secret: parsed.data.webhook_secret,
       confirmation_mode: parsed.data.confirmation_mode,
       callable_agents: parsed.data.callable_agents,
+      multiagent: parsed.data.multiagent,
       skills: parsed.data.skills?.map(s => ({
         ...s,
         installed_at: s.installed_at ?? nowIso,

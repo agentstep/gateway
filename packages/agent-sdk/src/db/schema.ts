@@ -82,6 +82,8 @@ export const agentVersions = sqliteTable("agent_versions", {
   model_config_json: text("model_config_json").notNull().default("{}"),
   // v0.5 ALTER TABLE addition:
   webhook_secret: text("webhook_secret"),
+  // Multi-agent orchestration config:
+  multiagent_json: text("multiagent_json"),
   created_at: integer("created_at").notNull(),
 }, (table) => [
   primaryKey({ columns: [table.agent_id, table.version] }),
@@ -164,6 +166,26 @@ export const events = sqliteTable("events", {
   trace_id: text("trace_id"),
   span_id: text("span_id"),
   parent_span_id: text("parent_span_id"),
+  thread_id: text("thread_id"),
+});
+
+// ── session_threads ──────────────────────────────────────────────────
+
+export const sessionThreads = sqliteTable("session_threads", {
+  id: text("id").primaryKey(),
+  session_id: text("session_id").notNull(),
+  agent_id: text("agent_id").notNull(),
+  agent_version: integer("agent_version").notNull(),
+  parent_thread_id: text("parent_thread_id"),
+  status: text("status").notNull().default("idle"),
+  stop_reason: text("stop_reason"),
+  usage_input_tokens: integer("usage_input_tokens").notNull().default(0),
+  usage_output_tokens: integer("usage_output_tokens").notNull().default(0),
+  usage_cache_read_input_tokens: integer("usage_cache_read_input_tokens").notNull().default(0),
+  usage_cache_creation_input_tokens: integer("usage_cache_creation_input_tokens").notNull().default(0),
+  created_at: integer("created_at").notNull(),
+  updated_at: integer("updated_at").notNull(),
+  archived_at: integer("archived_at"),
 });
 
 // ── vaults ────────────────────────────────────────────────────────────

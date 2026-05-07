@@ -2046,35 +2046,29 @@ describe("Threads", () => {
     expect(res.status).toBe(404);
   });
 
-  it("lists threads returns child sessions", async () => {
+  it("lists threads returns session_threads", async () => {
     await bootDb();
     const agent = await createTestAgent({ name: "ParentAgent" });
     const env = await createTestEnv({ name: "ParentEnv" });
     const parent = await createTestSession(agent.id as string, env.id as string);
 
-    // Create a child session by inserting directly
-    const { getDb } = await import("../src/db/client");
-    const { newId } = await import("../src/util/ids");
-    const { nowMs } = await import("../src/util/clock");
-    const db = getDb();
-    const childId = newId("sesn");
-    const now = nowMs();
-    db.prepare(
-      `INSERT INTO sessions (
-         id, agent_id, agent_version, environment_id, status,
-         title, metadata_json, parent_session_id, thread_depth,
-         created_at, updated_at
-       ) VALUES (?, ?, 1, ?, 'idle', NULL, '{}', ?, 1, ?, ?)`,
-    ).run(childId, agent.id, env.id, parent.id, now, now);
+    // Create a session_thread row via the DB layer
+    const { createThread } = await import("../src/db/threads");
+    createThread({
+      sessionId: parent.id as string,
+      agentId: agent.id as string,
+      agentVersion: agent.version as number,
+    });
 
     const { handleListThreads } = await import("../src/handlers/threads");
     const res = await handleListThreads(
       req(`/v1/sessions/${parent.id}/threads`),
       parent.id as string,
     );
-    const body = (await res.json()) as { data: Array<{ id: string; parent_session_id: string }> };
+    const body = (await res.json()) as { data: Array<{ id: string; session_id: string; type: string }> };
     expect(body.data.length).toBe(1);
-    expect(body.data[0].parent_session_id).toBe(parent.id);
+    expect(body.data[0].session_id).toBe(parent.id);
+    expect(body.data[0].type).toBe("session_thread");
   });
 });
 

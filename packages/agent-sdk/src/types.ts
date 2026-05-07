@@ -98,6 +98,7 @@ export interface AgentVersionRow {
   threads_enabled: number;
   confirmation_mode: number;
   callable_agents_json: string | null;
+  multiagent_json: string | null;
   skills_json: string;
   model_config_json: string;
   created_at: number;
@@ -136,6 +137,10 @@ export interface Agent {
   threads_enabled: boolean;
   confirmation_mode: boolean;
   callable_agents: Array<{ type: "agent"; id: string; version?: number }>;
+  multiagent?: {
+    type: "coordinator";
+    agents: Array<{ type: "agent"; id: string; version?: number } | { type: "self" }>;
+  };
   skills: AgentSkill[];
   model_config: ModelConfig;
   /** Raw JSON — parse with parseFallbackJson in handlers. Null when unset. */
@@ -641,4 +646,60 @@ export interface AuditLogEntry {
   resource_id: string | null;
   outcome: AuditOutcome;
   metadata: Record<string, unknown> | null;
+}
+
+// ---------------------------------------------------------------------------
+// Session Threads (Multi-Agent)
+// ---------------------------------------------------------------------------
+
+export type SessionThreadStatus = "idle" | "running" | "terminated";
+
+export interface SessionThreadRow {
+  id: string;
+  session_id: string;
+  agent_id: string;
+  agent_version: number;
+  parent_thread_id: string | null;
+  status: SessionThreadStatus;
+  stop_reason: string | null;
+  usage_input_tokens: number;
+  usage_output_tokens: number;
+  usage_cache_read_input_tokens: number;
+  usage_cache_creation_input_tokens: number;
+  created_at: number;
+  updated_at: number;
+  archived_at: number | null;
+}
+
+export interface SessionThread {
+  type: "session_thread";
+  id: string;
+  session_id: string;
+  status: SessionThreadStatus;
+  agent: {
+    type: "agent";
+    id: string;
+    version: number;
+    name: string;
+    description: string;
+    model: { id: string; speed?: string };
+    system: string | null;
+    tools: ToolConfig[];
+    mcp_servers: Array<{ name: string; type: string; url?: string; [key: string]: unknown }>;
+    skills: AgentSkill[];
+  };
+  parent_thread_id: string | null;
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
+  usage: {
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_input_tokens: number;
+    cache_creation: {
+      ephemeral_5m_input_tokens: number;
+      ephemeral_1h_input_tokens: number;
+    };
+  };
+  stop_reason: string | null;
 }

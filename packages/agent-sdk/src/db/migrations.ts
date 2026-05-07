@@ -716,6 +716,42 @@ export function runMigrations(db: InstanceType<typeof Database>): void {
     }
   }
 
+  // Multi-agent session threads table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS session_threads (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      agent_version INTEGER NOT NULL,
+      parent_thread_id TEXT,
+      status TEXT NOT NULL DEFAULT 'idle',
+      stop_reason TEXT,
+      usage_input_tokens INTEGER NOT NULL DEFAULT 0,
+      usage_output_tokens INTEGER NOT NULL DEFAULT 0,
+      usage_cache_read_input_tokens INTEGER NOT NULL DEFAULT 0,
+      usage_cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      archived_at INTEGER
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_session_threads_session ON session_threads(session_id)`);
+
+  // thread_id on events for thread-scoped event filtering
+  const eventColsThread = db.prepare(`PRAGMA table_info(events)`).all() as Array<{ name: string }>;
+  if (!eventColsThread.some((c) => c.name === "thread_id")) {
+    db.exec(`ALTER TABLE events ADD COLUMN thread_id TEXT`);
+  }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_events_thread ON events(thread_id) WHERE thread_id IS NOT NULL`);
+
+  // multiagent_json on agent_versions
+  const avColsMultiagent = db
+    .prepare(`PRAGMA table_info(agent_versions)`)
+    .all() as Array<{ name: string }>;
+  if (!avColsMultiagent.some((c) => c.name === "multiagent_json")) {
+    db.exec(`ALTER TABLE agent_versions ADD COLUMN multiagent_json TEXT`);
+  }
+
   // Vault metadata + archive + optional agent_id.
   // agent_id was originally NOT NULL — SQLite requires table recreation to
   // drop the constraint. We detect by checking the column's `notnull` flag.

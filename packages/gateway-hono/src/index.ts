@@ -29,6 +29,10 @@ import {
   handleListEvents,
   handleSessionStream,
   handleListThreads,
+  handleGetThread,
+  handleArchiveThread,
+  handleListThreadEvents,
+  handleStreamThreadEvents,
   handleCreateMemoryStore,
   handleListMemoryStores,
   handleGetMemoryStore,
@@ -268,6 +272,10 @@ app.delete("/v1/files/:id", (c) => handleDeleteFile(c.req.raw, c.req.param("id")
 
 // ── Threads ──────────────────────────────────────────────────────────────
 app.get("/v1/sessions/:id/threads", (c) => handleListThreads(c.req.raw, c.req.param("id")));
+app.get("/v1/sessions/:id/threads/:tid", (c) => handleGetThread(c.req.raw, c.req.param("id"), c.req.param("tid")));
+app.post("/v1/sessions/:id/threads/:tid/archive", (c) => handleArchiveThread(c.req.raw, c.req.param("id"), c.req.param("tid")));
+app.get("/v1/sessions/:id/threads/:tid/events", (c) => handleListThreadEvents(c.req.raw, c.req.param("id"), c.req.param("tid")));
+app.get("/v1/sessions/:id/threads/:tid/stream", (c) => handleStreamThreadEvents(c.req.raw, c.req.param("id"), c.req.param("tid")));
 
 // ── Vaults ───────────────────────────────────────────────────────────────
 app.post("/v1/vaults", (c) => handleCreateVault(c.req.raw));
