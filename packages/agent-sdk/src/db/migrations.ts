@@ -761,6 +761,32 @@ export function runMigrations(db: InstanceType<typeof Database>): void {
     }
   }
 
+  // Skills (standalone, DB-stored with versioning)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS skills (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT,
+      current_version TEXT,
+      tenant_id TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      archived_at INTEGER
+    )
+  `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS skill_versions (
+      id TEXT PRIMARY KEY,
+      skill_id TEXT NOT NULL,
+      version TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      UNIQUE(skill_id, version),
+      FOREIGN KEY (skill_id) REFERENCES skills(id)
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_skill_versions_skill ON skill_versions(skill_id, created_at)`);
+
   // Memory versions: redacted_at column for version redaction
   {
     const cols = db.prepare("PRAGMA table_info(memory_versions)").all() as Array<{ name: string }>;

@@ -502,6 +502,30 @@ export interface MemoryVersion {
 }
 
 // ---------------------------------------------------------------------------
+// Skills (standalone, DB-stored)
+// ---------------------------------------------------------------------------
+
+export interface Skill {
+  type: "skill";
+  id: string;
+  name: string;
+  description: string;
+  current_version: string;
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
+}
+
+export interface SkillVersion {
+  type: "skill_version";
+  id: string;
+  skill_id: string;
+  version: string;
+  content: string;
+  created_at: string;
+}
+
+// ---------------------------------------------------------------------------
 // Events
 // ---------------------------------------------------------------------------
 

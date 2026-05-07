@@ -284,6 +284,29 @@ export const sessionResources = sqliteTable("session_resources", {
   updated_at: integer("updated_at").notNull(),
 });
 
+// ── skills ───────────────────────────────────────────────────────────
+
+export const skills = sqliteTable("skills", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  description: text("description"),
+  current_version: text("current_version"),
+  tenant_id: text("tenant_id"),
+  created_at: integer("created_at").notNull(),
+  updated_at: integer("updated_at").notNull(),
+  archived_at: integer("archived_at"),
+});
+
+// ── skill_versions ──────────────────────────────────────────────────
+
+export const skillVersions = sqliteTable("skill_versions", {
+  id: text("id").primaryKey(),
+  skill_id: text("skill_id").notNull(),
+  version: text("version").notNull(),
+  content: text("content").notNull(),
+  created_at: integer("created_at").notNull(),
+});
+
 // ── anthropic_sync ────────────────────────────────────────────────────
 
 export const anthropicSync = sqliteTable("anthropic_sync", {

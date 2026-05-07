@@ -71,7 +71,12 @@ import {
   handleListAudit,
   handleGetLicense,
   handleCreateSkill,
+  handleGetSkill,
   handleDeleteSkill,
+  handleCreateSkillVersion,
+  handleListSkillVersions,
+  handleGetSkillVersion,
+  handleDeleteSkillVersion,
   handleCreateCredential,
   handleListCredentials,
   handleGetCredential,
@@ -350,8 +355,13 @@ export function buildApp() {
   // ── Models ──────────────────────────────────────────────────────────
   route(app, "get", "/v1/models", handleListModels);
 
-  // ── Skills (stub endpoints) ────────────────────────────────────────────
+  // ── Skills CRUD + versioning ────────────────────────────────────────────
+  route(app, "get", "/v1/skills/:id/versions/:version", handleGetSkillVersion, "id", "version");
+  route(app, "delete", "/v1/skills/:id/versions/:version", handleDeleteSkillVersion, "id", "version");
+  route(app, "post", "/v1/skills/:id/versions", handleCreateSkillVersion, "id");
+  route(app, "get", "/v1/skills/:id/versions", handleListSkillVersions, "id");
   route(app, "post", "/v1/skills", handleCreateSkill);
+  route(app, "get", "/v1/skills/:id", handleGetSkill, "id");
   route(app, "delete", "/v1/skills/:id", handleDeleteSkill, "id");
 
   // ── Batch ────────────────────────────────────────────────────────────

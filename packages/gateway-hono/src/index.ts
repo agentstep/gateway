@@ -102,7 +102,12 @@ import {
   handleListAudit,
   handleGetLicense,
   handleCreateSkill,
+  handleGetSkill,
   handleDeleteSkill,
+  handleCreateSkillVersion,
+  handleListSkillVersions,
+  handleGetSkillVersion,
+  handleDeleteSkillVersion,
   handleCreateCredential,
   handleListCredentials,
   handleGetCredential,
@@ -335,12 +340,19 @@ app.get("/v1/providers/status", (c) => handleGetProviderStatus(c.req.raw));
 app.get("/v1/models", (c) => handleListModels(c.req.raw));
 
 // ── Skills ────────────────────────────────────────────────────────────
+// Catalog/search routes (our extensions) — registered first to avoid shadowing
 app.get("/v1/skills/catalog", (c) => handleGetSkillsCatalog(c.req.raw));
 app.get("/v1/skills/stats", (c) => handleGetSkillsStats(c.req.raw));
 app.get("/v1/skills/sources", (c) => handleGetSkillsSources(c.req.raw));
 app.get("/v1/skills/index", (c) => handleGetSkillsIndex(c.req.raw));
 app.get("/v1/skills/feed", (c) => handleGetSkillsFeed(c.req.raw));
+// CRUD + versioning routes — versioned routes before :id to avoid shadowing
+app.get("/v1/skills/:id/versions/:version", (c) => handleGetSkillVersion(c.req.raw, c.req.param("id"), c.req.param("version")));
+app.delete("/v1/skills/:id/versions/:version", (c) => handleDeleteSkillVersion(c.req.raw, c.req.param("id"), c.req.param("version")));
+app.post("/v1/skills/:id/versions", (c) => handleCreateSkillVersion(c.req.raw, c.req.param("id")));
+app.get("/v1/skills/:id/versions", (c) => handleListSkillVersions(c.req.raw, c.req.param("id")));
 app.post("/v1/skills", (c) => handleCreateSkill(c.req.raw));
+app.get("/v1/skills/:id", (c) => handleGetSkill(c.req.raw, c.req.param("id")));
 app.get("/v1/skills", (c) => handleSearchSkills(c.req.raw));
 app.delete("/v1/skills/:id", (c) => handleDeleteSkill(c.req.raw, c.req.param("id")));
 

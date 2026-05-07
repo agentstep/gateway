@@ -7,7 +7,7 @@ import { isProxied, markProxied, unmarkProxied, getProxiedTenantId } from "../db
 import { forwardToAnthropic, validateAnthropicProxy } from "../proxy/forward";
 import { badRequest, notFound, conflict } from "../errors";
 import { assertResourceTenant, resolveCreateTenant, tenantFilter } from "../auth/scope";
-import type { AuthContext } from "../types";
+import type { AgentSkill, AuthContext } from "../types";
 
 /**
  * Load the tenant_id column for an agent row directly. The public
@@ -43,12 +43,22 @@ function assertProxiedAgentTenant(auth: AuthContext, id: string): void {
   assertResourceTenant(auth, proxied, `agent ${id} not found`);
 }
 
-const SkillSchema = z.object({
+/** Our inline skill format (content embedded on the agent). */
+const InlineSkillSchema = z.object({
   name: z.string().min(1),
   source: z.string().min(1),
   content: z.string().min(1).max(256 * 1024), // 256KB per skill
   installed_at: z.string().optional(),
 });
+
+/** Anthropic format: reference to a DB-stored skill by ID. */
+const RefSkillSchema = z.object({
+  skill_id: z.string().min(1),
+  type: z.enum(["custom", "anthropic"]).optional(),
+  version: z.string().optional(),
+});
+
+const SkillSchema = z.union([InlineSkillSchema, RefSkillSchema]);
 
 const ToolSchema = z.union([
   z.object({
@@ -69,6 +79,45 @@ const ToolSchema = z.union([
 const ModelConfigSchema = z.object({
   speed: z.enum(["standard", "fast"]).optional(),
 });
+
+/**
+ * Resolve a mixed array of inline skills and DB skill references into
+ * the canonical `AgentSkill[]` shape stored on agent_versions.
+ */
+async function resolveSkillInputs(
+  skills: z.infer<typeof SkillSchema>[] | undefined,
+  nowIso: string,
+): Promise<AgentSkill[] | undefined> {
+  if (!skills) return undefined;
+  const resolved: AgentSkill[] = [];
+  for (const s of skills) {
+    // Anthropic format: reference to a DB-stored skill
+    if ("skill_id" in s && s.skill_id) {
+      const { getSkill: dbGetSkill, getSkillVersion: dbGetSkillVersion } = await import("../db/skills");
+      const dbSkill = dbGetSkill(s.skill_id);
+      if (!dbSkill) throw badRequest(`skill ${s.skill_id} not found`);
+      const version = s.version ?? dbSkill.current_version;
+      const sv = dbGetSkillVersion(s.skill_id, version);
+      if (!sv) throw badRequest(`skill version ${version} not found for skill ${s.skill_id}`);
+      resolved.push({
+        name: dbSkill.name,
+        source: `skill:${s.skill_id}@${version}`,
+        content: sv.content,
+        installed_at: nowIso,
+      });
+    } else {
+      // Our inline format — pass through as-is
+      const inline = s as z.infer<typeof InlineSkillSchema>;
+      resolved.push({
+        name: inline.name,
+        source: inline.source,
+        content: inline.content,
+        installed_at: inline.installed_at ?? nowIso,
+      });
+    }
+  }
+  return resolved;
+}
 
 const CreateSchema = z.object({
   name: z.string().min(1),
@@ -116,7 +165,10 @@ const CreateSchema = z.object({
   return Object.keys(data.metadata).length <= 16;
 }, "metadata exceeds 16 key limit").refine(data => {
   if (!data.skills) return true;
-  const total = data.skills.reduce((sum, s) => sum + s.content.length, 0);
+  const total = data.skills.reduce((sum, s) => {
+    // Only inline skills have content; ref skills (skill_id) have no inline content
+    return sum + ((s as { content?: string }).content?.length ?? 0);
+  }, 0);
   return total <= 1024 * 1024; // 1MB total
 }, "Total skills content exceeds 1MB limit");
 
@@ -159,7 +211,9 @@ const UpdateSchema = z.object({
   return Object.keys(data.metadata).length <= 16;
 }, "metadata exceeds 16 key limit").refine(data => {
   if (!data.skills) return true;
-  const total = data.skills.reduce((sum, s) => sum + s.content.length, 0);
+  const total = data.skills.reduce((sum, s) => {
+    return sum + ((s as { content?: string }).content?.length ?? 0);
+  }, 0);
   return total <= 1024 * 1024; // 1MB total
 }, "Total skills content exceeds 1MB limit");
 
@@ -253,10 +307,7 @@ export function handleCreateAgent(request: Request): Promise<Response> {
       confirmation_mode: parsed.data.confirmation_mode ?? false,
       callable_agents: parsed.data.callable_agents,
       multiagent: parsed.data.multiagent,
-      skills: parsed.data.skills?.map(s => ({
-        ...s,
-        installed_at: s.installed_at ?? nowIso,
-      })),
+      skills: await resolveSkillInputs(parsed.data.skills, nowIso),
       model_config: mergedModelConfig,
       tenant_id: createTenantId,
     });
@@ -352,10 +403,7 @@ export function handleUpdateAgent(request: Request, id: string): Promise<Respons
       confirmation_mode: parsed.data.confirmation_mode,
       callable_agents: parsed.data.callable_agents,
       multiagent: parsed.data.multiagent,
-      skills: parsed.data.skills?.map(s => ({
-        ...s,
-        installed_at: s.installed_at ?? nowIso,
-      })),
+      skills: await resolveSkillInputs(parsed.data.skills, nowIso),
       model_config: mergedModelConfig,
     });
     if (!updated) throw notFound(`agent ${id} not found`);
