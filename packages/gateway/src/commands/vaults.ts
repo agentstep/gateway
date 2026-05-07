@@ -39,6 +39,34 @@ export function registerVaultCommands(parent: Command): void {
     formatOutput(getFormat(), await b.vaults.get(id), cols);
   });
 
+  vaults.command("update <id>")
+    .description("Update a vault")
+    .option("--name <name>", "New vault name")
+    .option("--metadata <json>", "Metadata as JSON")
+    .action(async (id, opts) => {
+      const b = await initBackend();
+      const input: Record<string, unknown> = {};
+      if (opts.name) input.name = opts.name;
+      if (opts.metadata) {
+        try {
+          input.metadata = JSON.parse(opts.metadata);
+        } catch {
+          console.error("Error: --metadata must be valid JSON");
+          process.exit(1);
+        }
+      }
+      const vault = await b.vaults.update(id, input);
+      formatOutput(getFormat(), vault, cols);
+    });
+
+  vaults.command("archive <id>")
+    .description("Archive a vault")
+    .action(async (id) => {
+      const b = await initBackend();
+      const vault = await b.vaults.archive(id);
+      formatOutput(getFormat(), vault, cols);
+    });
+
   vaults.command("delete <id>").action(async (id) => {
     const b = await initBackend();
     const res = await b.vaults.delete(id);

@@ -76,6 +76,23 @@ export function registerAgentCommands(parent: Command): void {
       console.log(`Deleted agent ${res.id}`);
     });
 
+  agents.command("archive <id>")
+    .description("Archive an agent")
+    .action(async (id) => {
+      const b = await initBackend();
+      const agent = await b.agents.archive(id);
+      formatOutput(getFormat(), agent, detail);
+    });
+
+  agents.command("versions <id>")
+    .description("List versions of an agent")
+    .option("--limit <n>", "Max items", "20")
+    .action(async (id, opts) => {
+      const b = await initBackend();
+      const res = await b.agents.versions(id, { limit: Number(opts.limit) });
+      formatOutput(getFormat(), res.data, detail);
+    });
+
   // --- Skills subcommands ---
 
   agents.command("skills <id>")

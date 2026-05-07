@@ -203,6 +203,22 @@ export class LocalBackend implements Backend {
       const { handleDeleteAgent } = await import("@agentstep/agent-sdk/handlers");
       return callHandler(handleDeleteAgent, "DELETE", url(`/v1/agents/${id}`), undefined, id);
     },
+
+    async archive(id: string) {
+      const { handleArchiveAgent } = await import("@agentstep/agent-sdk/handlers");
+      return callHandler(handleArchiveAgent, "POST", url(`/v1/agents/${id}/archive`), undefined, id);
+    },
+
+    async versions(id: string, opts?: { limit?: number }): Promise<Paginated<any>> {
+      const { handleListAgentVersions } = await import("@agentstep/agent-sdk/handlers");
+      return callHandler<Paginated<any>>(
+        handleListAgentVersions,
+        "GET",
+        url(`/v1/agents/${id}/versions`, { limit: opts?.limit }),
+        undefined,
+        id,
+      );
+    },
   };
 
   environments = {
@@ -362,6 +378,16 @@ export class LocalBackend implements Backend {
     async get(id: string) {
       const { handleGetVault } = await import("@agentstep/agent-sdk/handlers");
       return callHandler(handleGetVault, "GET", url(`/v1/vaults/${id}`), undefined, id);
+    },
+
+    async update(id: string, input: { name?: string; metadata?: Record<string, unknown> }) {
+      const { handleUpdateVault } = await import("@agentstep/agent-sdk/handlers");
+      return callHandler(handleUpdateVault, "POST", url(`/v1/vaults/${id}`), input, id);
+    },
+
+    async archive(id: string) {
+      const { handleArchiveVault } = await import("@agentstep/agent-sdk/handlers");
+      return callHandler(handleArchiveVault, "POST", url(`/v1/vaults/${id}/archive`), undefined, id);
     },
 
     async delete(id: string) {

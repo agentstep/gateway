@@ -60,6 +60,12 @@ export class RemoteBackend implements Backend {
     },
     update: (id: string, input: any) => this.request("POST", `/v1/agents/${id}`, input),
     delete: (id: string) => this.request("DELETE", `/v1/agents/${id}`),
+    archive: (id: string) => this.request("POST", `/v1/agents/${id}/archive`),
+    versions: (id: string, opts?: any): Promise<Paginated<any>> => {
+      const params = new URLSearchParams();
+      if (opts?.limit) params.set("limit", String(opts.limit));
+      return this.request("GET", `/v1/agents/${id}/versions?${params}`);
+    },
   };
 
   environments = {
@@ -214,6 +220,8 @@ export class RemoteBackend implements Backend {
       return this.request("GET", `/v1/vaults?${params}`);
     },
     get: (id: string) => this.request("GET", `/v1/vaults/${id}`),
+    update: (id: string, input: any) => this.request("POST", `/v1/vaults/${id}`, input),
+    archive: (id: string) => this.request("POST", `/v1/vaults/${id}/archive`),
     delete: (id: string) => this.request("DELETE", `/v1/vaults/${id}`),
     entries: {
       list: (vaultId: string) => this.request("GET", `/v1/vaults/${vaultId}/entries`),

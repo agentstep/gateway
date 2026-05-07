@@ -14,6 +14,8 @@ export interface AgentBackend {
   get(id: string, version?: number): Promise<any>;
   update(id: string, input: Record<string, unknown>): Promise<any>;
   delete(id: string): Promise<{ id: string; type: string }>;
+  archive(id: string): Promise<any>;
+  versions(id: string, opts?: { limit?: number }): Promise<Paginated<any>>;
 }
 
 export interface EnvBackend {
@@ -44,6 +46,8 @@ export interface VaultBackend {
   create(input: { agent_id: string; name: string }): Promise<any>;
   list(opts?: { agent_id?: string }): Promise<{ data: any[] }>;
   get(id: string): Promise<any>;
+  update(id: string, input: { name?: string; metadata?: Record<string, unknown> }): Promise<any>;
+  archive(id: string): Promise<any>;
   delete(id: string): Promise<{ id: string; type: string }>;
   entries: {
     list(vaultId: string): Promise<{ data: any[] }>;
