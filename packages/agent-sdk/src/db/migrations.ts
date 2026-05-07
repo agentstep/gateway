@@ -633,6 +633,31 @@ export function runMigrations(db: InstanceType<typeof Database>): void {
     )
   `);
 
+  // Memory versions: version tracking for memory mutations
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS memory_versions (
+      id TEXT PRIMARY KEY,
+      store_id TEXT NOT NULL,
+      memory_id TEXT NOT NULL,
+      operation TEXT NOT NULL,
+      path TEXT NOT NULL,
+      content TEXT,
+      content_sha256 TEXT,
+      session_id TEXT,
+      created_at INTEGER NOT NULL
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_memver_store ON memory_versions(store_id, created_at)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_memver_memory ON memory_versions(memory_id, created_at)`);
+
+  // Memory store archive support
+  const memStoreColsArchive = db
+    .prepare(`PRAGMA table_info(memory_stores)`)
+    .all() as Array<{ name: string }>;
+  if (!memStoreColsArchive.some((c) => c.name === "archived_at")) {
+    db.exec(`ALTER TABLE memory_stores ADD COLUMN archived_at INTEGER`);
+  }
+
   // v0.5: mcp_oauth support — add expires_at and refresh_config_encrypted columns
   const credCols = db
     .prepare(`PRAGMA table_info(vault_credentials)`)

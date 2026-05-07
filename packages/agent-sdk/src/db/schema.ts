@@ -199,8 +199,23 @@ export const memoryStores = sqliteTable("memory_stores", {
   description: text("description"),
   agent_id: text("agent_id"),
   metadata_json: text("metadata_json").notNull().default("{}"),
+  archived_at: integer("archived_at"),
   created_at: integer("created_at").notNull(),
   updated_at: integer("updated_at").notNull(),
+});
+
+// ── memory_versions ──────────────────────────────────────────────────
+
+export const memoryVersions = sqliteTable("memory_versions", {
+  id: text("id").primaryKey(),
+  store_id: text("store_id").notNull(),
+  memory_id: text("memory_id").notNull(),
+  operation: text("operation").notNull(),
+  path: text("path").notNull(),
+  content: text("content"),
+  content_sha256: text("content_sha256"),
+  session_id: text("session_id"),
+  created_at: integer("created_at").notNull(),
 });
 
 // ── memories ──────────────────────────────────────────────────────────

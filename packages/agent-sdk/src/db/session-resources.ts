@@ -27,11 +27,14 @@ export interface SessionResourceRow {
 
 export interface SessionResourceRecord {
   id: string;
-  type: "file" | "github_repository";
+  type: "file" | "github_repository" | "memory_store";
   file_id?: string;
   mount_path?: string;
   url?: string;
   checkout?: { type: string; name: string };
+  memory_store_id?: string;
+  access?: string;
+  instructions?: string;
   session_id: string;
   created_at: string;
   updated_at: string;
@@ -44,7 +47,7 @@ export interface SessionResourceRecord {
 function hydrate(row: SessionResourceRow): SessionResourceRecord {
   const record: SessionResourceRecord = {
     id: row.id,
-    type: row.type as "file" | "github_repository",
+    type: row.type as "file" | "github_repository" | "memory_store",
     session_id: row.session_id,
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
@@ -54,7 +57,14 @@ function hydrate(row: SessionResourceRow): SessionResourceRecord {
   if (row.url) record.url = row.url;
   if (row.checkout_json) {
     try {
-      record.checkout = JSON.parse(row.checkout_json) as { type: string; name: string };
+      const parsed = JSON.parse(row.checkout_json);
+      if (row.type === "memory_store") {
+        record.memory_store_id = parsed.memory_store_id;
+        record.access = parsed.access;
+        record.instructions = parsed.instructions;
+      } else {
+        record.checkout = parsed as { type: string; name: string };
+      }
     } catch { /* ignore malformed JSON */ }
   }
   return record;
@@ -67,7 +77,7 @@ function hydrate(row: SessionResourceRow): SessionResourceRecord {
 export function createResource(
   sessionId: string,
   input: {
-    type: "file" | "github_repository" | "uri" | "text";
+    type: "file" | "github_repository" | "uri" | "text" | "memory_store";
     file_id?: string;
     mount_path?: string;
     url?: string;
@@ -77,15 +87,24 @@ export function createResource(
     commit?: string;
     uri?: string;
     content?: string;
+    memory_store_id?: string;
+    access?: string;
+    instructions?: string;
   },
 ): SessionResourceRecord {
   const db = getDrizzle();
   const id = newId("sesrsc");
   const now = nowMs();
 
-  // Build checkout JSON for github_repository resources
+  // Build checkout JSON for github_repository resources / memory_store metadata
   let checkoutJson: string | null = null;
-  if (input.checkout) {
+  if (input.type === "memory_store") {
+    checkoutJson = JSON.stringify({
+      memory_store_id: input.memory_store_id,
+      access: input.access ?? "read_write",
+      instructions: input.instructions,
+    });
+  } else if (input.checkout) {
     checkoutJson = JSON.stringify(input.checkout);
   } else if (input.branch) {
     checkoutJson = JSON.stringify({ type: "branch", name: input.branch });

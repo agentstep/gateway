@@ -38,6 +38,13 @@ export interface BuildTurnInput {
   promptText: string;
   /** tool_result inputs for backends that support mid-turn re-entry */
   toolResults: Array<{ custom_tool_use_id: string; content: unknown[] }>;
+  /** Mounted memory stores (populated by driver from session resources) */
+  memoryStores?: Array<{
+    name: string;
+    access: "read_only" | "read_write";
+    description?: string | null;
+    instructions?: string;
+  }>;
 }
 
 export interface BuildTurnResult {

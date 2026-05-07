@@ -10,12 +10,40 @@ export const GATEWAY_PREAMBLE =
   "If custom tools are defined, use them by name immediately.";
 
 /**
+ * A mounted memory store description for the system prompt.
+ */
+export interface MountedMemoryStore {
+  name: string;
+  access: "read_only" | "read_write";
+  description?: string | null;
+  instructions?: string;
+}
+
+/**
  * Append the gateway preamble to a user-provided system prompt.
  * Used by Claude (--system-prompt) and as a building block for
  * wrapPromptWithSystem (opencode, codex, etc.).
+ *
+ * When memory stores are mounted, adds instructions listing the mount paths.
  */
-export function withGatewayPreamble(system: string | null | undefined): string {
-  return system ? `${system}\n\n${GATEWAY_PREAMBLE}` : GATEWAY_PREAMBLE;
+export function withGatewayPreamble(
+  system: string | null | undefined,
+  memoryStores?: MountedMemoryStore[],
+): string {
+  let preamble = system ? `${system}\n\n${GATEWAY_PREAMBLE}` : GATEWAY_PREAMBLE;
+
+  if (memoryStores && memoryStores.length > 0) {
+    const lines = memoryStores.map(s => {
+      const parts: string[] = [];
+      parts.push(`- /mnt/memory/${s.name.replace(/[^a-zA-Z0-9_.-]/g, "_")}/ (${s.access})`);
+      if (s.description) parts[0] += ` — ${s.description}`;
+      if (s.instructions) parts[0] += `. ${s.instructions}`;
+      return parts[0];
+    });
+    preamble += `\n\nMemory stores are mounted at /mnt/memory/:\n${lines.join("\n")}`;
+  }
+
+  return preamble;
 }
 
 /**
@@ -30,8 +58,9 @@ export function wrapPromptWithSystem(
   prompt: string,
   systemPrompt: string | null | undefined,
   skills?: Array<{ name: string; content: string }>,
+  memoryStores?: MountedMemoryStore[],
 ): string {
-  let systemBlock = withGatewayPreamble(systemPrompt);
+  let systemBlock = withGatewayPreamble(systemPrompt, memoryStores);
 
   if (skills && skills.length > 0) {
     const skillsText = skills.map(s =>

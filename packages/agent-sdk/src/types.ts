@@ -260,7 +260,7 @@ export interface SessionRow {
 }
 
 export interface SessionResource {
-  type: "uri" | "text" | "file" | "github_repository";
+  type: "uri" | "text" | "file" | "github_repository" | "memory_store";
   uri?: string;
   content?: string;
   file_id?: string;
@@ -271,6 +271,10 @@ export interface SessionResource {
   url?: string;
   branch?: string;
   commit?: string;
+  /** Memory store resource fields */
+  memory_store_id?: string;
+  access?: "read_only" | "read_write";
+  instructions?: string;
 }
 
 export interface OutcomeEvaluation {
@@ -425,6 +429,7 @@ export interface MemoryStoreRow {
   description: string | null;
   /** v0.5: owning agent. Null for legacy (pre-v0.5) global stores. */
   agent_id: string | null;
+  archived_at: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -434,6 +439,7 @@ export interface MemoryStore {
   name: string;
   description: string | null;
   agent_id: string | null;
+  archived_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -456,6 +462,35 @@ export interface Memory {
   content_sha256: string;
   created_at: string;
   updated_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Memory Versions
+// ---------------------------------------------------------------------------
+
+export interface MemoryVersionRow {
+  id: string;
+  store_id: string;
+  memory_id: string;
+  operation: string;
+  path: string;
+  content: string | null;
+  content_sha256: string | null;
+  session_id: string | null;
+  created_at: number;
+}
+
+export interface MemoryVersion {
+  type: "memory_version";
+  id: string;
+  memory_store_id: string;
+  memory_id: string;
+  path: string;
+  operation: "create" | "update" | "delete";
+  content?: string;
+  content_sha256?: string;
+  session_id?: string;
+  created_at: string;
 }
 
 // ---------------------------------------------------------------------------

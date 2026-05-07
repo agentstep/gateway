@@ -11,6 +11,9 @@ import {
   listMemories,
   updateMemory,
   deleteMemory,
+  listMemoryVersions,
+  getMemoryVersion,
+  archiveMemoryStore,
 } from "../db/memory";
 import { getAgent } from "../db/agents";
 import { badRequest, notFound, conflict } from "../errors";
@@ -175,5 +178,42 @@ export function handleDeleteMemory(request: Request, storeId: string, memId: str
     const deleted = deleteMemory(memId);
     if (!deleted) throw notFound(`memory not found: ${memId}`);
     return jsonOk({ id: memId, type: "memory_deleted" });
+  });
+}
+
+// ── Memory Versions ─────────────────────────────────────────────────
+
+export function handleListMemoryVersions(request: Request, storeId: string): Promise<Response> {
+  return routeWrap(request, async ({ auth, request: req }) => {
+    loadStoreForCaller(auth, storeId); // tenant guard
+    const url = new URL(req.url);
+    const memoryId = url.searchParams.get("memory_id") ?? undefined;
+    const requestedLimit = Number(url.searchParams.get("limit") || "100");
+    const cursor = url.searchParams.get("cursor") ?? undefined;
+    const data = listMemoryVersions(storeId, {
+      memoryId,
+      limit: requestedLimit,
+      cursor,
+    });
+    return paginatedOk(data, requestedLimit);
+  });
+}
+
+export function handleGetMemoryVersion(request: Request, storeId: string, versionId: string): Promise<Response> {
+  return routeWrap(request, async ({ auth }) => {
+    loadStoreForCaller(auth, storeId); // tenant guard
+    const version = getMemoryVersion(storeId, versionId);
+    if (!version) throw notFound(`memory version not found: ${versionId}`);
+    return jsonOk(version);
+  });
+}
+
+export function handleArchiveMemoryStore(request: Request, storeId: string): Promise<Response> {
+  return routeWrap(request, async ({ auth }) => {
+    loadStoreForCaller(auth, storeId); // tenant guard
+    const archived = archiveMemoryStore(storeId);
+    if (!archived) throw notFound(`memory store not found: ${storeId}`);
+    const store = getMemoryStore(storeId);
+    return jsonOk(store);
   });
 }

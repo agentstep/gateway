@@ -280,6 +280,9 @@ export async function acquireForFirstTurn(sessionId: string): Promise<string> {
       }
     }
 
+    // Mount memory stores if any
+    await mountMemoryStores(name, sessionId, sp);
+
     pool.register({
       sandboxName: name,
       envId: env.id,
@@ -412,6 +415,9 @@ export async function acquireForFirstTurn(sessionId: string): Promise<string> {
       await provisionResources(name, session.resources, sp);
     }
   }
+
+  // Mount memory stores if any
+  await mountMemoryStores(name, sessionId, sp);
 
   pool.register({
     sandboxName: name,
@@ -693,6 +699,56 @@ export async function provisionResources(
         console.warn(`[lifecycle] failed to clone repo ${cloneUrl}:`, err);
       }
     }
+  }
+}
+
+/**
+ * Mount memory stores into the container.
+ *
+ * For each `memory_store` session resource, loads all memories from the
+ * store and writes them to `/mnt/memory/<store-name>/<path>`.
+ */
+export async function mountMemoryStores(
+  sandboxName: string,
+  sessionId: string,
+  provider: import("../providers/types").ContainerProvider,
+): Promise<void> {
+  const { listResources: listSessionResources } = await import("../db/session-resources");
+  const { getMemoryStore, listMemories } = await import("../db/memory");
+
+  const resources = listSessionResources(sessionId);
+  const memStoreResources = resources.filter(r => r.type === "memory_store" && r.memory_store_id);
+
+  if (memStoreResources.length === 0) return;
+
+  // Create the base /mnt/memory directory
+  await provider.exec(sandboxName, ["mkdir", "-p", "/mnt/memory"]);
+
+  for (const r of memStoreResources) {
+    const store = getMemoryStore(r.memory_store_id!);
+    if (!store) {
+      lcLog(`[lifecycle] memory store not found: ${r.memory_store_id}`);
+      continue;
+    }
+
+    const storeName = store.name.replace(/[^a-zA-Z0-9_.-]/g, "_");
+    const storeDir = `/mnt/memory/${storeName}`;
+    await provider.exec(sandboxName, ["mkdir", "-p", storeDir]);
+
+    const memories = listMemories(store.id);
+    for (const mem of memories) {
+      // Ensure parent directory for the memory path exists
+      const memPath = `${storeDir}/${mem.path}`;
+      const dir = memPath.substring(0, memPath.lastIndexOf("/"));
+      if (dir && dir !== storeDir) {
+        await provider.exec(sandboxName, ["mkdir", "-p", dir]);
+      }
+      await provider.exec(sandboxName, ["sh", "-c", "cat > \"$1\"", "sh", memPath], {
+        stdin: mem.content,
+      });
+    }
+
+    lcLog(`[lifecycle] ${sessionId} mounted ${memories.length} memories from store "${store.name}" at ${storeDir}`);
   }
 }
 

@@ -38,6 +38,7 @@ function buildTurn(input: BuildTurnInput): BuildTurnResult {
     agent,
     claudeSessionId: backendSessionId,
     confirmationMode: agent.confirmation_mode,
+    memoryStores: input.memoryStores,
   });
   const env = buildClaudeAuthEnv();
 

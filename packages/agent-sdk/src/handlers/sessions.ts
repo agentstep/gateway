@@ -23,6 +23,7 @@ import { upsertSync, resolveRemoteSessionId } from "../db/sync";
 import { badRequest, notFound } from "../errors";
 import { nowMs } from "../util/clock";
 import { assertResourceTenant, tenantFilter } from "../auth/scope";
+import { getMemoryStore } from "../db/memory";
 import type { AuthContext, SessionStatus } from "../types";
 
 function getAgentTenantId(id: string): string | null | undefined {
@@ -83,7 +84,7 @@ const AgentRef = z.union([
 ]);
 
 const ResourceSchema = z.object({
-  type: z.enum(["uri", "text", "file", "github_repository"]),
+  type: z.enum(["uri", "text", "file", "github_repository", "memory_store"]),
   uri: z.string().optional(),
   content: z.string().optional(),
   file_id: z.string().optional(),
@@ -100,6 +101,10 @@ const ResourceSchema = z.object({
     sha: z.string().optional(),
   }).optional(),
   authorization_token: z.string().optional(),
+  // Memory store resource fields
+  memory_store_id: z.string().optional(),
+  access: z.enum(["read_only", "read_write"]).optional(),
+  instructions: z.string().optional(),
 });
 
 const CreateSchema = z.object({
@@ -287,6 +292,22 @@ export function handleCreateSession(request: Request): Promise<Response> {
         }
       }
 
+      // Memory store resources: validate existence, enforce max 8 per session.
+      if (data.resources?.length) {
+        const memStoreResources = data.resources.filter(r => r.type === "memory_store");
+        if (memStoreResources.length > 8) {
+          throw badRequest(`max 8 memory_store resources per session (got ${memStoreResources.length})`);
+        }
+        for (const r of memStoreResources) {
+          if (!r.memory_store_id) {
+            throw badRequest(`memory_store resource requires memory_store_id`);
+          }
+          const store = getMemoryStore(r.memory_store_id);
+          if (!store) throw notFound(`memory store not found: ${r.memory_store_id}`);
+          if (store.archived_at) throw badRequest(`memory store ${r.memory_store_id} is archived`);
+        }
+      }
+
       // ── Anthropic provider: sync local config → Anthropic, then proxy ──
       if (env.config?.provider === "anthropic") {
         // Unified resolver: vault → pool → config cascade (v0.4 PR4).
@@ -418,6 +439,15 @@ export function handleCreateSession(request: Request): Promise<Response> {
       if (data.resources?.length) {
         const { createResource } = await import("../db/session-resources");
         for (const r of data.resources) {
+          if (r.type === "memory_store") {
+            createResource(session.id, {
+              type: "memory_store",
+              memory_store_id: r.memory_store_id,
+              access: r.access ?? "read_write",
+              instructions: r.instructions,
+            });
+            continue;
+          }
           // Resolve the repo URL, embedding authorization_token if provided
           let repoUrl = r.type === "github_repository" ? (r.repository_url ?? r.url) : r.uri;
           if (r.type === "github_repository" && r.authorization_token && repoUrl) {

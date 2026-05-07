@@ -308,6 +308,34 @@ export async function runTurn(
   //             vault key "MCP_HEADER_{SERVER}_{HEADER}" → custom header
   const agentForTurn = injectMcpAuthHeaders(agent, vaultEntries);
 
+  // Resolve mounted memory stores for system prompt injection
+  let mountedMemoryStores: Array<{
+    name: string;
+    access: "read_only" | "read_write";
+    description?: string | null;
+    instructions?: string;
+  }> | undefined;
+  try {
+    const { listResources: listSessionResources } = await import("../db/session-resources");
+    const { getMemoryStore } = await import("../db/memory");
+    const sessionResources = listSessionResources(sessionId);
+    const memStoreResources = sessionResources.filter(r => r.type === "memory_store" && r.memory_store_id);
+    if (memStoreResources.length > 0) {
+      mountedMemoryStores = [];
+      for (const r of memStoreResources) {
+        const store = getMemoryStore(r.memory_store_id!);
+        if (store) {
+          mountedMemoryStores.push({
+            name: store.name,
+            access: (r.access as "read_only" | "read_write") ?? "read_write",
+            description: store.description,
+            instructions: r.instructions,
+          });
+        }
+      }
+    }
+  } catch { /* best-effort */ }
+
   let turnBuild;
   try {
     turnBuild = backend.buildTurn({
@@ -315,6 +343,7 @@ export async function runTurn(
       backendSessionId: getSessionRow(sessionId)?.claude_session_id ?? null,
       promptText,
       toolResults,
+      memoryStores: mountedMemoryStores,
     });
   } catch (err) {
     const msg =
@@ -768,6 +797,20 @@ export async function runTurn(
       }
     } catch (err) {
       console.warn("[driver] container file sync failed:", (err as Error)?.stack ?? err);
+    }
+
+    // Memory store sync: read back files from /mnt/memory/<store>/ and
+    // upsert changed memories. Best-effort — errors logged, not thrown.
+    try {
+      const { syncMemoryStores } = await import("../sync/memory-sync");
+      await syncMemoryStores({
+        sessionId,
+        sandboxName: sessionRowForSync.sandbox_name,
+        provider,
+        secrets,
+      });
+    } catch (err) {
+      console.warn("[driver] memory store sync failed:", (err as Error)?.stack ?? err);
     }
   }
 

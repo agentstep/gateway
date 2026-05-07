@@ -13,7 +13,7 @@
  * recently observed id from the previous turn's `system.init`.
  */
 import { getConfig } from "../../config";
-import { withGatewayPreamble } from "../shared/wrap-prompt";
+import { withGatewayPreamble, type MountedMemoryStore } from "../shared/wrap-prompt";
 import type { Agent, McpServerConfig } from "../../types";
 import { resolveToolset } from "../../sessions/tools";
 
@@ -22,6 +22,7 @@ export interface BuildArgsInput {
   claudeSessionId?: string | null;
   maxTurns?: number;
   confirmationMode?: boolean;
+  memoryStores?: MountedMemoryStore[];
 }
 
 export function buildClaudeArgs(input: BuildArgsInput): string[] {
@@ -48,8 +49,8 @@ export function buildClaudeArgs(input: BuildArgsInput): string[] {
 
   const tools = resolveToolset(input.agent.tools);
 
-  // Build system prompt with gateway preamble + custom tool hints
-  let systemPrompt = withGatewayPreamble(input.agent.system);
+  // Build system prompt with gateway preamble + custom tool hints + memory stores
+  let systemPrompt = withGatewayPreamble(input.agent.system, input.memoryStores);
   if (tools.customToolNames.size > 0) {
     const toolList = Array.from(tools.customToolNames)
       .map((name) => `mcp__tool-bridge__${name}`)

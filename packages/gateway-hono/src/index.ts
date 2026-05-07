@@ -38,6 +38,9 @@ import {
   handleGetMemory,
   handleUpdateMemory,
   handleDeleteMemory,
+  handleListMemoryVersions,
+  handleGetMemoryVersion,
+  handleArchiveMemoryStore,
   handleCreateVault,
   handleListVaults,
   handleGetVault,
@@ -291,6 +294,10 @@ app.delete("/v1/vaults/:id/entries/:key", (c) => handleDeleteEntry(c.req.raw, c.
 // ── Memory Stores ────────────────────────────────────────────────────────
 app.post("/v1/memory_stores", (c) => handleCreateMemoryStore(c.req.raw));
 app.get("/v1/memory_stores", (c) => handleListMemoryStores(c.req.raw));
+// Sub-resource routes must be registered BEFORE the generic :id routes
+app.post("/v1/memory_stores/:id/archive", (c) => handleArchiveMemoryStore(c.req.raw, c.req.param("id")));
+app.get("/v1/memory_stores/:id/memory_versions", (c) => handleListMemoryVersions(c.req.raw, c.req.param("id")));
+app.get("/v1/memory_stores/:id/memory_versions/:vid", (c) => handleGetMemoryVersion(c.req.raw, c.req.param("id"), c.req.param("vid")));
 app.get("/v1/memory_stores/:id", (c) => handleGetMemoryStore(c.req.raw, c.req.param("id")));
 app.delete("/v1/memory_stores/:id", (c) => handleDeleteMemoryStore(c.req.raw, c.req.param("id")));
 app.post("/v1/memory_stores/:id/memories", (c) => handleCreateMemory(c.req.raw, c.req.param("id")));
