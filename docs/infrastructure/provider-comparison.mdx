@@ -1,0 +1,134 @@
+---
+title: Provider Comparison
+description: Side-by-side comparison of all sandbox providers — latency, cost, isolation, and when to use each.
+---
+
+AgentStep Gateway supports 11 container providers. This guide compares them across the dimensions that matter for production use: startup latency, cost, isolation model, and operational requirements.
+
+## Quick comparison
+
+| Provider | Type | Cold start | Isolation | Cost | Best for |
+|---|---|---|---|---|---|
+| `sprites` | Cloud | ~2s (warm pool) | Container | Pay-per-use | Default — no infra to manage |
+| `docker` | Local | ~1s | Container (shared kernel) | Free (your hardware) | Local development |
+| `apple-container` | Local | ~2s | VM (per-container) | Free (your hardware) | macOS 26 native isolation |
+| `apple-firecracker` | Local | ~0.3s | microVM (hardware) | Free (your hardware) | Fastest local option |
+| `podman` | Local | ~1s | Container (rootless) | Free (your hardware) | Docker alternative |
+| `e2b` | Cloud | ~3s | Firecracker microVM | Pay-per-use | Strong isolation + cloud |
+| `vercel` | Cloud | ~2s | V8 isolate + container | Pay-per-use | Vercel-native stacks |
+| `daytona` | Cloud | ~5s | Container | Pay-per-use | Full dev environments |
+| `fly` | Cloud | ~5s | Firecracker microVM | Pay-per-use | Global edge deployment |
+| `modal` | Cloud | ~3s | gVisor sandbox | Pay-per-use | GPU workloads |
+| `anthropic` | Cloud | Anthropic-managed | Anthropic-managed | $0.08/session-hour | Anthropic parity |
+
+## Choosing a provider
+
+### For local development
+
+**Docker** is the simplest option — most developers already have it installed. Use `apple-firecracker` / `mvm` on Apple Silicon for the fastest startup times (0.3s from warm pool) with hardware-level VM isolation.
+
+**Apple Container** requires macOS 26+ but gives you VM-per-container isolation using Apple's Virtualization framework — stronger than Docker's shared-kernel model.
+
+**Podman** is a drop-in Docker replacement that runs rootless by default.
+
+### For cloud/production
+
+**Sprites** is the default and requires no infrastructure. You get managed containers via sprites.dev with a simple API token. The gateway's warm pool feature keeps containers pre-created for ~2s first-turn latency.
+
+**E2B** provides Firecracker microVM isolation in the cloud — the same technology AWS Lambda uses. Good for workloads that need strong security boundaries.
+
+**Fly** is best when you need containers in specific geographic regions. Fly Machines run on bare metal worldwide. Note that Fly's exec is always buffered (no streaming), so agent output arrives in chunks rather than token-by-token.
+
+**Modal** is the only option with GPU support. Use it for agents that need to run ML inference or GPU-accelerated tasks.
+
+**Vercel** integrates naturally if you're already on the Vercel platform and want to use OIDC tokens instead of managing API keys.
+
+**Daytona** provides full development environments rather than minimal containers — useful for agents that need pre-configured toolchains.
+
+### For Anthropic compatibility
+
+**Anthropic** (`provider: "anthropic"`) proxies sessions to Anthropic's hosted Managed Agents. Your agent config stays local; execution happens on Anthropic's infrastructure. Use this for a hybrid setup where some workloads run locally and others on Anthropic.
+
+## Detailed comparison
+
+### Isolation model
+
+| Provider | Isolation | Kernel | What escaping requires |
+|---|---|---|---|
+| `docker` | Linux namespaces + cgroups | Shared host kernel | Container escape exploit |
+| `podman` | Rootless namespaces + cgroups | Shared host kernel | Container escape + privilege escalation |
+| `apple-container` | Virtualization.framework VM | Separate kernel per container | VM escape exploit |
+| `apple-firecracker` | Firecracker microVM | Separate kernel per VM | Hypervisor exploit |
+| `sprites` | Container (cloud-managed) | Cloud-managed | Cloud provider breach |
+| `e2b` | Firecracker microVM | Separate kernel | Hypervisor exploit |
+| `fly` | Firecracker microVM | Separate kernel | Hypervisor exploit |
+| `modal` | gVisor user-space kernel | gVisor interceptor | gVisor + host exploit |
+| `vercel` | V8 isolate + container | Shared + isolated | V8 sandbox escape |
+| `daytona` | Container (cloud-managed) | Cloud-managed | Cloud provider breach |
+
+For security-sensitive workloads, prefer microVM-based providers (E2B, Fly, apple-firecracker) or gVisor-based (Modal).
+
+### Credential requirements
+
+| Provider | Credentials | Where to store |
+|---|---|---|
+| `sprites` | `SPRITE_TOKEN` | `.env`, settings DB, or vault |
+| `docker` | None (local daemon) | — |
+| `apple-container` | None (local daemon) | — |
+| `apple-firecracker` | None (`mvm` CLI) | — |
+| `podman` | None (local daemon) | — |
+| `e2b` | `E2B_API_KEY` | `.env` or vault |
+| `vercel` | `VERCEL_TOKEN` + `VERCEL_TEAM_ID` + `VERCEL_PROJECT_ID` | `.env` or vault |
+| `daytona` | `DAYTONA_API_KEY` | `.env` or vault |
+| `fly` | `FLY_API_TOKEN` + `FLY_APP_NAME` | `.env` or vault |
+| `modal` | `MODAL_TOKEN_ID` + `MODAL_TOKEN_SECRET` | `.env`, `~/.modal.toml`, or vault |
+
+### NPM dependencies
+
+Some cloud providers require optional npm packages:
+
+```bash
+# E2B
+npm install e2b
+
+# Vercel
+npm install @vercel/sandbox
+
+# Modal
+npm install modal
+```
+
+These are lazy-loaded at runtime. If missing, the gateway throws a clear error when you try to use the provider.
+
+### Exec behavior
+
+| Provider | Streaming exec | One-shot exec | Stdin support |
+|---|---|---|---|
+| `sprites` | Yes (HTTP chunked) | Yes | Yes |
+| `docker` | Yes (docker exec) | Yes | Yes |
+| `apple-container` | Yes | Yes | Yes |
+| `apple-firecracker` | Yes (mvm exec) | Yes | Yes |
+| `podman` | Yes (podman exec) | Yes | Yes |
+| `e2b` | Yes (SDK stream) | Yes | Yes |
+| `vercel` | Yes (SDK stream) | Yes | Yes (writeFiles) |
+| `daytona` | No (toolbox API) | Yes | Yes |
+| `fly` | No (buffered) | Yes | Yes |
+| `modal` | Yes (gRPC stream) | Yes | Yes |
+
+Providers without streaming exec still work — the turn driver buffers output and delivers events after the exec completes. Token-by-token streaming is available with providers that support it.
+
+## Switching providers
+
+Changing a provider is a one-field update on the environment:
+
+```json
+PATCH /v1/environments/:id
+{
+  "config": {
+    "type": "cloud",
+    "provider": "e2b"
+  }
+}
+```
+
+New sessions on this environment will use the new provider. Existing sessions continue on their original provider until they end.

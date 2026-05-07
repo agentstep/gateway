@@ -1,0 +1,243 @@
+---
+title: Auto-Curation with Managed Agents
+description: Build a self-maintaining content list using scheduled Managed Agent sessions — the pattern behind awesome-managed-agents.
+---
+
+The [awesome-managed-agents](https://github.com/paulmeller/awesome-managed-agents) repository maintains itself using Managed Agent sessions. A weekly workflow spins up an agent with a curator skill, searches the web for new resources, scores each candidate, and opens a PR with additions. This guide shows how to build the same pattern for any content curation task.
+
+## The pattern
+
+```
+┌─────────────┐     ┌──────────────┐     ┌────────────┐     ┌──────────┐
+│  Scheduler   │────▶│  Create      │────▶│  Agent     │────▶│  Open PR │
+│  (cron/CI)   │     │  Session     │     │  curates   │     │  with    │
+│              │     │  with skill  │     │  content   │     │  changes │
+└─────────────┘     └──────────────┘     └────────────┘     └──────────┘
+```
+
+1. A scheduler (GitHub Actions, cron, or the gateway's webhook) triggers a new session.
+2. The session uses an agent configured with a curator skill and web search tools.
+3. The agent searches, evaluates candidates against quality criteria, and edits files.
+4. The agent commits changes and opens a PR via the GitHub CLI.
+
+## Step 1 — Define the curator skill
+
+Create a skill that teaches the agent how to curate:
+
+```markdown
+# Curator Skill
+
+You maintain a curated list of resources in README.md.
+
+## Quality Criteria
+
+Score each candidate 0-100:
+- Relevance to the topic (0-30)
+- Technical depth (0-25)
+- Recency — published within last 7 days (0-20)
+- Unique perspective vs existing entries (0-25)
+
+Only add candidates scoring 70+.
+
+## Process
+
+1. Read the current README.md to understand existing entries
+2. Search the web for new resources published in the last week
+3. For each candidate:
+   - Read the content
+   - Score against quality criteria
+   - If 70+, draft an entry matching the existing format
+4. Add qualifying entries to the appropriate section
+5. Commit changes and open a PR
+
+## Format
+
+Each entry follows this pattern:
+- [Author/Org: Title](url) - One-sentence description.
+
+## Rules
+- Never remove existing entries
+- Never modify existing entries
+- Add new entries at the end of their section
+- One PR per curation run
+```
+
+Save this as a file in your repo (e.g., `skills/curator/SKILL.md`).
+
+## Step 2 — Create the agent
+
+```bash
+# Create the curator agent with web search enabled
+curl http://localhost:4000/v1/agents \
+  -H "x-api-key: $GATEWAY_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "anthropic-beta: managed-agents-2026-04-01" \
+  -d '{
+    "name": "weekly-curator",
+    "model": "claude-sonnet-4-6",
+    "engine": "claude",
+    "system": "You are a content curator. Follow your curator skill exactly.",
+    "skills": [
+      {
+        "source": {
+          "type": "project",
+          "project_path": "/repo/skills/curator"
+        }
+      }
+    ],
+    "tools": [
+      {
+        "type": "agent_toolset_20260401",
+        "default_config": { "enabled": true }
+      }
+    ]
+  }'
+```
+
+## Step 3 — Create an environment with GitHub access
+
+The agent needs to clone the repo, make changes, and push a branch:
+
+```bash
+# Create the environment
+curl http://localhost:4000/v1/environments \
+  -H "x-api-key: $GATEWAY_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "anthropic-beta: managed-agents-2026-04-01" \
+  -d '{
+    "name": "curator-env",
+    "config": {
+      "type": "cloud",
+      "provider": "docker"
+    }
+  }'
+```
+
+## Step 4 — Store credentials in a vault
+
+```bash
+# Create vault with API keys and GitHub token
+gateway vaults create --name curator-vault
+gateway vaults put-entry <vault-id> ANTHROPIC_API_KEY sk-ant-api03-...
+gateway vaults put-entry <vault-id> GITHUB_TOKEN ghp_...
+```
+
+## Step 5 — Trigger a curation session
+
+```python
+from anthropic import Anthropic
+
+client = Anthropic(api_key="gw-key", base_url="http://localhost:4000")
+
+session = client.beta.sessions.create(
+    agent_id="agnt_...",
+    environment_id="env_...",
+    vault_ids=["vlt_..."],
+    resources=[
+        {
+            "type": "github_repository",
+            "url": "https://github.com/your-org/your-awesome-list",
+            "authorization_token": "ghp_...",
+        }
+    ],
+)
+
+# Send the curation instruction
+client.beta.sessions.events.create(
+    session_id=session.id,
+    type="user.message",
+    content=[{
+        "type": "text",
+        "text": "Run your weekly curation. Search for new resources published in the last 7 days. Open a PR with any additions.",
+    }],
+)
+
+# Stream results
+with client.beta.sessions.stream(session_id=session.id) as stream:
+    for event in stream:
+        if event.type == "agent.message":
+            print(event.content)
+```
+
+## Step 6 — Schedule with GitHub Actions
+
+```yaml
+# .github/workflows/curate.yml
+name: Weekly Curation
+on:
+  schedule:
+    - cron: '0 9 * * 1'  # Every Monday at 9am UTC
+  workflow_dispatch: {}
+
+jobs:
+  curate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run curator agent
+        env:
+          GATEWAY_URL: ${{ secrets.GATEWAY_URL }}
+          GATEWAY_KEY: ${{ secrets.GATEWAY_KEY }}
+          AGENT_ID: ${{ secrets.CURATOR_AGENT_ID }}
+          ENV_ID: ${{ secrets.CURATOR_ENV_ID }}
+          VAULT_ID: ${{ secrets.CURATOR_VAULT_ID }}
+        run: |
+          # Create session and send curation task
+          SESSION_ID=$(curl -s "$GATEWAY_URL/v1/sessions" \
+            -H "x-api-key: $GATEWAY_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "anthropic-beta: managed-agents-2026-04-01" \
+            -d "{
+              \"agent_id\": \"$AGENT_ID\",
+              \"environment_id\": \"$ENV_ID\",
+              \"vault_ids\": [\"$VAULT_ID\"]
+            }" | jq -r '.id')
+
+          curl -s "$GATEWAY_URL/v1/sessions/$SESSION_ID/events" \
+            -H "x-api-key: $GATEWAY_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "anthropic-beta: managed-agents-2026-04-01" \
+            -d '{
+              "type": "user.message",
+              "content": [{"type":"text","text":"Run your weekly curation. Search for new resources from the last 7 days and open a PR."}]
+            }'
+
+          # Wait for session to complete (poll status)
+          while true; do
+            STATUS=$(curl -s "$GATEWAY_URL/v1/sessions/$SESSION_ID" \
+              -H "x-api-key: $GATEWAY_KEY" \
+              -H "anthropic-version: 2023-06-01" \
+              -H "anthropic-beta: managed-agents-2026-04-01" \
+              | jq -r '.status')
+            if [ "$STATUS" = "idle" ] || [ "$STATUS" = "ended" ]; then break; fi
+            sleep 10
+          done
+
+          echo "Curation complete. Check for new PRs."
+```
+
+## Variations
+
+### Blog aggregator
+
+Replace the curator skill with one that monitors RSS feeds and summarizes new posts into a digest.
+
+### Dependency updater
+
+Configure the agent to check for outdated npm/pip dependencies, read changelogs, and open PRs for safe-to-update packages.
+
+### Documentation freshness checker
+
+Point the agent at your docs directory. It checks each page against the current codebase and flags stale content.
+
+### Competitive intelligence
+
+The agent monitors competitor GitHub repos, blog posts, and changelog pages, then summarizes changes in a weekly report.
+
+## Tips
+
+- **Use `claude-sonnet-4-6`** for cost efficiency — curation doesn't need Opus-level reasoning.
+- **Set `max_turns`** to prevent runaway sessions: `"max_turns": 20` is usually enough for a curation run.
+- **Use webhooks** to get notified when the session completes instead of polling.
+- **Review PRs manually** at first — tune the quality criteria in the skill until the agent's judgment matches yours, then move to auto-merge for scores above a higher threshold.

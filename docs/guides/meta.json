@@ -2,6 +2,10 @@
   "title": "Guides",
   "pages": [
     "anthropic-integration",
+    "migration",
+    "multi-llm",
+    "pricing-comparison",
+    "auto-curation",
     "ollama-integration",
     "webhooks",
     "files"

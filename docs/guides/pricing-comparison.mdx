@@ -1,0 +1,96 @@
+---
+title: Pricing Comparison
+description: Cost breakdown of self-hosted AgentStep Gateway vs Anthropic's hosted Managed Agents.
+---
+
+Anthropic charges **$0.08 per session-hour** (metered to the millisecond) on top of standard token costs. AgentStep Gateway eliminates the session-hour fee — you pay only for the infrastructure you choose and the tokens consumed by the model provider.
+
+## Cost structure
+
+| Component | Anthropic Managed Agents | AgentStep Gateway |
+|---|---|---|
+| **Session runtime** | $0.08/session-hour | $0 |
+| **Token costs** | Standard Anthropic rates | Standard rates from your model provider |
+| **Container/sandbox** | Included in session fee | Your infra or cloud provider costs |
+| **Observability** | Via Anthropic dashboard | Built-in (free) |
+| **API access** | Included | Free (open source) |
+
+## Worked examples
+
+### Example 1: Code review agent (short sessions)
+
+A code review agent that runs for ~2 minutes per PR, triggered 50 times/day.
+
+| | Anthropic MA | AgentStep + Docker | AgentStep + Sprites |
+|---|---|---|---|
+| Sessions/day | 50 | 50 | 50 |
+| Avg duration | 2 min | 2 min | 2 min |
+| Session cost | 50 × (2/60) × $0.08 = **$0.13/day** | $0 | ~$0.02/day |
+| Monthly session cost | **~$4/month** | **$0/month** | **~$0.60/month** |
+| Token cost (est.) | ~$15/month | ~$15/month | ~$15/month |
+| **Total** | **~$19/month** | **~$15/month** | **~$15.60/month** |
+
+For short sessions, the session-hour fee is small. The savings come from engine flexibility — using Codex (`o4-mini`) or Gemini instead of Claude can cut token costs significantly.
+
+### Example 2: Deep research agent (long sessions)
+
+A research agent that runs for ~45 minutes, triggered 20 times/day.
+
+| | Anthropic MA | AgentStep + Docker | AgentStep + Sprites |
+|---|---|---|---|
+| Sessions/day | 20 | 20 | 20 |
+| Avg duration | 45 min | 45 min | 45 min |
+| Session cost | 20 × (45/60) × $0.08 = **$1.20/day** | $0 | ~$0.30/day |
+| Monthly session cost | **~$36/month** | **$0/month** | **~$9/month** |
+| Token cost (est.) | ~$200/month | ~$200/month | ~$200/month |
+| **Total** | **~$236/month** | **~$200/month** | **~$209/month** |
+
+### Example 3: High-volume pipeline (enterprise)
+
+500 sessions/day, average 15 minutes each.
+
+| | Anthropic MA | AgentStep + Docker | AgentStep + E2B |
+|---|---|---|---|
+| Sessions/day | 500 | 500 | 500 |
+| Avg duration | 15 min | 15 min | 15 min |
+| Session cost/day | 500 × (15/60) × $0.08 = **$10/day** | $0 | ~$5/day |
+| Monthly session cost | **~$300/month** | **$0/month** | **~$150/month** |
+| Token cost (est.) | ~$3,000/month | ~$3,000/month | ~$3,000/month |
+| Server cost | $0 | ~$50/month (VPS) | $0 |
+| **Total** | **~$3,300/month** | **~$3,050/month** | **~$3,150/month** |
+
+At enterprise scale, the session-hour fee adds up. A $50/month VPS running Docker saves $250/month in session fees.
+
+## Token cost savings with multi-LLM
+
+The biggest cost lever isn't the session-hour fee — it's engine choice. Anthropic MA only supports Claude. AgentStep supports six engines with different price points:
+
+| Model | Provider | Input (per 1M tokens) | Output (per 1M tokens) |
+|---|---|---|---|
+| Claude Opus 4.6 | Anthropic | $15.00 | $75.00 |
+| Claude Sonnet 4.6 | Anthropic | $3.00 | $15.00 |
+| GPT-4.1 | OpenAI | $2.00 | $8.00 |
+| o4-mini | OpenAI | $1.10 | $4.40 |
+| Gemini 2.5 Pro | Google | $1.25 | $10.00 |
+| Gemini 2.5 Flash | Google | $0.15 | $0.60 |
+
+For tasks that don't require Claude's capabilities, switching to `o4-mini` or `gemini-2.5-flash` via the Codex, OpenCode, or Gemini engine can reduce token costs by 5-25x.
+
+## When Anthropic MA makes more sense
+
+Self-hosting isn't always cheaper:
+
+- **No ops team** — If you don't want to manage infrastructure, the $0.08/session-hour buys you a fully managed container runtime with zero setup.
+- **Anthropic-specific features** — Multi-agent coordination, Outcomes (rubrics), and Memory are currently Anthropic-only features (planned for AgentStep v0.6).
+- **Compliance** — Anthropic's SOC 2 Type II and data processing agreements may satisfy enterprise compliance requirements that self-hosting doesn't.
+- **Low volume** — At <10 sessions/day with short durations, the session-hour fee is negligible and the convenience of a managed service outweighs the savings.
+
+## Hybrid approach
+
+You don't have to choose one or the other. AgentStep Gateway supports both:
+
+1. **Passthrough mode** — Send `sk-ant-api*` keys to use Anthropic's infrastructure through the gateway. You get unified observability while Anthropic handles execution.
+2. **Sync-and-proxy** — Create environments with `provider: "anthropic"` to delegate specific workloads to Anthropic while keeping config and cost tracking local.
+3. **Self-hosted** — Run everything on your own infrastructure for maximum control and lowest cost.
+
+Mix and match per environment: use Anthropic for production workloads that need their compliance story, and Docker/Sprites for development and testing.
