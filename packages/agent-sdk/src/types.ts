@@ -273,6 +273,16 @@ export interface SessionResource {
   commit?: string;
 }
 
+export interface OutcomeEvaluation {
+  type: "outcome_evaluation";
+  outcome_id: string;
+  description: string;
+  result: "pending" | "running" | "evaluating" | "satisfied" | "max_iterations_reached" | "failed" | "interrupted";
+  iteration: number;
+  completed_at: string | null;
+  explanation: string;
+}
+
 export interface Session {
   id: string;
   type: "session";
@@ -297,6 +307,7 @@ export interface Session {
   max_tokens: number | null;
   max_wall_duration_ms: number | null;
   outcome: Record<string, unknown> | null;
+  outcome_evaluations: OutcomeEvaluation[];
   resources: SessionResource[];
   vault_ids: string[];
   parent_session_id: string | null;

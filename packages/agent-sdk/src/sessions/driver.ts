@@ -852,17 +852,20 @@ export async function runTurn(
   // claude -p on the container) to avoid corrupting session state.
   if (stopReason === "end_turn") {
     const criteria = getOutcomeCriteria(sessionId) as {
+      outcome_id?: string;
       description?: string;
       rubric?: string;
       max_iterations?: number;
       grader_iteration?: number;
+      status?: string;
     } | null;
 
-    if (criteria?.rubric) {
+    if (criteria?.rubric && criteria?.status === "running") {
       try {
         const { runGraderEvaluation } = await import("./grader");
         const maxIter = criteria.max_iterations ?? 3;
         const iteration = criteria.grader_iteration ?? 0;
+        const outcomeId = criteria.outcome_id ?? null;
 
         // Extract last agent.message text
         const recentEvents = listEvents(sessionId, { limit: 50, order: "desc" });
@@ -878,7 +881,7 @@ export async function runTurn(
           }
         }
 
-        emit("span.outcome_evaluation_start", { iteration });
+        emit("span.outcome_evaluation_start", { outcome_id: outcomeId, iteration });
 
         const evaluation = await runGraderEvaluation(
           criteria.rubric,
@@ -906,10 +909,23 @@ export async function runTurn(
           : evaluation.result;
 
         emit("span.outcome_evaluation_end", {
+          outcome_id: outcomeId,
           result: finalResult,
+          explanation: evaluation.feedback,
           iteration,
-          feedback: evaluation.feedback,
+          usage: evaluation.usage,
         });
+
+        // If terminal, update outcome status
+        if (finalResult === "satisfied" || finalResult === "max_iterations_reached" || finalResult === "failed") {
+          setOutcomeCriteria(sessionId, {
+            ...criteria,
+            grader_iteration: iteration + 1,
+            status: finalResult,
+            completed_at: new Date(nowMs()).toISOString(),
+            explanation: evaluation.feedback,
+          });
+        }
 
         // Re-run if needs_revision and under the iteration cap. Pass
         // `trace` so the grader-feedback recursion nests under this turn

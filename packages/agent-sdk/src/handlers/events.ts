@@ -466,7 +466,10 @@ const UserCustomToolResult = z.object({
 const UserDefineOutcome = z.object({
   type: z.literal("user.define_outcome"),
   description: z.string().min(1),
-  rubric: z.string().optional(),
+  rubric: z.union([
+    z.string(),
+    z.object({ type: z.literal("text"), content: z.string() }),
+  ]).optional(),
   max_iterations: z.number().int().min(1).max(20).optional(),
 });
 
@@ -661,16 +664,54 @@ export function handlePostEvents(request: Request, sessionId: string): Promise<R
         }
 
         if (event.type === "user.define_outcome") {
-          const { type: _type, ...criteria } = event;
+          const { newId: genId } = await import("../util/ids");
+          const outcomeId = genId("outc");
+          const rubricText = typeof event.rubric === "string"
+            ? event.rubric
+            : event.rubric?.content ?? "";
+          const maxIterations = event.max_iterations ?? 3;
+          const processedAt = nowMs();
+
+          const outcomeData = {
+            outcome_id: outcomeId,
+            description: event.description,
+            rubric: rubricText,
+            max_iterations: maxIterations,
+            grader_iteration: 0,
+            status: "running",
+          };
+
+          setOutcomeCriteria(sessionId, outcomeData);
+
           const row = appendEvent(sessionId, {
             type: "user.define_outcome",
-            payload: criteria,
+            payload: {
+              outcome_id: outcomeId,
+              description: event.description,
+              rubric: rubricText,
+              max_iterations: maxIterations,
+              processed_at: processedAt,
+            },
             origin: "user",
             idempotencyKey: ik,
-            processedAt: nowMs(),
+            processedAt,
           });
           rows.push(row);
-          setOutcomeCriteria(sessionId, criteria);
+
+          // Enqueue the description as a user message turn
+          const descRow = appendEvent(sessionId, {
+            type: "user.message",
+            payload: { content: [{ type: "text", text: event.description }] },
+            origin: "user",
+            processedAt: null,
+          });
+          const inp: TurnInput = { kind: "text", eventId: descRow.id, text: event.description };
+          const currentStatus = getSessionRow(sessionId)?.status ?? "idle";
+          if (currentStatus === "running" || sawInterrupt) {
+            pushPendingUserInput({ sessionId, input: inp });
+          } else {
+            pendingForTurn.push(inp);
+          }
           continue;
         }
       }

@@ -4,7 +4,7 @@ import { getDrizzle, schema } from "./drizzle";
 import { getAgent } from "./agents";
 import { newId } from "../util/ids";
 import { nowMs, toIso } from "../util/clock";
-import type { Session, SessionResource, SessionRow, SessionStatus } from "../types";
+import type { Session, SessionResource, SessionRow, SessionStatus, OutcomeEvaluation } from "../types";
 
 export function hydrateSession(row: SessionRow): Session {
   // Populate resources from session_resources table if available,
@@ -89,6 +89,17 @@ export function hydrateSession(row: SessionRow): Session {
     max_tokens: row.max_tokens ?? null,
     max_wall_duration_ms: row.max_wall_duration_ms ?? null,
     outcome: row.outcome_criteria_json ? (JSON.parse(row.outcome_criteria_json) as Record<string, unknown>) : null,
+    outcome_evaluations: row.outcome_criteria_json
+      ? [JSON.parse(row.outcome_criteria_json) as Record<string, unknown>].filter(o => o.outcome_id).map(o => ({
+          type: "outcome_evaluation" as const,
+          outcome_id: o.outcome_id as string,
+          description: (o.description as string) ?? "",
+          result: (o.status === "running" ? "running" : o.status) as OutcomeEvaluation["result"],
+          iteration: (o.grader_iteration as number) ?? 0,
+          completed_at: (o.completed_at as string) ?? null,
+          explanation: (o.explanation as string) ?? "",
+        }))
+      : [],
     resources,
     vault_ids: row.vault_ids_json ? (JSON.parse(row.vault_ids_json) as string[]) : [],
     parent_session_id: row.parent_session_id ?? null,
