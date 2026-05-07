@@ -27,6 +27,7 @@ export interface OAuthRefreshConfig {
 }
 
 function hydrate(row: VaultCredentialRow): VaultCredential {
+  const archivedAt = row.archived_at ? toIso(row.archived_at) : null;
   if (row.auth_type === "mcp_oauth") {
     return {
       type: "vault_credential" as const,
@@ -40,7 +41,7 @@ function hydrate(row: VaultCredentialRow): VaultCredential {
       },
       created_at: toIso(row.created_at),
       updated_at: toIso(row.updated_at),
-      archived_at: null,
+      archived_at: archivedAt,
     };
   }
   // static_bearer (default)
@@ -55,7 +56,7 @@ function hydrate(row: VaultCredentialRow): VaultCredential {
     },
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
-    archived_at: null,
+    archived_at: archivedAt,
   };
 }
 
@@ -137,6 +138,15 @@ export function updateCredential(id: string, input: {
   }
   db.prepare(`UPDATE vault_credentials SET ${parts.join(", ")} WHERE id = ?`).run(...args, id);
   return getCredential(id);
+}
+
+export function archiveCredential(vaultId: string, credentialId: string): VaultCredential | null {
+  const db = getDb();
+  const existing = db.prepare(`SELECT * FROM vault_credentials WHERE id = ? AND vault_id = ?`).get(credentialId, vaultId) as VaultCredentialRow | undefined;
+  if (!existing) return null;
+  const now = nowMs();
+  db.prepare(`UPDATE vault_credentials SET archived_at = ?, updated_at = ? WHERE id = ?`).run(now, now, credentialId);
+  return getCredential(credentialId);
 }
 
 export function deleteCredential(id: string): boolean {

@@ -752,6 +752,24 @@ export function runMigrations(db: InstanceType<typeof Database>): void {
     db.exec(`ALTER TABLE agent_versions ADD COLUMN multiagent_json TEXT`);
   }
 
+  // Vault credentials: archived_at column for credential archival
+  {
+    const cols = db.prepare("PRAGMA table_info(vault_credentials)").all() as Array<{ name: string }>;
+    const names = new Set(cols.map((c) => c.name));
+    if (!names.has("archived_at")) {
+      db.exec("ALTER TABLE vault_credentials ADD COLUMN archived_at INTEGER");
+    }
+  }
+
+  // Memory versions: redacted_at column for version redaction
+  {
+    const cols = db.prepare("PRAGMA table_info(memory_versions)").all() as Array<{ name: string }>;
+    const names = new Set(cols.map((c) => c.name));
+    if (!names.has("redacted_at")) {
+      db.exec("ALTER TABLE memory_versions ADD COLUMN redacted_at INTEGER");
+    }
+  }
+
   // Vault metadata + archive + optional agent_id.
   // agent_id was originally NOT NULL — SQLite requires table recreation to
   // drop the constraint. We detect by checking the column's `notnull` flag.

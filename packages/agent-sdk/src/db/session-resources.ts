@@ -198,6 +198,36 @@ export function deleteResource(sessionId: string, resourceId: string): { id: str
   return { id: resourceId, type: "session_resource_deleted" };
 }
 
+export function updateResource(
+  sessionId: string,
+  resourceId: string,
+  fields: { mount_path?: string },
+): SessionResourceRecord | null {
+  const db = getDrizzle();
+  const existing = db
+    .select()
+    .from(schema.sessionResources)
+    .where(
+      and(
+        eq(schema.sessionResources.session_id, sessionId),
+        eq(schema.sessionResources.id, resourceId),
+      ),
+    )
+    .get() as SessionResourceRow | undefined;
+  if (!existing) return null;
+
+  const now = nowMs();
+  const parts: Record<string, unknown> = { updated_at: now };
+  if (fields.mount_path !== undefined) parts.mount_path = fields.mount_path;
+
+  db.update(schema.sessionResources)
+    .set(parts)
+    .where(eq(schema.sessionResources.id, resourceId))
+    .run();
+
+  return getResource(sessionId, resourceId);
+}
+
 export function countResources(sessionId: string): number {
   const db = getDrizzle();
   const result = db.all(

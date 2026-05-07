@@ -107,7 +107,11 @@ import {
   handleListCredentials,
   handleGetCredential,
   handleUpdateCredential,
+  handleArchiveCredential,
   handleDeleteCredential,
+  handleUpdateMemoryStore,
+  handleRedactMemoryVersion,
+  handleUpdateResource,
   handleListModels,
 } from "@agentstep/agent-sdk/handlers";
 
@@ -261,6 +265,7 @@ app.get("/v1/sessions/:id/events/stream", async (c) => {
 app.post("/v1/sessions/:id/resources", (c) => handleAddResource(c.req.raw, c.req.param("id")));
 app.get("/v1/sessions/:id/resources", (c) => handleListResources(c.req.raw, c.req.param("id")));
 app.get("/v1/sessions/:id/resources/:rid", (c) => handleGetResource(c.req.raw, c.req.param("id"), c.req.param("rid")));
+app.post("/v1/sessions/:id/resources/:rid", (c) => handleUpdateResource(c.req.raw, c.req.param("id"), c.req.param("rid")));
 app.delete("/v1/sessions/:id/resources/:rid", (c) => handleDeleteResource(c.req.raw, c.req.param("id"), c.req.param("rid")));
 
 // ── Files ────────────────────────────────────────────────────────────────
@@ -289,6 +294,8 @@ app.delete("/v1/vaults/:id", (c) => handleDeleteVault(c.req.raw, c.req.param("id
 // Vault credentials (Anthropic-compatible) — registered BEFORE :key routes
 app.post("/v1/vaults/:id/credentials", (c) => handleCreateCredential(c.req.raw, c.req.param("id")));
 app.get("/v1/vaults/:id/credentials", (c) => handleListCredentials(c.req.raw, c.req.param("id")));
+// Sub-resource routes must be registered BEFORE the generic :credId routes
+app.post("/v1/vaults/:id/credentials/:credId/archive", (c) => handleArchiveCredential(c.req.raw, c.req.param("id"), c.req.param("credId")));
 app.get("/v1/vaults/:id/credentials/:credId", (c) => handleGetCredential(c.req.raw, c.req.param("id"), c.req.param("credId")));
 app.post("/v1/vaults/:id/credentials/:credId", (c) => handleUpdateCredential(c.req.raw, c.req.param("id"), c.req.param("credId")));
 app.delete("/v1/vaults/:id/credentials/:credId", (c) => handleDeleteCredential(c.req.raw, c.req.param("id"), c.req.param("credId")));
@@ -306,11 +313,14 @@ app.get("/v1/memory_stores", (c) => handleListMemoryStores(c.req.raw));
 app.post("/v1/memory_stores/:id/archive", (c) => handleArchiveMemoryStore(c.req.raw, c.req.param("id")));
 app.get("/v1/memory_stores/:id/memory_versions", (c) => handleListMemoryVersions(c.req.raw, c.req.param("id")));
 app.get("/v1/memory_stores/:id/memory_versions/:vid", (c) => handleGetMemoryVersion(c.req.raw, c.req.param("id"), c.req.param("vid")));
+app.post("/v1/memory_stores/:id/memory_versions/:vid/redact", (c) => handleRedactMemoryVersion(c.req.raw, c.req.param("id"), c.req.param("vid")));
 app.get("/v1/memory_stores/:id", (c) => handleGetMemoryStore(c.req.raw, c.req.param("id")));
+app.post("/v1/memory_stores/:id", (c) => handleUpdateMemoryStore(c.req.raw, c.req.param("id")));
 app.delete("/v1/memory_stores/:id", (c) => handleDeleteMemoryStore(c.req.raw, c.req.param("id")));
 app.post("/v1/memory_stores/:id/memories", (c) => handleCreateMemory(c.req.raw, c.req.param("id")));
 app.get("/v1/memory_stores/:id/memories", (c) => handleListMemories(c.req.raw, c.req.param("id")));
 app.get("/v1/memory_stores/:id/memories/:memId", (c) => handleGetMemory(c.req.raw, c.req.param("id"), c.req.param("memId")));
+app.post("/v1/memory_stores/:id/memories/:memId", (c) => handleUpdateMemory(c.req.raw, c.req.param("id"), c.req.param("memId")));
 app.patch("/v1/memory_stores/:id/memories/:memId", (c) => handleUpdateMemory(c.req.raw, c.req.param("id"), c.req.param("memId")));
 app.delete("/v1/memory_stores/:id/memories/:memId", (c) => handleDeleteMemory(c.req.raw, c.req.param("id"), c.req.param("memId")));
 
@@ -377,6 +387,17 @@ app.get("/v1/tenants", (c) => handleListTenants(c.req.raw));
 app.get("/v1/tenants/:id", (c) => handleGetTenant(c.req.raw, c.req.param("id")));
 app.patch("/v1/tenants/:id", (c) => handlePatchTenant(c.req.raw, c.req.param("id")));
 app.delete("/v1/tenants/:id", (c) => handleArchiveTenant(c.req.raw, c.req.param("id")));
+
+// ── 501 stubs: enterprise-only features ─────────────────────────────────────
+const notImplemented = (feature: string) => (c: Context) =>
+  c.json({ type: "error", error: { type: "not_implemented", message: `${feature} is an Anthropic-hosted feature and is not available on self-hosted gateways.` } }, 501);
+
+app.post("/v1/user_profiles", notImplemented("User profiles"));
+app.get("/v1/user_profiles", notImplemented("User profiles"));
+app.get("/v1/user_profiles/:id", notImplemented("User profiles"));
+app.post("/v1/user_profiles/:id", notImplemented("User profiles"));
+app.post("/v1/user_profiles/:id/enrollment_url", notImplemented("User profiles"));
+app.post("/v1/vaults/:id/credentials/:credId/mcp_oauth_validate", notImplemented("MCP OAuth validation"));
 
 // ── SPA catch-all (must be last) ────────────────────────────────────────────
 app.get("*", (c) => {

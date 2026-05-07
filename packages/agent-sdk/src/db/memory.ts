@@ -30,6 +30,7 @@ function hydrateVersion(row: MemoryVersionRow): MemoryVersion {
   if (row.content != null) v.content = row.content;
   if (row.content_sha256 != null) v.content_sha256 = row.content_sha256;
   if (row.session_id != null) v.session_id = row.session_id;
+  if (row.redacted_at != null) v.redacted_at = toIso(row.redacted_at);
   return v;
 }
 
@@ -346,6 +347,51 @@ export function getMemoryVersion(storeId: string, versionId: string): MemoryVers
     .get();
 
   return row ? hydrateVersion(row as MemoryVersionRow) : undefined;
+}
+
+export function updateMemoryStore(id: string, fields: { name?: string; description?: string; metadata?: Record<string, string> }): MemoryStore | undefined {
+  const db = getDrizzle();
+  const now = nowMs();
+  const parts: Record<string, unknown> = { updated_at: now };
+  if (fields.name !== undefined) parts.name = fields.name;
+  if (fields.description !== undefined) parts.description = fields.description;
+  if (fields.metadata !== undefined) parts.metadata_json = JSON.stringify(fields.metadata);
+  const res = db.update(schema.memoryStores)
+    .set(parts)
+    .where(eq(schema.memoryStores.id, id))
+    .run();
+  if (res.changes === 0) return undefined;
+  return getMemoryStore(id) ?? undefined;
+}
+
+export function redactMemoryVersion(storeId: string, versionId: string): boolean {
+  const db = getDrizzle();
+  // Check version exists and belongs to store
+  const version = db
+    .select()
+    .from(schema.memoryVersions)
+    .where(
+      and(
+        eq(schema.memoryVersions.store_id, storeId),
+        eq(schema.memoryVersions.id, versionId),
+      ),
+    )
+    .get() as MemoryVersionRow | undefined;
+  if (!version) return false;
+
+  // Check it's not the current head of a live memory
+  if (version.memory_id && version.content_sha256) {
+    const memory = getMemory(version.memory_id);
+    if (memory && memory.content_sha256 === version.content_sha256) {
+      return false; // Cannot redact the current head version
+    }
+  }
+
+  const now = nowMs();
+  db.run(
+    sql`UPDATE memory_versions SET content = NULL, content_sha256 = NULL, redacted_at = ${now} WHERE id = ${versionId} AND store_id = ${storeId}`,
+  );
+  return true;
 }
 
 export function archiveMemoryStore(id: string): boolean {

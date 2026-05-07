@@ -14,6 +14,7 @@ import {
   createResource,
   listResources,
   getResource,
+  updateResource,
   deleteResource,
   countResources,
 } from "../db/session-resources";
@@ -117,6 +118,26 @@ export function handleGetResource(request: Request, sessionId: string, resourceI
     const resource = getResource(sessionId, resourceId);
     if (!resource) throw notFound(`resource not found: ${resourceId}`);
 
+    return jsonOk(resource);
+  });
+}
+
+const UpdateResourceSchema = z.object({
+  mount_path: z.string().optional(),
+});
+
+export function handleUpdateResource(request: Request, sessionId: string, resourceId: string): Promise<Response> {
+  return routeWrap(request, async ({ auth }) => {
+    assertSessionTenant(auth, sessionId);
+    const session = getSession(sessionId);
+    if (!session) throw notFound(`session not found: ${sessionId}`);
+
+    const body = await request.json();
+    const parsed = UpdateResourceSchema.safeParse(body);
+    if (!parsed.success) throw badRequest(parsed.error.message);
+
+    const resource = updateResource(sessionId, resourceId, parsed.data);
+    if (!resource) throw notFound(`resource not found: ${resourceId}`);
     return jsonOk(resource);
   });
 }

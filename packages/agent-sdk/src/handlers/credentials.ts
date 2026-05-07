@@ -18,6 +18,7 @@ import {
   listCredentials,
   updateCredential,
   deleteCredential,
+  archiveCredential,
 } from "../db/credentials";
 import type { OAuthRefreshConfig } from "../db/credentials";
 import { badRequest, notFound, conflict } from "../errors";
@@ -240,6 +241,20 @@ export function handleUpdateCredential(
       }
       throw err;
     }
+  });
+}
+
+export function handleArchiveCredential(
+  request: Request,
+  vaultId: string,
+  credentialId: string,
+): Promise<Response> {
+  return routeWrap(request, async ({ auth }) => {
+    loadVaultForCaller(auth, vaultId); // tenant guard
+
+    const cred = archiveCredential(vaultId, credentialId);
+    if (!cred) throw notFound(`credential not found: ${credentialId}`);
+    return jsonOk(cred);
   });
 }
 

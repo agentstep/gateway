@@ -396,6 +396,7 @@ export interface VaultCredentialRow {
   mcp_server_url: string | null;
   expires_at: string | null;
   refresh_config_encrypted: string | null;
+  archived_at: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -482,6 +483,7 @@ export interface MemoryVersionRow {
   content: string | null;
   content_sha256: string | null;
   session_id: string | null;
+  redacted_at: number | null;
   created_at: number;
 }
 
@@ -495,6 +497,7 @@ export interface MemoryVersion {
   content?: string;
   content_sha256?: string;
   session_id?: string;
+  redacted_at?: string;
   created_at: string;
 }
 

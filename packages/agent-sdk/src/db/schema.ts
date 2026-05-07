@@ -237,6 +237,7 @@ export const memoryVersions = sqliteTable("memory_versions", {
   content: text("content"),
   content_sha256: text("content_sha256"),
   session_id: text("session_id"),
+  redacted_at: integer("redacted_at"),
   created_at: integer("created_at").notNull(),
 });
 

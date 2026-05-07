@@ -6,6 +6,7 @@ import {
   getMemoryStore,
   listMemoryStores,
   deleteMemoryStore,
+  updateMemoryStore,
   createOrUpsertMemory,
   getMemory,
   listMemories,
@@ -14,6 +15,7 @@ import {
   listMemoryVersions,
   getMemoryVersion,
   archiveMemoryStore,
+  redactMemoryVersion,
 } from "../db/memory";
 import { getAgent } from "../db/agents";
 import { badRequest, notFound, conflict } from "../errors";
@@ -101,6 +103,26 @@ export function handleDeleteMemoryStore(request: Request, id: string): Promise<R
     const deleted = deleteMemoryStore(id);
     if (!deleted) throw notFound(`memory store not found: ${id}`);
     return jsonOk({ id, type: "memory_store_deleted" });
+  });
+}
+
+const UpdateStoreSchema = z.object({
+  name: z.string().min(1).optional(),
+  description: z.string().optional(),
+  metadata: z.record(z.string()).optional(),
+});
+
+export function handleUpdateMemoryStore(request: Request, id: string): Promise<Response> {
+  return routeWrap(request, async ({ auth }) => {
+    loadStoreForCaller(auth, id); // tenant guard
+
+    const body = await request.json();
+    const parsed = UpdateStoreSchema.safeParse(body);
+    if (!parsed.success) throw badRequest(parsed.error.message);
+
+    const store = updateMemoryStore(id, parsed.data);
+    if (!store) throw notFound(`memory store not found: ${id}`);
+    return jsonOk(store);
   });
 }
 
@@ -205,6 +227,18 @@ export function handleGetMemoryVersion(request: Request, storeId: string, versio
     const version = getMemoryVersion(storeId, versionId);
     if (!version) throw notFound(`memory version not found: ${versionId}`);
     return jsonOk(version);
+  });
+}
+
+export function handleRedactMemoryVersion(request: Request, storeId: string, versionId: string): Promise<Response> {
+  return routeWrap(request, async ({ auth }) => {
+    loadStoreForCaller(auth, storeId); // tenant guard
+    const version = getMemoryVersion(storeId, versionId);
+    if (!version) throw notFound(`memory version not found: ${versionId}`);
+    const redacted = redactMemoryVersion(storeId, versionId);
+    if (!redacted) throw badRequest(`cannot redact this version: it is the current head of a live memory`);
+    const updated = getMemoryVersion(storeId, versionId);
+    return jsonOk(updated);
   });
 }
 
