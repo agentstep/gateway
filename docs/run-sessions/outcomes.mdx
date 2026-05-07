@@ -1,0 +1,203 @@
+---
+title: Define Outcomes
+description: Tell the agent what done looks like and let it iterate until it gets there.
+---
+
+Outcomes elevate a session from conversation to work. Instead of open-ended back-and-forth, you define success criteria up front, the agent works toward them, a grader evaluates the result, and the agent iterates until the criteria are met or the iteration budget is exhausted.
+
+The loop looks like this:
+
+1. You send a `user.define_outcome` event with a description, a rubric, and a max iteration count.
+2. The agent starts working immediately.
+3. After each attempt, the grader evaluates the work against the rubric.
+4. If the rubric is not satisfied, the agent revises and tries again.
+5. The loop ends when the grader returns `satisfied`, the iteration limit is reached, or you interrupt.
+
+## Create a rubric
+
+A rubric is a Markdown document that tells the grader exactly what to check. Each criterion should be specific, observable, and independently scorable. Vague criteria lead to inconsistent grading.
+
+A good rubric:
+
+```markdown
+# Auth Module Refactor
+
+## Criteria
+
+### JWT implementation
+- All session state is stored in the token, not on the server
+- Tokens expire after 1 hour
+- Refresh token flow is implemented
+
+### Backward compatibility
+- All existing tests pass without modification
+- No session cookie references remain in the codebase
+
+### Code quality
+- No hardcoded secrets
+- Token signing key is loaded from environment variables
+- Error messages do not leak internal details
+```
+
+Tips for writing effective rubrics:
+
+- **Be specific.** "Code is clean" is hard to grade. "No function exceeds 50 lines" is easy.
+- **Make criteria independent.** Each one should be evaluable on its own.
+- **Include negative criteria.** "No session cookies remain" catches regressions the agent might miss.
+- **Keep it short.** 5-10 criteria is the sweet spot. More than that dilutes focus.
+
+## Create a session with an outcome
+
+Send a `user.define_outcome` event in the initial event batch. The agent begins working as soon as the event is processed.
+
+```http
+POST /v1/sessions/:id/events
+```
+
+```json
+{
+  "events": [
+    {
+      "type": "user.define_outcome",
+      "description": "Refactor the auth module to use stateless JWT tokens with a 1-hour expiry.",
+      "rubric": {
+        "type": "text",
+        "content": "# Auth Module Refactor\n\n## Criteria\n\n### JWT implementation\n- All session state is stored in the token\n- Tokens expire after 1 hour\n- Refresh token flow is implemented\n\n### Backward compatibility\n- All existing tests pass\n- No session cookie references remain"
+      },
+      "max_iterations": 5
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `description` | string | Plain-language description of the goal. Shown to the agent as the task. |
+| `rubric` | object | `{ type: "text", content: "..." }` — the Markdown rubric the grader uses to evaluate. |
+| `max_iterations` | number | Maximum number of evaluate-revise cycles before the outcome is marked `max_iterations_reached`. |
+
+You can also send `user.define_outcome` on an existing session that already has messages. The agent picks up from the current state and starts working toward the outcome.
+
+## Outcome events
+
+As the agent works through the outcome loop, the event stream emits span events for each evaluation cycle.
+
+### `span.outcome_evaluation_start`
+
+Emitted when the grader begins evaluating the agent's work.
+
+```json
+{
+  "type": "span.outcome_evaluation_start",
+  "iteration": 1,
+  "outcome_id": "outcome_01..."
+}
+```
+
+### `span.outcome_evaluation_ongoing`
+
+A heartbeat emitted periodically while the grader is running. Useful for showing progress in a UI.
+
+```json
+{
+  "type": "span.outcome_evaluation_ongoing",
+  "iteration": 1,
+  "outcome_id": "outcome_01..."
+}
+```
+
+### `span.outcome_evaluation_end`
+
+The grader has finished. The `result` field tells you what happened.
+
+```json
+{
+  "type": "span.outcome_evaluation_end",
+  "result": "satisfied",
+  "explanation": "All criteria met. JWT tokens are stateless with 1-hour expiry. All 42 tests pass. No cookie references found.",
+  "iteration": 2,
+  "outcome_id": "outcome_01...",
+  "usage": {
+    "input_tokens": 3200,
+    "output_tokens": 580
+  }
+}
+```
+
+Possible `result` values:
+
+| Value | Meaning |
+|---|---|
+| `satisfied` | All rubric criteria are met. The outcome is complete. |
+| `needs_revision` | One or more criteria failed. The agent will revise and try again. |
+| `max_iterations_reached` | The iteration budget is exhausted. The outcome stops. |
+| `failed` | An unrecoverable error occurred during evaluation. |
+| `interrupted` | A `user.interrupt` event stopped the evaluation. |
+
+## Checking outcome status
+
+Poll the session object to check the current state of all outcomes:
+
+```http
+GET /v1/sessions/:id
+```
+
+The response includes an `outcome_evaluations` array:
+
+```json
+{
+  "id": "session_01...",
+  "status": "idle",
+  "outcome_evaluations": [
+    {
+      "outcome_id": "outcome_01...",
+      "result": "satisfied",
+      "explanation": "All criteria met.",
+      "iteration": 2,
+      "max_iterations": 5
+    }
+  ]
+}
+```
+
+For in-progress outcomes, `result` will be `needs_revision` with the latest iteration count.
+
+## Interrupting
+
+Send a `user.interrupt` event to stop an outcome evaluation mid-cycle:
+
+```http
+POST /v1/sessions/:id/events
+```
+
+```json
+{
+  "events": [
+    { "type": "user.interrupt" }
+  ]
+}
+```
+
+The current evaluation cycle completes with `result: "interrupted"`. The agent stops iterating and the session returns to `idle`.
+
+## Chaining outcomes
+
+After one outcome completes (or is interrupted), you can send another `user.define_outcome` to start a new goal. Each outcome runs independently with its own iteration counter and rubric.
+
+```json
+{
+  "events": [
+    {
+      "type": "user.define_outcome",
+      "description": "Add rate limiting to all public API endpoints.",
+      "rubric": {
+        "type": "text",
+        "content": "# Rate Limiting\n\n- All /api/* routes return 429 after 100 requests per minute\n- Rate limit headers (X-RateLimit-*) are present on every response\n- Tests cover the 429 case"
+      },
+      "max_iterations": 3
+    }
+  ]
+}
+```
+
+The agent picks up from wherever the previous outcome left off, preserving the full container filesystem and session context. This lets you break complex work into sequential, graded phases.

@@ -4,6 +4,7 @@
     "sessions",
     "events",
     "vaults",
-    "memory"
+    "memory",
+    "outcomes"
   ]
 }

@@ -1,0 +1,75 @@
+---
+title: Dreaming
+description: Scheduled memory curation that reviews past sessions to extract patterns and improve agent performance.
+---
+
+Dreaming is an offline process that reviews past sessions and memory stores, extracts patterns, and curates memories. It runs between sessions, not during them. The goal is to turn raw session history into refined, actionable knowledge that makes the agent better over time.
+
+## How it works
+
+A dreaming run follows five steps:
+
+1. **Query recent sessions.** The dreaming process pulls sessions from the lookback window (e.g. the last 24 hours) for the agent associated with the memory store.
+2. **Extract key events.** From each session, it identifies tool calls, errors, revisions, user corrections, and outcome evaluations — the moments where something was learned.
+3. **Analyze patterns.** Claude reviews the extracted events and identifies recurring themes: repeated mistakes, converging workflows, shared preferences, and outdated assumptions.
+4. **Propose memory updates.** Based on the analysis, dreaming drafts a set of memory operations — create, update, or delete — against the target memory store.
+5. **Apply changes.** The proposed operations are committed to the memory store. New memories are created, existing ones are refined or merged, and stale entries are removed.
+
+## Running dreaming
+
+Use the `dream` CLI command to run dreaming against a memory store:
+
+```bash
+gateway dream --memory-store memstore_01... --lookback 24h
+```
+
+| Flag | Description |
+|---|---|
+| `--memory-store` | The memory store ID to curate. Required. |
+| `--lookback` | How far back to look for sessions. Accepts durations like `12h`, `7d`, `1w`. Default: `24h`. |
+| `--dry-run` | Show proposed memory changes without applying them. Useful for reviewing before committing. |
+| `--api-key` | API key for the gateway. Can also be set via `AGENTSTEP_API_KEY` environment variable. |
+
+Example with dry run:
+
+```bash
+gateway dream --memory-store memstore_01... --lookback 48h --dry-run
+```
+
+This prints the proposed memory operations (creates, updates, deletes) to stdout without modifying the store.
+
+## Scheduling
+
+Dreaming is designed to run on a schedule. A daily cron job is the simplest approach:
+
+```bash
+# Run dreaming every day at 2 AM
+0 2 * * * gateway dream --memory-store memstore_01... --lookback 24h
+```
+
+For agents with high session volume, you might run it more frequently:
+
+```bash
+# Every 6 hours
+0 */6 * * * gateway dream --memory-store memstore_01... --lookback 6h
+```
+
+Match the `--lookback` window to the cron interval to avoid reprocessing sessions or missing them.
+
+## What dreaming finds
+
+Dreaming surfaces patterns that are hard to see in individual sessions:
+
+- **Recurring mistakes.** The agent keeps making the same error across sessions — dreaming captures the fix as a memory so it sticks.
+- **Workflow convergence.** Multiple sessions arrive at the same solution through different paths. Dreaming distills the winning approach into a reusable pattern.
+- **Shared preferences.** Users consistently correct the agent in the same way. Dreaming encodes the preference so the agent stops making the correction necessary.
+- **Outdated memories.** A memory references a library version or API that no longer applies. Dreaming flags it for removal.
+
+## Memory and dreaming loop
+
+Memory and dreaming are complementary:
+
+- **Memory** captures learnings during sessions. The agent writes to its memory store in real time as it works — noting preferences, decisions, and context.
+- **Dreaming** refines memory between sessions. It reviews what happened, identifies what matters, and cleans up what doesn't.
+
+Together they create a feedback loop. Sessions generate raw learnings. Dreaming distills them. The next session starts with better context. Over time, the agent accumulates a curated knowledge base that reflects actual usage — not just what was configured at setup.

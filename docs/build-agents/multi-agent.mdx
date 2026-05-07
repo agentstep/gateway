@@ -1,0 +1,227 @@
+---
+title: Multi-Agent Orchestration
+description: Coordinate multiple agents within a single session using threads.
+---
+
+A **coordinator** agent can delegate sub-tasks to specialist agents. Each specialist runs in its own **thread** — a context-isolated event stream that shares the container filesystem with the primary session. The coordinator decides what to delegate, the specialists do the work, and results flow back through the primary stream.
+
+Threads are flat: a specialist cannot spawn further threads. Maximum concurrency is 25 threads per session, and the coordinator's agent roster can hold up to 20 agents.
+
+## Configure the coordinator
+
+Set `multiagent` on the agent to declare it as a coordinator and list the agents it can delegate to:
+
+```http
+POST /v1/agents
+```
+
+```json
+{
+  "name": "project-lead",
+  "model": { "id": "claude-sonnet-4-6" },
+  "engine": "claude",
+  "system": "You are a project lead. Break tasks into sub-tasks and delegate to specialists.",
+  "multiagent": {
+    "type": "coordinator",
+    "agents": [
+      { "type": "agent", "id": "agnt_frontend" },
+      { "type": "agent", "id": "agnt_backend" },
+      { "type": "self" }
+    ]
+  }
+}
+```
+
+| Entry type | Description |
+|---|---|
+| `{ "type": "agent", "id": "agnt_..." }` | A specific agent by ID. Optionally pin a version with `"version": 3`. |
+| `{ "type": "self" }` | The coordinator itself, useful for sub-tasks that don't need a specialist. |
+
+The roster is validated at agent creation time. All referenced agent IDs must exist and belong to the same tenant.
+
+## Create the session
+
+Create a session with the coordinator agent the same way you would any other agent. No special flags are needed — the `multiagent` configuration on the agent handles everything.
+
+```http
+POST /v1/sessions
+```
+
+```json
+{
+  "agent": "agnt_coordinator",
+  "environment_id": "env_01xyz"
+}
+```
+
+When the coordinator decides to delegate, it calls the synthetic `spawn_agent` tool. The gateway intercepts this tool call, creates a thread, and runs the specialist agent inside it.
+
+## Threads
+
+### List threads
+
+```http
+GET /v1/sessions/:id/threads
+```
+
+Returns all threads for the session:
+
+```json
+{
+  "data": [
+    {
+      "type": "thread",
+      "id": "thread_01...",
+      "session_id": "session_01...",
+      "status": "idle",
+      "agent": {
+        "id": "agnt_frontend",
+        "name": "frontend-specialist"
+      },
+      "parent_thread_id": null,
+      "usage": {
+        "input_tokens": 4200,
+        "output_tokens": 890
+      },
+      "stats": {
+        "turns": 3,
+        "tool_calls": 12
+      }
+    }
+  ]
+}
+```
+
+Thread status values follow the same lifecycle as sessions: `running`, `idle`, `terminated`.
+
+### Archive a thread
+
+```http
+POST /v1/sessions/:id/threads/:tid/archive
+```
+
+Marks the thread as archived. Archived threads no longer accept events but their history remains readable.
+
+## Thread events on the primary stream
+
+When threads are created and change state, the primary session stream receives notification events. You do not need to poll threads — subscribe to the primary stream and watch for these event types.
+
+### `session.thread_created`
+
+A new thread was spawned by the coordinator.
+
+```json
+{
+  "type": "session.thread_created",
+  "thread_id": "thread_01...",
+  "agent": {
+    "id": "agnt_frontend",
+    "name": "frontend-specialist"
+  }
+}
+```
+
+### `session.thread_status_running`
+
+A thread's agent has started processing.
+
+```json
+{
+  "type": "session.thread_status_running",
+  "thread_id": "thread_01..."
+}
+```
+
+### `session.thread_status_idle`
+
+A thread's agent has finished its current turn.
+
+```json
+{
+  "type": "session.thread_status_idle",
+  "thread_id": "thread_01...",
+  "stop_reason": "end_turn"
+}
+```
+
+### `session.thread_status_terminated`
+
+A thread has been permanently closed.
+
+```json
+{
+  "type": "session.thread_status_terminated",
+  "thread_id": "thread_01..."
+}
+```
+
+### `agent.thread_message_sent`
+
+The coordinator sent a message to a thread.
+
+```json
+{
+  "type": "agent.thread_message_sent",
+  "thread_id": "thread_01...",
+  "content": [{ "type": "text", "text": "Build the login form with email and password fields." }]
+}
+```
+
+### `agent.thread_message_received`
+
+A thread's agent sent a message back to the coordinator.
+
+```json
+{
+  "type": "agent.thread_message_received",
+  "thread_id": "thread_01...",
+  "content": [{ "type": "text", "text": "Login form is complete. Added validation and tests." }]
+}
+```
+
+## Thread event stream
+
+To see the full activity inside a specific thread, use the per-thread event endpoints.
+
+### List thread events
+
+```http
+GET /v1/sessions/:id/threads/:tid/events
+```
+
+Returns all events from the thread's log, including `agent.message`, `agent.tool_use`, `agent.tool_result`, and span events. Pagination works the same as session events — use `after_seq` and `limit`.
+
+### Stream thread events
+
+```http
+GET /v1/sessions/:id/threads/:tid/stream
+```
+
+Opens an SSE connection for live thread events. Same reconnection semantics as the primary session stream — pass `Last-Event-ID` or `after_seq` on reconnect.
+
+## Tool permissions
+
+When a thread's agent encounters a tool that requires confirmation (because `confirmation_mode` is enabled on the specialist agent), the `requires_action` event is cross-posted to the primary session thread. This lets a single client monitor and approve tool calls across all threads from one stream.
+
+The cross-posted event includes a `session_thread_id` field identifying which thread raised the request:
+
+```json
+{
+  "type": "agent.tool_use",
+  "id": "toolu_01...",
+  "name": "Bash",
+  "input": { "command": "rm -rf node_modules && npm install" },
+  "session_thread_id": "thread_01...",
+  "requires_action": true
+}
+```
+
+Send the `user.tool_confirmation` event on the primary session stream. The gateway routes it to the correct thread automatically:
+
+```json
+{
+  "type": "user.tool_confirmation",
+  "tool_use_id": "toolu_01...",
+  "result": "allow"
+}
+```
