@@ -13,6 +13,11 @@ describe("resolveToolset", () => {
       "Grep",
       "WebFetch",
       "WebSearch",
+      "ToolSearch",
+      "Skill",
+      "Agent",
+      "NotebookEdit",
+      "TodoWrite",
     ]);
     expect(r.disallowedTools).toEqual([]);
     expect(r.customToolNames.size).toBe(0);
@@ -91,6 +96,11 @@ describe("resolveToolset", () => {
       "Grep",
       "WebFetch",
       "WebSearch",
+      "ToolSearch",
+      "Skill",
+      "Agent",
+      "NotebookEdit",
+      "TodoWrite",
     ]);
     expect(r.customToolNames.size).toBe(0);
   });
