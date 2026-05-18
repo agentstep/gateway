@@ -79,6 +79,59 @@ describe("resolveToolset", () => {
     expect(r.customToolNames.has("foo")).toBe(true);
   });
 
+  it("normalizes lowercase tool names to PascalCase", () => {
+    const r = resolveToolset([
+      {
+        type: "agent_toolset_20260401",
+        default_config: { enabled: false },
+        configs: [
+          { name: "read", enabled: true },
+          { name: "bash", enabled: true },
+        ],
+      },
+    ]);
+    expect(r.allowedTools.sort()).toEqual(["Bash", "Read"]);
+    expect(r.disallowedTools).toContain("Write");
+    expect(r.disallowedTools).toContain("ToolSearch");
+    expect(r.disallowedTools).not.toContain("Bash");
+    expect(r.disallowedTools).not.toContain("Read");
+  });
+
+  it("normalizes mixed-case tool names", () => {
+    const r = resolveToolset([
+      {
+        type: "agent_toolset_20260401",
+        configs: [
+          { name: "webfetch", enabled: false },
+          { name: "WEBSEARCH", enabled: false },
+          { name: "toolsearch", enabled: false },
+        ],
+      },
+    ]);
+    expect(r.allowedTools).toContain("Bash");
+    expect(r.allowedTools).not.toContain("WebFetch");
+    expect(r.allowedTools).not.toContain("WebSearch");
+    expect(r.allowedTools).not.toContain("ToolSearch");
+    expect(r.disallowedTools).toContain("WebFetch");
+    expect(r.disallowedTools).toContain("WebSearch");
+    expect(r.disallowedTools).toContain("ToolSearch");
+  });
+
+  it("ignores unknown tool names even after normalization", () => {
+    const r = resolveToolset([
+      {
+        type: "agent_toolset_20260401",
+        configs: [
+          { name: "nonexistent_tool", enabled: false },
+        ],
+      },
+    ]);
+    // All built-ins still enabled — unknown name is skipped
+    expect(r.allowedTools).toContain("Bash");
+    expect(r.allowedTools).toContain("Read");
+    expect(r.disallowedTools).toEqual([]);
+  });
+
   // Regression: agents created without an explicit tools config ended up with
   // tools: [], which hit this "no toolset declared" branch and disabled every
   // built-in. The wizard fix is to send agent_toolset_20260401 explicitly —

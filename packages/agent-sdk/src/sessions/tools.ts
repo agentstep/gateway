@@ -25,7 +25,12 @@ export function resolveToolset(tools: ToolConfig[]): ResolvedTools {
         builtInEnabled = new Set();
       }
       for (const cfg of tool.configs ?? []) {
-        const name = cfg.name;
+        // Normalize tool names to PascalCase — Anthropic docs show lowercase
+        // ("read", "bash") but Claude Code uses PascalCase ("Read", "Bash").
+        const raw = cfg.name;
+        const name = BUILT_IN_TOOL_NAMES.find(
+          (n) => n.toLowerCase() === raw.toLowerCase(),
+        ) ?? raw;
         if (!BUILT_IN_TOOL_NAMES.includes(name as BuiltInToolName)) continue;
         if (cfg.enabled === false) {
           builtInEnabled.delete(name as BuiltInToolName);
