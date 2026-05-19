@@ -6,6 +6,7 @@
  * so optional SDK-based providers (e2b, vercel) only load when selected.
  */
 import type { ContainerProvider, ProviderName } from "./types";
+import { getConfig } from "../config";
 
 const PROVIDERS: Record<ProviderName, () => Promise<ContainerProvider>> = {
   sprites: async () => (await import("./sprites")).spritesProvider,
@@ -30,4 +31,71 @@ export async function resolveContainerProvider(
   const loader = PROVIDERS[key];
   if (!loader) throw new Error(`Unknown provider: "${key}". Available: ${Object.keys(PROVIDERS).join(", ")}`);
   return loader();
+}
+
+/**
+ * Resolve a container provider with precedence:
+ * 1. Explicit override (from function param)
+ * 2. Environment config provider (deprecated — logs warning on first use)
+ * 3. Process default (DEFAULT_PROVIDER env var or --provider flag)
+ * 4. Throw if throwOnMissing, else return null
+ *
+ * Use resolveProvider() for execution paths (throws on missing).
+ * Use tryResolveProvider() for background tasks (returns null on missing).
+ */
+let warnedEnvProvider = false;
+
+export async function resolveProvider(opts?: {
+  override?: string;
+  envConfigProvider?: string | null;
+}): Promise<ContainerProvider> {
+  const result = await tryResolveProvider(opts);
+  if (!result) {
+    throw new Error(
+      "No container provider configured. Set DEFAULT_PROVIDER env var, use gateway serve --provider <name>, or gateway worker --provider <name>."
+    );
+  }
+  return result;
+}
+
+export async function tryResolveProvider(opts?: {
+  override?: string;
+  envConfigProvider?: string | null;
+}): Promise<ContainerProvider | null> {
+  // 1. Explicit override
+  if (opts?.override) {
+    return resolveContainerProvider(opts.override);
+  }
+
+  // 2. Environment config (deprecated fallback)
+  if (opts?.envConfigProvider) {
+    if (!warnedEnvProvider) {
+      console.warn("[provider] config.provider on environment is deprecated — use gateway serve --provider or DEFAULT_PROVIDER env var");
+      warnedEnvProvider = true;
+    }
+    return resolveContainerProvider(opts.envConfigProvider);
+  }
+
+  // 3. Process default
+  const cfg = getConfig();
+  if (cfg.defaultProvider) {
+    return resolveContainerProvider(cfg.defaultProvider);
+  }
+
+  // 4. Not found
+  return null;
+}
+
+/**
+ * Get provider name string with same precedence (for non-async contexts).
+ */
+export function resolveProviderName(opts?: {
+  override?: string;
+  envConfigProvider?: string | null;
+}): string {
+  if (opts?.override) return opts.override;
+  if (opts?.envConfigProvider) return opts.envConfigProvider;
+  const cfg = getConfig();
+  if (cfg.defaultProvider) return cfg.defaultProvider;
+  return "unknown";
 }

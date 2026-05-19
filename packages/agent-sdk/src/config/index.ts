@@ -49,6 +49,11 @@ export interface Config {
    * Default: 5 minutes (300_000 ms).
    */
   warmPoolTtlMs: number;
+  /**
+   * Default container provider name (e.g. "docker", "sprites", "mvm").
+   * Set via DEFAULT_PROVIDER env var, `--provider` flag, or `default_provider` setting.
+   */
+  defaultProvider: string | undefined;
 }
 
 type GlobalCache = typeof globalThis & {
@@ -128,6 +133,8 @@ function loadConfig(): Config {
     ),
     warmPoolSize: num(process.env.WARM_POOL_SIZE, 0),
     warmPoolTtlMs: num(process.env.WARM_POOL_TTL_MS, 300_000),
+    defaultProvider:
+      process.env.DEFAULT_PROVIDER || readSetting("default_provider") || undefined,
   };
 }
 

@@ -41,8 +41,11 @@ export function registerServeCommand(parent: Command): void {
       "Bind address. Default is 127.0.0.1 (loopback). Pass 0.0.0.0 to expose to the network — requires you to understand the security implications.",
       "127.0.0.1",
     )
+    .option("--provider <name>", "Default container provider (docker, sprites, mvm, etc.)")
     .action(async (opts) => {
       await import("dotenv/config");
+
+      if (opts.provider) process.env.DEFAULT_PROVIDER = opts.provider;
 
       const key = getOrCreateKey();
 

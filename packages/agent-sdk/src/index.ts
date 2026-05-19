@@ -107,7 +107,7 @@ export { startWorker } from "./workers/runner";
 export { resolveBackend } from "./backends/registry";
 
 // Providers
-export { resolveContainerProvider } from "./providers/registry";
+export { resolveContainerProvider, resolveProvider, tryResolveProvider, resolveProviderName } from "./providers/registry";
 
 // Proxy
 export { forwardToAnthropic, validateAnthropicProxy } from "./proxy/forward";
