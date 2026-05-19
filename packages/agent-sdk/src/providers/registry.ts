@@ -20,6 +20,7 @@ const PROVIDERS: Record<ProviderName, () => Promise<ContainerProvider>> = {
   modal: async () => (await import("./modal")).modalProvider,
   mvm: async () => (await import("./apple-firecracker")).mvmProvider,
   anthropic: async () => (await import("./anthropic")).anthropicProvider,
+  cloudflare: async () => (await import("./cloudflare")).cloudflareProvider,
 };
 
 export async function resolveContainerProvider(

@@ -4,7 +4,7 @@ import { getConfig } from "../config/index";
 import type { AvailabilityResult, ProviderName } from "../providers/types";
 
 const LOCAL_PROVIDERS: ProviderName[] = ["docker", "apple-container", "podman"];
-const CLOUD_PROVIDERS: ProviderName[] = ["sprites", "e2b", "vercel", "daytona", "fly", "modal"];
+const CLOUD_PROVIDERS: ProviderName[] = ["sprites", "e2b", "vercel", "daytona", "fly", "modal", "cloudflare"];
 
 const CLOUD_KEY_MAP: Record<string, string> = {
   sprites: "SPRITE_TOKEN",
@@ -13,6 +13,7 @@ const CLOUD_KEY_MAP: Record<string, string> = {
   daytona: "DAYTONA_API_KEY",
   fly: "FLY_API_TOKEN",
   modal: "MODAL_TOKEN_ID",
+  cloudflare: "CLOUDFLARE_SANDBOX_URL",
 };
 
 async function checkLocalProvider(name: ProviderName): Promise<AvailabilityResult> {
