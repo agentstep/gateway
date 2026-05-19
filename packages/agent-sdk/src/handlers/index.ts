@@ -26,3 +26,4 @@ export { handleWhoami } from "./whoami";
 export { handleListAudit } from "./audit";
 export { handleGetLicense } from "./license";
 export { handleListModels } from "./models";
+export { handleListWork, handleGetWork, handleUpdateWork, handlePollWork, handleWorkStats, handleAckWork, handleHeartbeatWork, handleStopWork } from "./work";

@@ -119,6 +119,14 @@ import {
   handleDreamMemoryStore,
   handleUpdateResource,
   handleListModels,
+  handleListWork,
+  handleGetWork,
+  handleUpdateWork,
+  handlePollWork,
+  handleWorkStats,
+  handleAckWork,
+  handleHeartbeatWork,
+  handleStopWork,
 } from "@agentstep/agent-sdk/handlers";
 
 import { cors } from "hono/cors";
@@ -202,10 +210,19 @@ app.delete("/v1/agents/:id", (c) => handleDeleteAgent(c.req.raw, c.req.param("id
 // ── Environments ─────────────────────────────────────────────────────────
 app.post("/v1/environments", (c) => handleCreateEnvironment(c.req.raw));
 app.get("/v1/environments", (c) => handleListEnvironments(c.req.raw));
+// Work queue routes (self_hosted environments) — must be before generic :id routes
+app.get("/v1/environments/:id/work/poll", (c) => handlePollWork(c.req.raw, c.req.param("id")));
+app.get("/v1/environments/:id/work/stats", (c) => handleWorkStats(c.req.raw, c.req.param("id")));
+app.post("/v1/environments/:id/work/:workId/ack", (c) => handleAckWork(c.req.raw, c.req.param("id"), c.req.param("workId")));
+app.post("/v1/environments/:id/work/:workId/heartbeat", (c) => handleHeartbeatWork(c.req.raw, c.req.param("id"), c.req.param("workId")));
+app.post("/v1/environments/:id/work/:workId/stop", (c) => handleStopWork(c.req.raw, c.req.param("id"), c.req.param("workId")));
+app.get("/v1/environments/:id/work/:workId", (c) => handleGetWork(c.req.raw, c.req.param("id"), c.req.param("workId")));
+app.post("/v1/environments/:id/work/:workId", (c) => handleUpdateWork(c.req.raw, c.req.param("id"), c.req.param("workId")));
+app.get("/v1/environments/:id/work", (c) => handleListWork(c.req.raw, c.req.param("id")));
+app.post("/v1/environments/:id/archive", (c) => handleArchiveEnvironment(c.req.raw, c.req.param("id")));
 app.get("/v1/environments/:id", (c) => handleGetEnvironment(c.req.raw, c.req.param("id")));
 app.post("/v1/environments/:id", (c) => handleUpdateEnvironment(c.req.raw, c.req.param("id")));
 app.delete("/v1/environments/:id", (c) => handleDeleteEnvironment(c.req.raw, c.req.param("id")));
-app.post("/v1/environments/:id/archive", (c) => handleArchiveEnvironment(c.req.raw, c.req.param("id")));
 
 // ── Sessions ─────────────────────────────────────────────────────────────
 app.post("/v1/sessions", (c) => handleCreateSession(c.req.raw));
