@@ -19,7 +19,7 @@
  */
 import type { ContainerProvider, ExecOptions, ExecSession, ProviderSecrets } from "./types";
 import { shellEscape } from "./shared";
-import { readEnvOrSetting } from "../config";
+import { readEnvOrSetting, getConfig } from "../config";
 
 const BASE_URL = "https://api.machines.dev";
 
@@ -246,7 +246,7 @@ export const flyProvider: ContainerProvider = {
 
     const execBody = buildExecBody(opts.argv, {
       stdin: opts.stdin,
-      timeoutMs: opts.timeoutMs ?? 300_000,
+      timeoutMs: opts.timeoutMs ?? getConfig().agentTimeoutMs,
     });
 
     const controller = new AbortController();

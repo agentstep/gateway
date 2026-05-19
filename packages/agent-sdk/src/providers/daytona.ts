@@ -70,7 +70,7 @@ export const daytonaProvider: ContainerProvider = {
       body: JSON.stringify({
         name,
         language: "javascript",
-        autoStopInterval: 30,
+        autoStopInterval: 120,
       }),
     });
     if (!res.ok) {
