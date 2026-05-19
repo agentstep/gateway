@@ -13,7 +13,7 @@ const CLOUD_KEY_MAP: Record<string, string> = {
   daytona: "DAYTONA_API_KEY",
   fly: "FLY_API_TOKEN",
   modal: "MODAL_TOKEN_ID",
-  cloudflare: "CLOUDFLARE_SANDBOX_URL",
+  cloudflare: "CLOUDFLARE_SANDBOX_TOKEN",
 };
 
 async function checkLocalProvider(name: ProviderName): Promise<AvailabilityResult> {

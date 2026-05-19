@@ -166,6 +166,10 @@ export const cloudflareProvider: ContainerProvider = {
     };
   },
 
+  // NOTE: startExec is buffered, not streamed — the Worker contract returns
+  // a single JSON body. The turn driver tolerates this (sees one chunk),
+  // but long-running CLI output won't surface incrementally. Same shortcut
+  // as the daytona provider; a true streaming contract would need SSE.
   async startExec(name, opts) {
     const secrets = opts.secrets;
     const base = getBaseUrl(secrets);

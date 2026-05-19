@@ -842,19 +842,4 @@ export function runMigrations(db: InstanceType<typeof Database>): void {
       db.exec(`CREATE INDEX IF NOT EXISTS idx_vaults_tenant ON vaults(tenant_id)`);
     }
   }
-
-  // MCP tunnels — outbound-only connections from customer networks for
-  // reaching private MCP servers. See src/mcp/tunnels.ts for the protocol.
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS mcp_tunnels (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      token_hash TEXT NOT NULL,
-      tenant_id TEXT,
-      created_at INTEGER NOT NULL,
-      last_seen_at INTEGER,
-      revoked_at INTEGER
-    )
-  `);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_mcp_tunnels_tenant ON mcp_tunnels(tenant_id)`);
 }

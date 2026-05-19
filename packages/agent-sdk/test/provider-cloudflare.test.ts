@@ -99,4 +99,62 @@ describe("cloudflareProvider", () => {
     expect(url).toBe("https://override.example.com/sandboxes/ca-sess-abc");
     expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer override-secret");
   });
+
+  it("surfaces non-zero exit_code from exec", async () => {
+    const { cloudflareProvider } = await import("../src/providers/cloudflare");
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ stdout: "", stderr: "nope", exit_code: 2 }), { status: 200 })
+    ) as unknown as typeof fetch;
+    const out = await cloudflareProvider.exec("ca-sess-abc", ["false"]);
+    expect(out.exit_code).toBe(2);
+    expect(out.stderr).toBe("nope");
+  });
+
+  it("passes an AbortSignal to fetch so timeouts can cancel in-flight requests", async () => {
+    const { cloudflareProvider } = await import("../src/providers/cloudflare");
+    let captured: AbortSignal | undefined;
+    globalThis.fetch = (async (_url: unknown, init: RequestInit | undefined) => {
+      captured = init?.signal as AbortSignal | undefined;
+      return new Response(JSON.stringify({ stdout: "", stderr: "", exit_code: 0 }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await cloudflareProvider.exec("ca-sess-abc", ["true"], { timeoutMs: 1000 });
+    expect(captured).toBeDefined();
+    expect(captured?.aborted).toBe(false);
+  });
+
+  it("startExec wires opts.signal so callers can cancel mid-flight", async () => {
+    const { cloudflareProvider } = await import("../src/providers/cloudflare");
+    const external = new AbortController();
+    globalThis.fetch = (async (_url: unknown, init: RequestInit | undefined) => {
+      const signal = init?.signal as AbortSignal;
+      return await new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new Error("aborted")));
+      });
+    }) as unknown as typeof fetch;
+
+    const promise = cloudflareProvider.startExec("ca-sess-abc", {
+      argv: ["sleep", "5"],
+      signal: external.signal,
+    });
+    external.abort();
+    await expect(promise).rejects.toThrow(/aborted/);
+  });
+
+  it("list queries /sandboxes?prefix= and filters by prefix", async () => {
+    const { cloudflareProvider } = await import("../src/providers/cloudflare");
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      new Response(JSON.stringify([
+        { name: "ca-sess-one" },
+        { name: "ca-sess-two" },
+        { name: "other-thing" },
+      ]), { status: 200 })
+    );
+    globalThis.fetch = fetchMock;
+
+    const result = await cloudflareProvider.list({ prefix: "ca-sess-" });
+    expect(result.map((r) => r.name).sort()).toEqual(["ca-sess-one", "ca-sess-two"]);
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://sb.example.workers.dev/sandboxes?prefix=ca-sess-");
+  });
 });
