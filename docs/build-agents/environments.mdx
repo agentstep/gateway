@@ -15,7 +15,7 @@ POST /v1/environments
 {
   "name": "python-sandbox",
   "config": {
-    "type": "cloud",
+    "type": "self_hosted",
     "provider": "docker",
     "packages": {
       "pip": ["pandas", "matplotlib"]
@@ -32,14 +32,25 @@ POST /v1/environments
 
 The gateway validates provider availability synchronously before saving the row, then kicks off background setup. The environment starts in `state: "preparing"`. The response includes `type: "environment"` and `updated_at`.
 
+## Environment types
+
+| Type | What it does | Config fields |
+|---|---|---|
+| `self_hosted` | Execution on your infrastructure via a container provider | `provider` (optional), `packages`, `networking`, `warm_pool_size`, `idle_timeout_ms`, `max_sandboxes` |
+| `cloud` | Proxy to Anthropic's hosted Managed Agents | `networking`, `packages` |
+
+`self_hosted` is the default for AgentStep Gateway. Use `cloud` only for [sync-and-proxy](/guides/anthropic-integration) to Anthropic.
+
+The `provider` field on `self_hosted` environments is optional. If omitted, the gateway uses the process-level default set via `gateway serve --provider <name>` or the `DEFAULT_PROVIDER` environment variable.
+
 ## Config fields
 
 ### `config` object
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `type` | `"cloud"` | yes | Always `"cloud"`. |
-| `provider` | string | yes | Sandbox provider key. See the table below. |
+| `type` | `"self_hosted"` or `"cloud"` | yes | `"self_hosted"` for local/cloud container providers; `"cloud"` for Anthropic sync-and-proxy. |
+| `provider` | string | no | Sandbox provider key. See the table below. Optional on `self_hosted`; omit for `cloud`. |
 | `packages` | object | no | Packages to pre-install by ecosystem. |
 | `networking` | object | no | Network access policy for containers. |
 | `idle_timeout_ms` | number | no | Per-environment idle TTL in milliseconds. Containers are released after this duration of inactivity. Default: `3600000` (1 hour). |

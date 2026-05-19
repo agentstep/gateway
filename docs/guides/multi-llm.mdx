@@ -172,7 +172,7 @@ client = Anthropic(api_key="gw-key", base_url="http://localhost:4000")
 claude_agent = client.beta.agents.create(name="claude-bot", model={"id": "claude-sonnet-4-6"}, engine="claude")
 codex_agent = client.beta.agents.create(name="codex-bot", model={"id": "o4-mini"}, engine="codex")
 
-env = client.beta.environments.create(name="test", config={"type": "cloud", "provider": "docker"})
+env = client.beta.environments.create(name="test", config={"type": "self_hosted", "provider": "docker"})
 
 # Run the same task on both
 for agent in [claude_agent, codex_agent]:

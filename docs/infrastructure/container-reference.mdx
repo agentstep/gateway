@@ -149,7 +149,7 @@ POST /v1/environments
 {
   "name": "my-env",
   "config": {
-    "type": "cloud",
+    "type": "self_hosted",
     "provider": "docker"
   }
 }
@@ -171,7 +171,7 @@ POST /v1/environments
 {
   "name": "high-throughput",
   "config": {
-    "type": "cloud",
+    "type": "self_hosted",
     "provider": "docker",
     "idle_timeout_ms": 7200000,
     "max_sandboxes": 16,
@@ -180,6 +180,6 @@ POST /v1/environments
 }
 ```
 
-If `provider` is omitted, the gateway throws an error at session start. The default provider for new environments created via the interactive quickstart (`gateway chat`) is `sprites`.
+If `provider` is omitted, the gateway uses the process-level default set via `gateway serve --provider <name>` or the `DEFAULT_PROVIDER` environment variable. The default provider for new environments created via the interactive quickstart (`gateway chat`) is `sprites`.
 
 Provider credentials follow precedence order: **vault secrets → `process.env` → settings DB**. Credentials stored via `PUT /v1/settings` are read by `readEnvOrSetting()` at turn time, so they work without restarting the server.
