@@ -78,15 +78,13 @@ handle_request() {
       send_response '{"jsonrpc":"2.0","id":'"$id"',"result":{"tools":'"$TOOLS_LIST_JSON"'}}'
       ;;
     tools/call)
-      local tool_name tool_args
+      local tool_name
       tool_name=$(echo "$body" | grep -o '"name":"[^"]*"' | tail -1 | cut -d'"' -f4)
-      tool_args=$(echo "$body" | grep -o '"arguments":{[^}]*}' | head -1 | sed 's/^"arguments"://')
-      [ -z "$tool_args" ] && tool_args="{}"
 
       # Reject unknown tools immediately (don't wait for gateway response)
       if [ -n "$TOOLS_LIST_JSON" ]; then
         if ! echo "$TOOLS_LIST_JSON" | grep -q "\\"$tool_name\\""; then
-          send_response '{"jsonrpc":"2.0","id":'"$id"',"result":{"content":[{"type":"text","text":"Unknown tool: '"$tool_name"'. Available tools: '"$(echo "$TOOLS_LIST_JSON" | grep -o '"name":"[^"]*"' | cut -d'"' -f4 | tr '\\n' ', ')"'"}],"isError":true}}'
+          send_response '{"jsonrpc":"2.0","id":'"$id"',"result":{"content":[{"type":"text","text":"Unknown tool: '"$tool_name"'"}],"isError":true}}'
           return
         fi
       fi
@@ -100,8 +98,11 @@ handle_request() {
         return
       fi
 
-      # Write request and create pending sentinel
-      printf '{"tool_use_id":%s,"name":"%s","input":%s}' "$id" "$tool_name" "$tool_args" > "$REQUEST_PATH"
+      # Write the full MCP request body to request.json.
+      # The driver parses tool_use_id, name, and input from it.
+      # Previous approach used grep to extract arguments, which broke on
+      # nested JSON objects (truncated at first closing brace).
+      printf '%s' "$body" > "$REQUEST_PATH"
       touch "$PENDING_PATH"
 
       # Poll for response.json (200ms interval, 5min timeout)

@@ -1227,7 +1227,11 @@ async function checkToolBridgeSentinel(
     return;
   }
 
-  // Sentinel exists — read the request
+  // Sentinel exists — read the request.
+  // The tool bridge writes the full MCP JSON-RPC body to request.json.
+  // Two formats are supported:
+  //   1. Full MCP: {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"...","arguments":{...}}}
+  //   2. Legacy:   {"tool_use_id":1,"name":"...","input":{...}}
   let request: { tool_use_id?: string; name?: string; input?: unknown };
   try {
     const result = await provider.exec(
@@ -1237,7 +1241,20 @@ async function checkToolBridgeSentinel(
     );
     // Strip sprites HTTP exec control chars (stdout/stderr multiplexing)
     const clean = result.stdout.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "");
-    request = JSON.parse(clean) as typeof request;
+    const raw = JSON.parse(clean) as Record<string, unknown>;
+
+    // Normalize: extract from MCP envelope if present
+    if (raw.params && typeof raw.params === "object") {
+      const params = raw.params as Record<string, unknown>;
+      request = {
+        tool_use_id: String(raw.id ?? ""),
+        name: (params.name as string) ?? "",
+        input: params.arguments ?? {},
+      };
+    } else {
+      // Legacy format
+      request = raw as typeof request;
+    }
   } catch (err) {
     console.warn(`[driver] failed to read tool bridge request for ${sessionId}:`, err);
     return;
