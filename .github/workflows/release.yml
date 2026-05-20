@@ -49,7 +49,7 @@ jobs:
         # handled explicitly below so re-runs are idempotent.
         run: |
           cd packages/agent-sdk
-          if npm publish --access public --provenance 2>&1 | tee /tmp/publish.log; then
+          if npm publish --access public 2>&1 | tee /tmp/publish.log; then
             echo "Published."
           else
             if grep -q "cannot publish over" /tmp/publish.log || grep -q "E409" /tmp/publish.log; then
@@ -64,7 +64,7 @@ jobs:
       - name: Publish @agentstep/gateway
         run: |
           cd packages/gateway
-          if npm publish --access public --provenance 2>&1 | tee /tmp/publish.log; then
+          if npm publish --access public 2>&1 | tee /tmp/publish.log; then
             echo "Published."
           else
             if grep -q "cannot publish over" /tmp/publish.log || grep -q "E409" /tmp/publish.log; then
