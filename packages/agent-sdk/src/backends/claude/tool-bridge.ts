@@ -70,7 +70,10 @@ handle_request() {
     initialize)
       send_response '{"jsonrpc":"2.0","id":'"$id"',"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"tool-bridge","version":"1.0.0"}}}'
       ;;
-    notifications/initialized) ;;
+    notifications/*) ;;
+    ping)
+      [ -n "$id" ] && send_response '{"jsonrpc":"2.0","id":'"$id"',"result":{}}'
+      ;;
     tools/list)
       send_response '{"jsonrpc":"2.0","id":'"$id"',"result":{"tools":'"$TOOLS_LIST_JSON"'}}'
       ;;
@@ -79,6 +82,14 @@ handle_request() {
       tool_name=$(echo "$body" | grep -o '"name":"[^"]*"' | tail -1 | cut -d'"' -f4)
       tool_args=$(echo "$body" | grep -o '"arguments":{[^}]*}' | head -1 | sed 's/^"arguments"://')
       [ -z "$tool_args" ] && tool_args="{}"
+
+      # Reject unknown tools immediately (don't wait for gateway response)
+      if [ -n "$TOOLS_LIST_JSON" ]; then
+        if ! echo "$TOOLS_LIST_JSON" | grep -q "\\"$tool_name\\""; then
+          send_response '{"jsonrpc":"2.0","id":'"$id"',"result":{"content":[{"type":"text","text":"Unknown tool: '"$tool_name"'. Available tools: '"$(echo "$TOOLS_LIST_JSON" | grep -o '"name":"[^"]*"' | cut -d'"' -f4 | tr '\\n' ', ')"'"}],"isError":true}}'
+          return
+        fi
+      fi
 
       # Replay case: response.json already exists (--resume re-entry)
       if [ -f "$RESPONSE_PATH" ]; then
