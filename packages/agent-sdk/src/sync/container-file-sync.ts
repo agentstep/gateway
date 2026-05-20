@@ -123,13 +123,13 @@ async function discoverChangedFiles(
 ): Promise<string[]> {
   try {
     // Find user-created files in common writable dirs.
-    // Use -mmin -30 (modified in last 30 min) as a portable heuristic
+    // Use -mmin -60 (modified in last 60 min) as a portable heuristic
     // since /proc/1/cmdline doesn't exist on macOS containers.
     const result = await provider.exec(
       sandboxName,
       ["sh", "-c", [
         "find /home /root /workspace /mnt /tmp",
-        "-maxdepth 4 -type f -mmin -30 -size +0c",
+        "-maxdepth 4 -type f -mmin -60 -size +0c",
         "! -path '*/.git/*' ! -path '*/node_modules/*' ! -path '*/.npm/*'",
         "! -path '*/.config/*' ! -path '*/.local/*' ! -path '*/.cache/*'",
         "! -path '*/cache/*' ! -path '*-debug-*.log'",
@@ -251,11 +251,11 @@ export async function syncContainerFiles(opts: {
     }
   } catch { /* best effort */ }
 
-  // Fallback: discover changed files on the container when:
-  // 1. File tools were used but paths were empty (Codex v0.120+ bug)
-  // 2. Bash tool was used (scripts may produce output files like .docx)
-  // Merges discovered files with any explicitly tracked paths.
-  if (extracted.sawFileTools || extracted.sawBash) {
+  // Always discover changed files on the container. Agents may write
+  // files via Bash, custom tools, or MCP tools — not just Write/Edit.
+  // The find command is cheap (maxdepth 4, -mmin -60) and catches all
+  // output files regardless of how they were created.
+  {
     const discovered = await discoverChangedFiles(sandboxName, provider, secrets);
     console.log(`[container-file-sync] ${sessionId}: discovered ${discovered.length} files on container: ${discovered.join(", ")}`);
     for (const p of discovered) {
