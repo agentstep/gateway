@@ -314,6 +314,60 @@ Last-Event-ID: 5
 
 The stream deduplicates events between the backlog drain and the live tail to prevent double delivery during the small reconnect window.
 
+### Multi-turn streaming
+
+For multi-turn sessions, store the last event `seq` from each turn and pass it as `after_seq` on the next turn. This skips all prior events — no replay, no turn-boundary counting.
+
+```python
+last_seq = 0
+
+# Turn 1
+client.beta.sessions.events.send(session.id, events=[
+    {"type": "user.message", "content": [{"type": "text", "text": "Analyze this contract"}]},
+])
+with client.beta.sessions.events.stream(session.id, after_seq=last_seq) as stream:
+    for event in stream:
+        last_seq = event.seq  # track cursor
+        if event.type == "session.status_idle":
+            break
+
+# Turn 2 — starts from where turn 1 left off
+client.beta.sessions.events.send(session.id, events=[
+    {"type": "user.message", "content": [{"type": "text", "text": "Now draft the summary"}]},
+])
+with client.beta.sessions.events.stream(session.id, after_seq=last_seq) as stream:
+    for event in stream:
+        last_seq = event.seq
+        if event.type == "session.status_idle":
+            break
+```
+
+```typescript
+let lastSeq = 0;
+
+// Turn 1
+await client.beta.sessions.events.send(session.id, {
+  events: [{ type: "user.message", content: [{ type: "text", text: "Analyze this contract" }] }],
+});
+const stream = await client.beta.sessions.events.stream(session.id, { after_seq: lastSeq });
+for await (const event of stream) {
+  lastSeq = event.seq;
+  if (event.type === "session.status_idle") break;
+}
+
+// Turn 2 — no replay
+await client.beta.sessions.events.send(session.id, {
+  events: [{ type: "user.message", content: [{ type: "text", text: "Now draft the summary" }] }],
+});
+const stream2 = await client.beta.sessions.events.stream(session.id, { after_seq: lastSeq });
+for await (const event of stream2) {
+  lastSeq = event.seq;
+  if (event.type === "session.status_idle") break;
+}
+```
+
+Each turn's stream starts exactly where the previous one ended. The same container is reused (files, context, Claude Code session all persist).
+
 ## List past events
 
 ```http
