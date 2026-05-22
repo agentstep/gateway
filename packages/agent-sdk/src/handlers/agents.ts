@@ -82,6 +82,80 @@ const ModelConfigSchema = z.object({
 });
 
 /**
+ * Fetch an entire skill directory from the Anthropic skills repo on GitHub.
+ * Uses the GitHub API to list the directory tree, then fetches each file.
+ * Binary files (images, compiled) are stored with a `base64:` prefix.
+ */
+const TEXT_EXTENSIONS = new Set([
+  ".md", ".txt", ".py", ".js", ".ts", ".sh", ".json", ".yaml", ".yml",
+  ".html", ".css", ".xml", ".csv", ".toml", ".cfg", ".ini", ".sql",
+  ".jsx", ".tsx", ".mjs", ".cjs", ".rb", ".go", ".rs", ".java",
+]);
+
+async function fetchAnthropicSkill(skillName: string): Promise<{ content: string; files: Record<string, string> }> {
+  const rawBase = `https://raw.githubusercontent.com/anthropics/skills/main/skills/${skillName}`;
+  const files: Record<string, string> = {};
+
+  // Use the git trees API (single request) to get the full file list.
+  // This avoids multiple contents API calls that hit rate limits.
+  const treeResp = await fetch(
+    `https://api.github.com/repos/anthropics/skills/git/trees/main?recursive=1`,
+    { signal: AbortSignal.timeout(15_000) },
+  );
+  if (!treeResp.ok) {
+    // Fallback: if tree API is rate-limited, just fetch SKILL.md
+    const mdResp = await fetch(`${rawBase}/SKILL.md`, { signal: AbortSignal.timeout(10_000) });
+    if (!mdResp.ok) throw new Error(`SKILL.md not found for ${skillName}`);
+    const content = await mdResp.text();
+    return { content, files: { "SKILL.md": content } };
+  }
+
+  const tree = (await treeResp.json()) as { tree: Array<{ path: string; type: string }> };
+  const prefix = `skills/${skillName}/`;
+  const skillFiles = tree.tree.filter(
+    (f) => f.type === "blob" && f.path.startsWith(prefix),
+  );
+
+  if (skillFiles.length === 0) {
+    throw new Error(`No files found for skill "${skillName}"`);
+  }
+
+  // Fetch each file from raw.githubusercontent.com (no rate limit)
+  let skillMdContent = "";
+  await Promise.all(
+    skillFiles.map(async (f) => {
+      const relativePath = f.path.slice(prefix.length);
+      const ext = relativePath.substring(relativePath.lastIndexOf(".")).toLowerCase();
+      const isText = TEXT_EXTENSIONS.has(ext) || relativePath === "LICENSE.txt";
+
+      try {
+        const resp = await fetch(`${rawBase}/${relativePath}`, {
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!resp.ok) return;
+
+        if (isText) {
+          const text = await resp.text();
+          files[relativePath] = text;
+          if (relativePath === "SKILL.md") skillMdContent = text;
+        } else {
+          const buf = Buffer.from(await resp.arrayBuffer());
+          files[relativePath] = `base64:${buf.toString("base64")}`;
+        }
+      } catch {
+        // Skip files that fail to download
+      }
+    }),
+  );
+
+  if (!skillMdContent) {
+    throw new Error(`No SKILL.md found in anthropics/skills/skills/${skillName}`);
+  }
+
+  return { content: skillMdContent, files };
+}
+
+/**
  * Resolve a mixed array of inline skills and DB skill references into
  * the canonical `AgentSkill[]` shape stored on agent_versions.
  */
@@ -110,24 +184,22 @@ async function resolveSkillInputs(
           installed_at: nowIso,
         });
       } else if (s.type === "anthropic" || !s.type) {
-        // Anthropic-hosted skill — fetch from GitHub anthropics/skills repo
+        // Anthropic-hosted skill — fetch entire directory from GitHub anthropics/skills repo
         const skillName = s.skill_id;
         try {
-          const skillMdUrl = `https://raw.githubusercontent.com/anthropics/skills/main/skills/${skillName}/SKILL.md`;
-          const resp = await fetch(skillMdUrl, { signal: AbortSignal.timeout(10_000) });
-          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-          const content = await resp.text();
+          const result = await fetchAnthropicSkill(skillName);
           resolved.push({
             name: skillName,
             source: `anthropic:${skillName}`,
-            content,
+            content: result.content,
+            ...(Object.keys(result.files).length > 0 ? { files: result.files } : {}),
             installed_at: nowIso,
           });
         } catch (err) {
           throw badRequest(
             `skill "${skillName}" not found in local DB or Anthropic skills repo. ` +
             `Upload it via POST /v1/skills or check the skill_id. ` +
-            `Available Anthropic skills: docx, pdf, pptx, xlsx`,
+            `Available Anthropic skills: docx, pdf, pptx, xlsx, mcp-builder, frontend-design`,
           );
         }
       } else {
