@@ -535,6 +535,150 @@ describe("Skill validation", () => {
   });
 });
 
+describe("Anthropic skill GitHub resolution", () => {
+  beforeEach(() => {
+    freshDbEnv();
+  });
+
+  it("resolves anthropic skill from GitHub when not in DB", async () => {
+    await bootDb();
+    const { handleCreateAgent } = await import("../src/handlers/agents");
+
+    const agentRes = await handleCreateAgent(
+      req("/v1/agents", {
+        body: {
+          name: "docx-agent",
+          model: { id: "claude-sonnet-4-6" },
+          skills: [{ skill_id: "docx", type: "anthropic" }],
+        },
+      }),
+    );
+    expect(agentRes.status).toBe(201);
+    const agent = await agentRes.json();
+    expect(agent.skills.length).toBe(1);
+    expect(agent.skills[0].name).toBe("docx");
+    expect(agent.skills[0].source).toBe("anthropic:docx");
+    expect(agent.skills[0].content.length).toBeGreaterThan(0);
+  });
+
+  it("DB skill takes precedence over GitHub when skill_id matches DB id", async () => {
+    await bootDb();
+    const { handleCreateSkill } = await import("../src/handlers/skills-write");
+    const { handleCreateAgent } = await import("../src/handlers/agents");
+
+    // Upload a local skill named "docx" to DB
+    const skillRes = await handleCreateSkill(
+      req("/v1/skills", {
+        body: { name: "docx", description: "local override", content: "# Local docx skill" },
+      }),
+    );
+    const skill = await skillRes.json();
+
+    // Reference it by DB id with type: "anthropic" — DB should win
+    const agentRes = await handleCreateAgent(
+      req("/v1/agents", {
+        body: {
+          name: "db-docx-agent",
+          model: { id: "claude-sonnet-4-6" },
+          skills: [{ skill_id: skill.id, type: "anthropic" }],
+        },
+      }),
+    );
+    expect(agentRes.status).toBe(201);
+    const agent = await agentRes.json();
+    expect(agent.skills.length).toBe(1);
+    // Source should start with "skill:" (DB), not "anthropic:"
+    expect(agent.skills[0].source).toMatch(/^skill:/);
+    expect(agent.skills[0].content).toBe("# Local docx skill");
+  });
+
+  it("returns 400 for non-existent anthropic skill", async () => {
+    await bootDb();
+    const { handleCreateAgent } = await import("../src/handlers/agents");
+
+    const agentRes = await handleCreateAgent(
+      req("/v1/agents", {
+        body: {
+          name: "bad-anthropic-agent",
+          model: { id: "claude-sonnet-4-6" },
+          skills: [{ skill_id: "nonexistent-skill-xyz", type: "anthropic" }],
+        },
+      }),
+    );
+    expect(agentRes.status).toBe(400);
+    const body = await agentRes.json();
+    expect(body.error.message).toMatch(/not found/i);
+  });
+
+  it("resolves anthropic skill without explicit type field (implicit GitHub fallback)", async () => {
+    await bootDb();
+    const { handleCreateAgent } = await import("../src/handlers/agents");
+
+    // "docx" is not in the local DB (fresh DB), so it falls back to GitHub
+    const agentRes = await handleCreateAgent(
+      req("/v1/agents", {
+        body: {
+          name: "docx-implicit-agent",
+          model: { id: "claude-sonnet-4-6" },
+          skills: [{ skill_id: "docx" }],
+        },
+      }),
+    );
+    expect(agentRes.status).toBe(201);
+    const agent = await agentRes.json();
+    expect(agent.skills[0].name).toBe("docx");
+    expect(agent.skills[0].source).toBe("anthropic:docx");
+    expect(agent.skills[0].content.length).toBeGreaterThan(0);
+  });
+
+  it("returns 400 for custom type with missing skill (no GitHub fallback)", async () => {
+    await bootDb();
+    const { handleCreateAgent } = await import("../src/handlers/agents");
+
+    const agentRes = await handleCreateAgent(
+      req("/v1/agents", {
+        body: {
+          name: "custom-missing-agent",
+          model: { id: "claude-sonnet-4-6" },
+          skills: [{ skill_id: "missing", type: "custom" }],
+        },
+      }),
+    );
+    expect(agentRes.status).toBe(400);
+    const body = await agentRes.json();
+    expect(body.error.message).toMatch(/not found/i);
+  });
+
+  it("resolves mixed inline + anthropic skills", async () => {
+    await bootDb();
+    const { handleCreateAgent } = await import("../src/handlers/agents");
+
+    const agentRes = await handleCreateAgent(
+      req("/v1/agents", {
+        body: {
+          name: "mixed-anthropic-agent",
+          model: { id: "claude-sonnet-4-6" },
+          skills: [
+            { name: "inline-skill", source: "local", content: "inline content here" },
+            { skill_id: "docx", type: "anthropic" },
+          ],
+        },
+      }),
+    );
+    expect(agentRes.status).toBe(201);
+    const agent = await agentRes.json();
+    expect(agent.skills.length).toBe(2);
+    // Inline skill
+    expect(agent.skills[0].name).toBe("inline-skill");
+    expect(agent.skills[0].content).toBe("inline content here");
+    expect(agent.skills[0].source).toBe("local");
+    // Anthropic skill from GitHub
+    expect(agent.skills[1].name).toBe("docx");
+    expect(agent.skills[1].source).toBe("anthropic:docx");
+    expect(agent.skills[1].content.length).toBeGreaterThan(0);
+  });
+});
+
 describe("Skills DB layer", () => {
   beforeEach(() => {
     freshDbEnv();
