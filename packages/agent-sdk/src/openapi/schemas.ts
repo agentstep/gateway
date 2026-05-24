@@ -201,7 +201,7 @@ export const CreateAgentRequestSchema = registry.register(
   z
     .object({
       name: z.string().min(1).openapi({ example: "my-agent" }),
-      model: z.object({ id: z.string().min(1), speed: z.enum(["standard", "fast"]).optional() }).openapi({ description: "Model configuration. `id` is the canonical model identifier.", example: { id: "claude-sonnet-4-6" } }),
+      model: z.object({ id: z.string().min(1), speed: z.enum(["standard", "fast"]).optional() }).openapi({ description: "Model configuration. `id` is the bare model identifier (e.g. `gemini-2.5-flash`, `claude-sonnet-4-6`, `gpt-5.4`). Do not include provider prefixes.", example: { id: "claude-sonnet-4-6" } }),
       description: z.string().max(2048).optional().openapi({
         description: "Human-readable description of the agent.",
       }),
@@ -219,7 +219,7 @@ export const CreateAgentRequestSchema = registry.register(
       }),
       engine: z.enum(["claude", "opencode", "codex", "anthropic", "gemini", "factory", "pi"]).optional().openapi({
         description:
-          "Agent harness. Defaults to `claude`. Opencode agents must set `model` to a `provider/model` string (e.g. `anthropic/claude-sonnet-4-6`) and must NOT declare `tools` — opencode manages its tool surface internally. Gemini agents require GEMINI_API_KEY. Factory agents require FACTORY_API_KEY. Pi agents (pi.dev) require at least one of ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY.",
+          "Agent harness. Auto-inferred from model prefix if omitted: `gemini-*` → gemini, `gpt-*`/`o1-*` → codex, `claude-*` → claude. Always use bare model IDs (`gemini-2.5-flash`, not `google/gemini-2.5-flash`) — provider prefixes are added internally where needed. Non-claude engines must NOT declare `tools` (they manage tool permissions internally). Required vault keys: claude → ANTHROPIC_API_KEY, gemini → GEMINI_API_KEY, codex → OPENAI_API_KEY, pi → any of the three.",
         example: "claude",
       }),
       webhook_url: z.string().url().optional().openapi({
