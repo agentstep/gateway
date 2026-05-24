@@ -20,18 +20,26 @@ export interface BuildOpencodeArgsInput {
   backendSessionId: string | null;
 }
 
+/**
+ * Normalize model ID for the opencode CLI. Opencode expects provider-prefixed
+ * IDs (e.g., "anthropic/claude-sonnet-4-6"). Bare IDs are prefixed based on
+ * well-known patterns. Unknown models get "ollama/" (local provider).
+ */
+function normalizeOpencodeModel(model: string): string {
+  if (model.includes("/")) return model; // Already prefixed
+  if (model.startsWith("claude-")) return `anthropic/${model}`;
+  if (model.startsWith("gemini-")) return `google/${model}`;
+  if (model.startsWith("gpt-") || model.startsWith("o1-") || model.startsWith("o3-") || model.startsWith("o4-") || model.startsWith("chatgpt-")) return `openai/${model}`;
+  return `ollama/${model}`; // Unknown → assume local Ollama model
+}
+
 export function buildOpencodeArgs(input: BuildOpencodeArgsInput): string[] {
   const args = ["run", "--format", "json", "--dangerously-skip-permissions"];
   if (input.backendSessionId) {
     args.push("--session", input.backendSessionId);
   }
   if (input.agent.model) {
-    // Ollama models need ollama/ prefix for opencode to route to the Ollama provider
-    const modelId = input.agent.model.id;
-    const cloudPrefixes = ["claude-", "gpt-", "o1-", "o3-", "o4-", "codex-", "chatgpt-", "gemini-"];
-    const isOllama = !modelId.includes("/") && !cloudPrefixes.some(p => modelId.startsWith(p));
-    const modelArg = isOllama ? `ollama/${modelId}` : modelId;
-    args.push("--model", modelArg);
+    args.push("--model", normalizeOpencodeModel(input.agent.model.id));
   }
   return args;
 }
