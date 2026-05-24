@@ -8,6 +8,7 @@ import {
   updateSessionMutable,
   updateSessionStatus,
   archiveSession,
+  setOutcomeCriteria,
 } from "../db/sessions";
 import { getAgent } from "../db/agents";
 import { getEnvironment } from "../db/environments";
@@ -118,6 +119,15 @@ const CreateSchema = z.object({
   resources: z.array(ResourceSchema).optional(),
   vault_ids: z.array(z.string()).optional(),
   user_profile_id: z.string().optional(),
+  outcomes: z.object({
+    description: z.string().min(1),
+    rubric: z.array(z.object({
+      name: z.string(),
+      description: z.string(),
+      weight: z.number().optional(),
+    })).optional(),
+    max_iterations: z.number().int().min(1).max(10).optional(),
+  }).optional(),
 });
 
 const UpdateSchema = z.object({
@@ -413,6 +423,15 @@ export function handleCreateSession(request: Request): Promise<Response> {
         upsertSync(session.id, "session", remoteSessionId);
         markProxied(session.id, "session", agentTenantId);
 
+        if (data.outcomes) {
+          setOutcomeCriteria(session.id, {
+            description: data.outcomes.description,
+            rubric: data.outcomes.rubric ?? [],
+            max_iterations: data.outcomes.max_iterations ?? 3,
+            status: "running",
+          });
+        }
+
         getActor(session.id);
         return jsonOk(session, 201);
       }
@@ -483,6 +502,15 @@ export function handleCreateSession(request: Request): Promise<Response> {
               : undefined,
           });
         }
+      }
+
+      if (data.outcomes) {
+        setOutcomeCriteria(session.id, {
+          description: data.outcomes.description,
+          rubric: data.outcomes.rubric ?? [],
+          max_iterations: data.outcomes.max_iterations ?? 3,
+          status: "running",
+        });
       }
 
       getActor(session.id);

@@ -27,7 +27,11 @@ export interface BuildArgsInput {
 
 export function buildClaudeArgs(input: BuildArgsInput): string[] {
   const cfg = getConfig();
-  const permissionMode = input.confirmationMode ? "default" : "bypassPermissions";
+  const policy = input.agent.permission_policy;
+  const permissionMode =
+    input.confirmationMode ? "default"
+    : policy ? "default"
+    : "bypassPermissions";
   const argv: string[] = [
     "-p",
     "--output-format",
@@ -68,7 +72,8 @@ export function buildClaudeArgs(input: BuildArgsInput): string[] {
   const mcpToolNames = Array.from(tools.customToolNames).map(
     (name) => `mcp__tool-bridge__${name}`,
   );
-  const allAllowed = [...tools.allowedTools, ...mcpToolNames];
+  const policyAllowed = policy?.always_allow ?? [];
+  const allAllowed = [...tools.allowedTools, ...mcpToolNames, ...policyAllowed];
   if (allAllowed.length) {
     argv.push("--allowed-tools", allAllowed.join(","));
   }

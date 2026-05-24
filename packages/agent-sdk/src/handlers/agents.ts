@@ -259,6 +259,10 @@ const CreateSchema = z.object({
       z.object({ type: z.literal("self") }),
     ])).max(20),
   }).optional(),
+  permission_policy: z.object({
+    always_allow: z.array(z.string()).optional(),
+    always_ask: z.array(z.string()).optional(),
+  }).optional(),
   skills: z.array(SkillSchema).max(20).optional(),
   model_config: ModelConfigSchema.optional(),
   /** v0.5: required for global admin, ignored for tenant users. */
@@ -306,6 +310,10 @@ const UpdateSchema = z.object({
       z.object({ type: z.literal("agent"), id: z.string(), version: z.number().int().optional() }),
       z.object({ type: z.literal("self") }),
     ])).max(20),
+  }).nullish(),
+  permission_policy: z.object({
+    always_allow: z.array(z.string()).optional(),
+    always_ask: z.array(z.string()).optional(),
   }).nullish(),
   skills: z.array(SkillSchema).max(20).optional(),
   model_config: ModelConfigSchema.optional(),
@@ -415,6 +423,7 @@ export function handleCreateAgent(request: Request): Promise<Response> {
       confirmation_mode: parsed.data.confirmation_mode ?? false,
       callable_agents: parsed.data.callable_agents,
       multiagent: parsed.data.multiagent,
+      permission_policy: parsed.data.permission_policy,
       skills: await resolveSkillInputs(parsed.data.skills, nowIso),
       model_config: mergedModelConfig,
       tenant_id: createTenantId,
@@ -511,6 +520,7 @@ export function handleUpdateAgent(request: Request, id: string): Promise<Respons
       confirmation_mode: parsed.data.confirmation_mode,
       callable_agents: parsed.data.callable_agents,
       multiagent: parsed.data.multiagent,
+      permission_policy: parsed.data.permission_policy,
       skills: await resolveSkillInputs(parsed.data.skills, nowIso),
       model_config: mergedModelConfig,
     });

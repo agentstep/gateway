@@ -84,6 +84,8 @@ export const agentVersions = sqliteTable("agent_versions", {
   webhook_secret: text("webhook_secret"),
   // Multi-agent orchestration config:
   multiagent_json: text("multiagent_json"),
+  // Per-agent tool permission overrides:
+  permission_policy_json: text("permission_policy_json"),
   created_at: integer("created_at").notNull(),
 }, (table) => [
   primaryKey({ columns: [table.agent_id, table.version] }),

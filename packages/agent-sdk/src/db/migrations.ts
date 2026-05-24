@@ -895,4 +895,9 @@ export function runMigrations(db: InstanceType<typeof Database>): void {
   try {
     db.exec(`ALTER TABLE sessions ADD COLUMN user_profile_id TEXT`);
   } catch { /* column already exists */ }
+
+  // Permission policy on agent_versions (per-agent tool permission overrides)
+  try {
+    db.exec(`ALTER TABLE agent_versions ADD COLUMN permission_policy_json TEXT`);
+  } catch { /* column already exists */ }
 }

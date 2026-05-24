@@ -46,6 +46,11 @@ function hydrate(row: AgentRow, ver: AgentVersionRow): Agent {
       .map((a) => ({ type: "agent" as const, id: a.id, version: a.version }));
   }
 
+  // Hydrate permission_policy from JSON column
+  const permissionPolicy = ver.permission_policy_json
+    ? (JSON.parse(ver.permission_policy_json) as { always_allow?: string[]; always_ask?: string[] })
+    : null;
+
   return {
     type: "agent" as const,
     id: row.id,
@@ -65,6 +70,7 @@ function hydrate(row: AgentRow, ver: AgentVersionRow): Agent {
     confirmation_mode: Boolean(ver.confirmation_mode),
     callable_agents: callableAgents,
     multiagent,
+    permission_policy: permissionPolicy,
     skills: ver.skills_json ? (JSON.parse(ver.skills_json) as AgentSkill[]) : [],
     model_config: modelConfig,
     fallback_json: row.fallback_json ?? null,
@@ -94,6 +100,7 @@ export function createAgent(input: {
     type: "coordinator";
     agents: Array<{ type: "agent"; id: string; version?: number } | { type: "self" }>;
   };
+  permission_policy?: { always_allow?: string[]; always_ask?: string[] };
   skills?: AgentSkill[];
   model_config?: ModelConfig;
   /** v0.5: tenant ownership. Null = legacy/global (pre-migration). */
@@ -130,6 +137,7 @@ export function createAgent(input: {
       confirmation_mode: input.confirmation_mode ? 1 : 0,
       callable_agents_json: input.callable_agents?.length ? JSON.stringify(input.callable_agents) : null,
       multiagent_json: input.multiagent ? JSON.stringify(input.multiagent) : null,
+      permission_policy_json: input.permission_policy ? JSON.stringify(input.permission_policy) : null,
       skills_json: JSON.stringify(input.skills ?? []),
       model_config_json: JSON.stringify(input.model_config ?? {}),
       created_at: now,
@@ -189,6 +197,7 @@ export function updateAgent(
       type: "coordinator";
       agents: Array<{ type: "agent"; id: string; version?: number } | { type: "self" }>;
     } | null;
+    permission_policy?: { always_allow?: string[]; always_ask?: string[] } | null;
     skills?: AgentSkill[];
     model_config?: ModelConfig;
   },
@@ -235,6 +244,9 @@ export function updateAgent(
       multiagent_json: input.multiagent !== undefined
         ? (input.multiagent ? JSON.stringify(input.multiagent) : null)
         : (existing.multiagent ? JSON.stringify(existing.multiagent) : null),
+      permission_policy_json: input.permission_policy !== undefined
+        ? (input.permission_policy ? JSON.stringify(input.permission_policy) : null)
+        : (existing.permission_policy ? JSON.stringify(existing.permission_policy) : null),
       skills_json: JSON.stringify(input.skills ?? existing.skills),
       model_config_json: JSON.stringify(input.model_config !== undefined ? input.model_config : existing.model_config),
       created_at: now,

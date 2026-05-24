@@ -61,6 +61,15 @@ export async function handleSpawnAgent(
     throw new ApiError(404, "not_found_error", `parent session not found: ${parentSessionId}`);
   }
 
+  // Validate that the target agent_id is in the parent agent's callable_agents list.
+  const parentAgent = getAgent(parentSession.agent.id, parentSession.agent.version);
+  if (parentAgent && parentAgent.callable_agents.length > 0) {
+    const allowed = parentAgent.callable_agents.some((ca) => ca.id === agentId);
+    if (!allowed) {
+      return `Error: agent ${agentId} is not in callable_agents list`;
+    }
+  }
+
   const agent = getAgent(agentId);
   if (!agent) {
     throw new ApiError(404, "not_found_error", `agent not found: ${agentId}`);

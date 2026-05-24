@@ -104,6 +104,7 @@ export interface AgentVersionRow {
   confirmation_mode: number;
   callable_agents_json: string | null;
   multiagent_json: string | null;
+  permission_policy_json: string | null;
   skills_json: string;
   model_config_json: string;
   created_at: number;
@@ -148,6 +149,10 @@ export interface Agent {
     type: "coordinator";
     agents: Array<{ type: "agent"; id: string; version?: number } | { type: "self" }>;
   };
+  permission_policy?: {
+    always_allow?: string[];
+    always_ask?: string[];
+  } | null;
   skills: AgentSkill[];
   model_config: ModelConfig;
   /** Raw JSON — parse with parseFallbackJson in handlers. Null when unset. */
