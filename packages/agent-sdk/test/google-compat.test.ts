@@ -211,6 +211,322 @@ describe("Google Interactions API compatibility", () => {
     expect(res.status).toBe(200);
   });
 
+  it("GET /google/v1beta/interactions/:id returns stored interaction", async () => {
+    await bootDb();
+    await createReadyEnv();
+
+    const fake = await import("./helpers/fake-exec");
+    fake.resetQueue();
+    fake.enqueueTurn({
+      ndjson: [
+        '{"type":"init","session_id":"gemini_get_1","model":"gemini-2.5-flash"}',
+        '{"type":"message","role":"assistant","content":"Got it!"}',
+        '{"type":"result","stats":{"input_tokens":12,"output_tokens":4,"cost_usd":0.0001,"num_turns":1}}',
+      ],
+    });
+
+    const { handleCreateInteraction, handleGetInteraction } = await import("../src/handlers/google-compat");
+
+    const createRes = await handleCreateInteraction(req("/google/v1beta/interactions", {
+      body: { model: "gemini-2.5-flash", input: "Tell me something" },
+    }));
+    expect(createRes.status).toBe(200);
+    const created = await createRes.json();
+
+    // Now GET the interaction by ID
+    const getRes = await handleGetInteraction(req(`/google/v1beta/interactions/${created.id}`, { method: "GET" }), created.id);
+    expect(getRes.status).toBe(200);
+    const got = await getRes.json();
+    expect(got.id).toBe(created.id);
+    expect(got.status).toBe("completed");
+    expect(got.steps).toBeDefined();
+    expect(Array.isArray(got.steps)).toBe(true);
+    expect(got.usage).toBeDefined();
+  });
+
+  it("GET /google/v1beta/interactions/:id returns 404 for unknown", async () => {
+    await bootDb();
+
+    const { handleGetInteraction } = await import("../src/handlers/google-compat");
+
+    const res = await handleGetInteraction(req("/google/v1beta/interactions/int_nonexistent", { method: "GET" }), "int_nonexistent");
+    expect(res.status).toBe(404);
+  });
+
+  it("DELETE /google/v1beta/interactions/:id removes it", async () => {
+    await bootDb();
+    await createReadyEnv();
+
+    const fake = await import("./helpers/fake-exec");
+    fake.resetQueue();
+    fake.enqueueTurn({
+      ndjson: [
+        '{"type":"init","session_id":"gemini_del_1","model":"gemini-2.5-flash"}',
+        '{"type":"message","role":"assistant","content":"Deleted soon"}',
+        '{"type":"result","stats":{"input_tokens":5,"output_tokens":2,"cost_usd":0.0001,"num_turns":1}}',
+      ],
+    });
+
+    const { handleCreateInteraction, handleGetInteraction, handleDeleteInteraction } = await import("../src/handlers/google-compat");
+
+    const createRes = await handleCreateInteraction(req("/google/v1beta/interactions", {
+      body: { model: "gemini-2.5-flash", input: "Delete me" },
+    }));
+    expect(createRes.status).toBe(200);
+    const created = await createRes.json();
+
+    // Delete
+    const delRes = await handleDeleteInteraction(req(`/google/v1beta/interactions/${created.id}`, { method: "DELETE" }), created.id);
+    expect(delRes.status).toBe(200);
+    const delBody = await delRes.json();
+    expect(delBody.id).toBe(created.id);
+    expect(delBody.deleted).toBe(true);
+
+    // Verify 404 on second GET
+    const getRes = await handleGetInteraction(req(`/google/v1beta/interactions/${created.id}`, { method: "GET" }), created.id);
+    expect(getRes.status).toBe(404);
+  });
+
+  it("POST /google/v1beta/agents creates agent with base_agent and sources", async () => {
+    await bootDb();
+
+    const { handleCreateGoogleAgent } = await import("../src/handlers/google-compat");
+
+    const res = await handleCreateGoogleAgent(req("/google/v1beta/agents", {
+      body: {
+        id: "my-test-agent",
+        description: "A test agent",
+        base_agent: "antigravity-preview-05-2026",
+        system_instruction: "You are helpful.",
+        base_environment: {
+          type: "container",
+          sources: [
+            { target: ".agents/AGENTS.md", content: "Extra instructions here." },
+            { target: ".agents/skills/my-skill/SKILL.md", content: "# My Skill\nDo something." },
+          ],
+        },
+      },
+    }));
+
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.id).toBe("my-test-agent");
+    expect(body.base_agent).toBe("antigravity-preview-05-2026");
+    expect(body.description).toBe("A test agent");
+    // system_instruction should include both the explicit one and the AGENTS.md content
+    expect(body.system_instruction).toContain("You are helpful.");
+    expect(body.system_instruction).toContain("Extra instructions here.");
+  });
+
+  it("GET /google/v1beta/agents lists agents in Google format", async () => {
+    await bootDb();
+
+    const { handleCreateGoogleAgent, handleListGoogleAgents } = await import("../src/handlers/google-compat");
+
+    // Create an agent first
+    await handleCreateGoogleAgent(req("/google/v1beta/agents", {
+      body: {
+        id: "list-test-agent",
+        base_agent: "antigravity-preview-05-2026",
+        description: "For listing",
+      },
+    }));
+
+    const listRes = await handleListGoogleAgents(req("/google/v1beta/agents", { method: "GET" }));
+    expect(listRes.status).toBe(200);
+    const listBody = await listRes.json();
+    expect(listBody.agents).toBeDefined();
+    expect(Array.isArray(listBody.agents)).toBe(true);
+    const found = listBody.agents.find((a: any) => a.id === "list-test-agent");
+    expect(found).toBeDefined();
+    expect(found.base_agent).toBe("antigravity-preview-05-2026");
+  });
+
+  it("GET /google/v1beta/agents/:id returns single agent", async () => {
+    await bootDb();
+
+    const { handleCreateGoogleAgent, handleGetGoogleAgent } = await import("../src/handlers/google-compat");
+
+    await handleCreateGoogleAgent(req("/google/v1beta/agents", {
+      body: {
+        id: "get-test-agent",
+        base_agent: "antigravity-preview-05-2026",
+        description: "For getting",
+      },
+    }));
+
+    const getRes = await handleGetGoogleAgent(req("/google/v1beta/agents/get-test-agent", { method: "GET" }), "get-test-agent");
+    expect(getRes.status).toBe(200);
+    const body = await getRes.json();
+    expect(body.id).toBe("get-test-agent");
+    expect(body.base_agent).toBe("antigravity-preview-05-2026");
+    expect(body.description).toBe("For getting");
+  });
+
+  it("GET /google/v1beta/agents/:id returns 404 for unknown", async () => {
+    await bootDb();
+
+    const { handleGetGoogleAgent } = await import("../src/handlers/google-compat");
+
+    const res = await handleGetGoogleAgent(req("/google/v1beta/agents/nonexistent", { method: "GET" }), "nonexistent");
+    expect(res.status).toBe(404);
+  });
+
+  it("DELETE /google/v1beta/agents/:id removes agent", async () => {
+    await bootDb();
+
+    const { handleCreateGoogleAgent, handleGetGoogleAgent, handleDeleteGoogleAgent } = await import("../src/handlers/google-compat");
+
+    await handleCreateGoogleAgent(req("/google/v1beta/agents", {
+      body: {
+        id: "delete-test-agent",
+        base_agent: "antigravity-preview-05-2026",
+      },
+    }));
+
+    const delRes = await handleDeleteGoogleAgent(req("/google/v1beta/agents/delete-test-agent", { method: "DELETE" }), "delete-test-agent");
+    expect(delRes.status).toBe(200);
+
+    // Verify it's gone
+    const getRes = await handleGetGoogleAgent(req("/google/v1beta/agents/delete-test-agent", { method: "GET" }), "delete-test-agent");
+    expect(getRes.status).toBe(404);
+  });
+
+  it("handles function_result input for tool call responses", async () => {
+    await bootDb();
+    await createReadyEnv();
+
+    const fake = await import("./helpers/fake-exec");
+    fake.resetQueue();
+
+    // First turn: normal completion
+    fake.enqueueTurn({
+      ndjson: [
+        '{"type":"init","session_id":"gemini_fn_1","model":"gemini-2.5-flash"}',
+        '{"type":"message","role":"assistant","content":"Let me check."}',
+        '{"type":"result","stats":{"input_tokens":10,"output_tokens":5,"cost_usd":0.0001,"num_turns":1}}',
+      ],
+    });
+
+    // Second turn: after function_result is provided as re-entry
+    fake.enqueueTurn({
+      ndjson: [
+        '{"type":"init","session_id":"gemini_fn_1","model":"gemini-2.5-flash"}',
+        '{"type":"message","role":"assistant","content":"The weather in London is sunny."}',
+        '{"type":"result","stats":{"input_tokens":15,"output_tokens":8,"cost_usd":0.0001,"num_turns":1}}',
+      ],
+    });
+
+    const { handleCreateInteraction } = await import("../src/handlers/google-compat");
+
+    // First call creates the session
+    const res1 = await handleCreateInteraction(req("/google/v1beta/interactions", {
+      body: { model: "gemini-2.5-flash", input: "What's the weather in London?" },
+    }));
+    expect(res1.status).toBe(200);
+    const body1 = await res1.json();
+    const interactionId = body1.id;
+
+    // Second call with function_result input (tests parsing doesn't crash)
+    const res2 = await handleCreateInteraction(req("/google/v1beta/interactions", {
+      body: {
+        model: "gemini-2.5-flash",
+        previous_interaction_id: interactionId,
+        input: [
+          { type: "function_result", call_id: "call_123", result: "Sunny, 22C" },
+        ],
+      },
+    }));
+    expect(res2.status).toBe(200);
+    const body2 = await res2.json();
+    // Should not crash and should produce a completed interaction
+    expect(body2.id).toBeDefined();
+    expect(body2.status).toBe("completed");
+  });
+
+  it("GET /google/v1beta/files/environment-:id:download returns tar archive", async () => {
+    await bootDb();
+    const envId = await createReadyEnv();
+
+    const { handleGetEnvironmentFiles } = await import("../src/handlers/google-compat");
+
+    // Request file download for this environment (no files exist yet — should return empty tar)
+    const res = await handleGetEnvironmentFiles(
+      req(`/google/v1beta/files/environment-${envId}:download`, { method: "GET" }),
+      `environment-${envId}:download`,
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("application/x-tar");
+    const buf = await res.arrayBuffer();
+    // Empty tar is 1024 bytes (two zero blocks)
+    expect(buf.byteLength).toBe(1024);
+  });
+
+  it("GET /google/v1beta/files/environment-:id:download returns 404 for unknown env", async () => {
+    await bootDb();
+
+    const { handleGetEnvironmentFiles } = await import("../src/handlers/google-compat");
+
+    const res = await handleGetEnvironmentFiles(
+      req("/google/v1beta/files/environment-env_nonexistent:download", { method: "GET" }),
+      "environment-env_nonexistent:download",
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("GET /google/v1beta/files/environment-:id:download includes uploaded files in tar", async () => {
+    await bootDb();
+    const envId = await createReadyEnv();
+
+    // Create agent + version + session in the environment
+    const { getDb } = await import("../src/db/client");
+    const { newId } = await import("../src/util/ids");
+    const { nowMs } = await import("../src/util/clock");
+    const { createFile, updateFileStoragePath } = await import("../src/db/files");
+    const { storeFile } = await import("../src/files/storage");
+
+    const db = getDb();
+    const now = nowMs();
+    const agentId = newId("ag");
+    db.prepare(
+      `INSERT INTO agents (id, current_version, name, created_at, updated_at) VALUES (?, 1, ?, ?, ?)`
+    ).run(agentId, "tar-test-agent", now, now);
+    db.prepare(
+      `INSERT INTO agent_versions (agent_id, version, model, system, tools_json, mcp_servers_json, created_at) VALUES (?, 1, ?, ?, ?, ?, ?)`
+    ).run(agentId, "test-model", null, "[]", "{}", now);
+
+    const sessionId = newId("sess");
+    db.prepare(
+      `INSERT INTO sessions (id, agent_id, agent_version, environment_id, status, metadata_json, created_at, updated_at) VALUES (?, ?, 1, ?, 'idle', '{}', ?, ?)`
+    ).run(sessionId, agentId, envId, now, now);
+
+    // Upload a file scoped to this session
+    const fileData = Buffer.from("Hello from tar test!");
+    const record = createFile({
+      filename: "output.txt",
+      size: fileData.length,
+      content_type: "text/plain",
+      storage_path: "",
+      scope: { type: "session", id: sessionId },
+    });
+    const storagePath = storeFile(record.id, "output.txt", fileData);
+    updateFileStoragePath(record.id, storagePath);
+
+    const { handleGetEnvironmentFiles } = await import("../src/handlers/google-compat");
+
+    const res = await handleGetEnvironmentFiles(
+      req(`/google/v1beta/files/environment-${envId}:download`, { method: "GET" }),
+      `environment-${envId}:download`,
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("application/x-tar");
+    const buf = Buffer.from(await res.arrayBuffer());
+    // Tar should be larger than empty (1024 bytes = just end blocks)
+    expect(buf.byteLength).toBeGreaterThan(1024);
+    // The filename should appear in the tar header
+    expect(buf.toString("utf8", 0, 10)).toBe("output.txt");
+  });
+
   it("reuses existing agent with same name on second call", async () => {
     await bootDb();
     await createReadyEnv();

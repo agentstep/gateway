@@ -1,5 +1,8 @@
 /**
  * POST /google/v1beta/interactions
+ * GET  /google/v1beta/interactions/:id
+ * DELETE /google/v1beta/interactions/:id
+ * POST /google/v1beta/interactions/:id/cancel
  *
  * Translates Google Interactions API calls into our internal session primitives.
  * Creates a session, sends a message, waits for completion, returns the result.
@@ -78,11 +81,22 @@ export function handleCreateInteraction(request: Request): Promise<Response> {
 
       // Send message to existing session
       const sessionId = prev.session_id;
+
+      // Get current highest seq before sending new events (so we skip old idle events)
+      const { listEvents: listEventsForSeq } = await import("../../db/events");
+      const lastEvents = listEventsForSeq(sessionId, { limit: 1, order: "desc" });
+      const afterSeq = lastEvents.length > 0 ? lastEvents[0].seq : 0;
+
+      // Check if input contains function_result items (tool call responses)
+      const functionResultEvents = buildFunctionResultEvents(data.input);
+
       const eventsReq = new Request(request.url.replace(/\/google\/v1beta\/interactions.*/, `/v1/sessions/${sessionId}/events`), {
         method: "POST",
         headers: request.headers,
         body: JSON.stringify({
-          events: [{ type: "user.message", content: [{ type: "text", text: inputText }] }],
+          events: functionResultEvents.length > 0
+            ? functionResultEvents
+            : [{ type: "user.message", content: [{ type: "text", text: inputText }] }],
         }),
       });
       const eventsRes = await handlePostEvents(eventsReq, sessionId);
@@ -91,8 +105,8 @@ export function handleCreateInteraction(request: Request): Promise<Response> {
         throw badRequest((err as any).error?.message || `failed to send message: ${eventsRes.status}`);
       }
 
-      // Wait for completion
-      const result = await waitForCompletion(sessionId);
+      // Wait for completion (start after current seq to skip old idle events)
+      const result = await waitForCompletion(sessionId, afterSeq);
 
       // Store interaction
       const interactionId = `int_${newId("sesn").slice(5)}`;
@@ -209,7 +223,167 @@ export function handleCreateInteraction(request: Request): Promise<Response> {
   });
 }
 
+// ─── GET /google/v1beta/interactions/:id ─────────────────────────────────────
+
+export function handleGetInteraction(request: Request, id: string): Promise<Response> {
+  return routeWrap(request, async () => {
+    ensureTable();
+
+    const db = getDb();
+    const row = db.prepare(
+      `SELECT id, session_id, seq, status, environment_id, created_at FROM google_interactions WHERE id = ?`
+    ).get(id) as { id: string; session_id: string; seq: number; status: string; environment_id: string | null; created_at: string } | undefined;
+
+    if (!row) throw notFound(`interaction not found: ${id}`);
+
+    // Rebuild steps from session events
+    const { listEvents } = await import("../../db/events");
+    const { rowToManagedEvent } = await import("../../db/events");
+    const eventRows = listEvents(row.session_id, { limit: 500, order: "asc" });
+    const steps: InteractionStep[] = [];
+    let inputTokens = 0;
+    let outputTokens = 0;
+
+    for (const eventRow of eventRows) {
+      const event = rowToManagedEvent(eventRow);
+      if (event.type === "agent.message") {
+        const content = (event as any).content as Array<{ type: string; text?: string }> | undefined;
+        const text = content?.filter((c: any) => c.type === "text").map((c: any) => c.text).join("") ?? "";
+        if (text) {
+          steps.push({ type: "model_output", content: [{ type: "text", text }] });
+        }
+      } else if (event.type === "agent.tool_use") {
+        steps.push({
+          type: "function_call",
+          id: (event as any).tool_use_id ?? "",
+          name: (event as any).name ?? "",
+          arguments: (event as any).input ?? {},
+        });
+      } else if (event.type === "agent.tool_result") {
+        steps.push({
+          type: "code_execution_result",
+          call_id: (event as any).tool_use_id ?? "",
+          result: JSON.stringify((event as any).content ?? ""),
+        });
+      } else if (event.type === "agent.custom_tool_use") {
+        steps.push({
+          type: "function_call",
+          id: (event as any).tool_use_id ?? "",
+          name: (event as any).name ?? "",
+          arguments: (event as any).input ?? {},
+        });
+      } else if (event.type === "span.model_request_end") {
+        const mu = (event as any).model_usage as { input_tokens?: number; output_tokens?: number } | undefined;
+        inputTokens += mu?.input_tokens ?? 0;
+        outputTokens += mu?.output_tokens ?? 0;
+      }
+    }
+
+    const response: InteractionResponse = {
+      id: row.id,
+      created: row.created_at,
+      updated: row.created_at,
+      status: row.status as InteractionResponse["status"],
+      steps,
+      usage: { total_input_tokens: inputTokens, total_output_tokens: outputTokens, total_tokens: inputTokens + outputTokens },
+      environment_id: row.environment_id ?? undefined,
+    };
+    return jsonOk(response);
+  });
+}
+
+// ─── DELETE /google/v1beta/interactions/:id ──────────────────────────────────
+
+export function handleDeleteInteraction(request: Request, id: string): Promise<Response> {
+  return routeWrap(request, async () => {
+    ensureTable();
+
+    const db = getDb();
+    const row = db.prepare(
+      `SELECT id, session_id FROM google_interactions WHERE id = ?`
+    ).get(id) as { id: string; session_id: string } | undefined;
+
+    if (!row) throw notFound(`interaction not found: ${id}`);
+
+    // Delete the interaction row
+    db.prepare(`DELETE FROM google_interactions WHERE id = ?`).run(id);
+
+    // Optionally delete the session
+    const { handleDeleteSession } = await import("../sessions");
+    const sessReq = new Request(request.url.replace(/\/google\/v1beta\/interactions.*/, `/v1/sessions/${row.session_id}`), {
+      method: "DELETE",
+      headers: request.headers,
+    });
+    await handleDeleteSession(sessReq, row.session_id).catch(() => {});
+
+    return jsonOk({ id, deleted: true });
+  });
+}
+
+// ─── POST /google/v1beta/interactions/:id/cancel ─────────────────────────────
+
+export function handleCancelInteraction(request: Request, id: string): Promise<Response> {
+  return routeWrap(request, async () => {
+    ensureTable();
+
+    const db = getDb();
+    const row = db.prepare(
+      `SELECT id, session_id, seq, status, environment_id, created_at FROM google_interactions WHERE id = ?`
+    ).get(id) as { id: string; session_id: string; seq: number; status: string; environment_id: string | null; created_at: string } | undefined;
+
+    if (!row) throw notFound(`interaction not found: ${id}`);
+
+    // Post an interrupt event to the session
+    const { handlePostEvents } = await import("../events");
+    const eventsReq = new Request(request.url.replace(/\/google\/v1beta\/interactions.*/, `/v1/sessions/${row.session_id}/events`), {
+      method: "POST",
+      headers: request.headers,
+      body: JSON.stringify({
+        events: [{ type: "user.interrupt" }],
+      }),
+    });
+    await handlePostEvents(eventsReq, row.session_id).catch(() => {});
+
+    // Update status to cancelled
+    db.prepare(`UPDATE google_interactions SET status = 'cancelled' WHERE id = ?`).run(id);
+
+    const response: InteractionResponse = {
+      id: row.id,
+      created: row.created_at,
+      updated: new Date().toISOString(),
+      status: "cancelled",
+      steps: [],
+      usage: { total_input_tokens: 0, total_output_tokens: 0, total_tokens: 0 },
+      environment_id: row.environment_id ?? undefined,
+    };
+    return jsonOk(response);
+  });
+}
+
 // --- Helpers ---
+
+/**
+ * Check if input array contains function_result items and build
+ * user.custom_tool_result events for them.
+ */
+function buildFunctionResultEvents(input: string | unknown[]): Array<{ type: string; custom_tool_use_id: string; content: unknown[] }> {
+  if (typeof input === "string") return [];
+  if (!Array.isArray(input)) return [];
+
+  const results: Array<{ type: string; custom_tool_use_id: string; content: unknown[] }> = [];
+  for (const item of input) {
+    if (item && typeof item === "object" && (item as any).type === "function_result") {
+      const callId = (item as any).call_id ?? (item as any).id ?? "";
+      const resultText = (item as any).result ?? (item as any).output ?? "";
+      results.push({
+        type: "user.custom_tool_result",
+        custom_tool_use_id: callId,
+        content: [{ type: "text", text: typeof resultText === "string" ? resultText : JSON.stringify(resultText) }],
+      });
+    }
+  }
+  return results;
+}
 
 interface CompletionResult {
   status: "completed" | "failed" | "requires_action";
@@ -218,9 +392,8 @@ interface CompletionResult {
   outputText: string;
 }
 
-async function waitForCompletion(sessionId: string): Promise<CompletionResult> {
+async function waitForCompletion(sessionId: string, afterSeq = 0): Promise<CompletionResult> {
   const { subscribe } = await import("../../sessions/bus");
-  const { listEvents } = await import("../../db/events");
 
   return new Promise((resolve) => {
     const steps: InteractionStep[] = [];
@@ -229,11 +402,12 @@ async function waitForCompletion(sessionId: string): Promise<CompletionResult> {
     let outputTokens = 0;
     let status: "completed" | "failed" | "requires_action" = "completed";
     let resolved = false;
+    let subscription: { unsubscribe: () => void } | null = null;
 
     const timeout = setTimeout(() => {
       if (resolved) return;
       resolved = true;
-      sub.unsubscribe();
+      subscription?.unsubscribe();
       resolve({
         status: "failed",
         steps,
@@ -246,7 +420,7 @@ async function waitForCompletion(sessionId: string): Promise<CompletionResult> {
       if (resolved) return;
       resolved = true;
       clearTimeout(timeout);
-      sub.unsubscribe();
+      subscription?.unsubscribe();
       resolve({
         status,
         steps,
@@ -300,13 +474,15 @@ async function waitForCompletion(sessionId: string): Promise<CompletionResult> {
       }
     }
 
-    // Subscribe to live events starting from seq 0 (includes backlog)
-    const sub = subscribe(sessionId, 0, handleEvent);
+    // Subscribe to live events starting from afterSeq (includes backlog)
+    const sub = subscribe(sessionId, afterSeq, handleEvent);
+    subscription = sub;
 
     // If we already saw an idle event in the backlog, we're done
     // (subscribe drains backlog synchronously before returning)
     if (resolved) {
       clearTimeout(timeout);
+      sub.unsubscribe();
     }
   });
 }

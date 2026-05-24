@@ -136,6 +136,14 @@ import {
   handleEnrollmentUrl,
   handleOAuthCallback,
   handleCreateInteraction,
+  handleGetInteraction,
+  handleDeleteInteraction,
+  handleCancelInteraction,
+  handleCreateGoogleAgent,
+  handleListGoogleAgents,
+  handleGetGoogleAgent,
+  handleDeleteGoogleAgent,
+  handleGetEnvironmentFiles,
 } from "@agentstep/agent-sdk/handlers";
 
 import { cors } from "hono/cors";
@@ -479,6 +487,14 @@ app.use("/google/v1beta/*", async (c, next) => {
   await next();
 });
 app.post("/google/v1beta/interactions", (c) => handleCreateInteraction(c.req.raw));
+app.get("/google/v1beta/interactions/:id", (c) => handleGetInteraction(c.req.raw, c.req.param("id")));
+app.delete("/google/v1beta/interactions/:id", (c) => handleDeleteInteraction(c.req.raw, c.req.param("id")));
+app.post("/google/v1beta/interactions/:id/cancel", (c) => handleCancelInteraction(c.req.raw, c.req.param("id")));
+app.post("/google/v1beta/agents", (c) => handleCreateGoogleAgent(c.req.raw));
+app.get("/google/v1beta/agents", (c) => handleListGoogleAgents(c.req.raw));
+app.get("/google/v1beta/agents/:id", (c) => handleGetGoogleAgent(c.req.raw, c.req.param("id")));
+app.delete("/google/v1beta/agents/:id", (c) => handleDeleteGoogleAgent(c.req.raw, c.req.param("id")));
+app.get("/google/v1beta/files/:fileRef", (c) => handleGetEnvironmentFiles(c.req.raw, c.req.param("fileRef")));
 
 // ── SPA catch-all (must be last) ────────────────────────────────────────────
 app.get("*", (c) => {
