@@ -29,3 +29,4 @@ export { handleListModels } from "./models";
 export { handleListWork, handleGetWork, handleUpdateWork, handlePollWork, handleWorkStats, handleAckWork, handleHeartbeatWork, handleStopWork } from "./work";
 export { handleCreateUserProfile, handleListUserProfiles, handleGetUserProfile, handleUpdateUserProfile } from "./user-profiles";
 export { handleEnrollmentUrl, handleOAuthCallback } from "./enrollment";
+export { handleCreateInteraction } from "./google-compat";

@@ -135,6 +135,7 @@ import {
   handleUpdateUserProfile,
   handleEnrollmentUrl,
   handleOAuthCallback,
+  handleCreateInteraction,
 } from "@agentstep/agent-sdk/handlers";
 
 import { cors } from "hono/cors";
@@ -467,6 +468,17 @@ app.post("/v1/user_profiles/:id", (c) => handleUpdateUserProfile(c.req.raw, c.re
 app.post("/v1/user_profiles/:id/enrollment_url", (c) => handleEnrollmentUrl(c.req.raw, c.req.param("id")));
 app.get("/v1/oauth/callback", (c) => handleOAuthCallback(c.req.raw));
 app.post("/v1/vaults/:id/credentials/:credId/mcp_oauth_validate", (c) => handleMcpOauthValidate(c.req.raw, c.req.param("id"), c.req.param("credId")));
+
+// ── Google Interactions API compat ───────────────────────────────────────────
+// Auth header translation: x-goog-api-key -> x-api-key
+app.use("/google/v1beta/*", async (c, next) => {
+  const googKey = c.req.header("x-goog-api-key");
+  if (googKey && !c.req.header("x-api-key")) {
+    c.req.raw.headers.set("x-api-key", googKey);
+  }
+  await next();
+});
+app.post("/google/v1beta/interactions", (c) => handleCreateInteraction(c.req.raw));
 
 // ── SPA catch-all (must be last) ────────────────────────────────────────────
 app.get("*", (c) => {
