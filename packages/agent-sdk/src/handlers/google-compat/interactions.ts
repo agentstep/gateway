@@ -178,6 +178,16 @@ export function handleCreateInteraction(request: Request): Promise<Response> {
 
     if (!environmentId) throw badRequest("no environment available");
 
+    // Resolve vault IDs: find vaults scoped to the agent or the caller's tenant.
+    // Without this, the session has no secrets and the agent can't authenticate.
+    const { listVaults } = await import("../../db/vaults");
+    const { tenantFilter: getTenantFilter } = await import("../../auth/scope");
+    const tenantVaults = listVaults({
+      tenantFilter: getTenantFilter(auth),
+    });
+    const agentVaults = tenantVaults.filter(v => v.agent_id === agentId || !v.agent_id);
+    const vaultIds = agentVaults.filter(v => !v.archived_at).map(v => v.id);
+
     // Create session — use agent ID as a string (handleCreateSession accepts either string or {id, version})
     const sessReq = new Request(request.url.replace(/\/google\/v1beta\/interactions.*/, `/v1/sessions`), {
       method: "POST",
@@ -185,6 +195,7 @@ export function handleCreateInteraction(request: Request): Promise<Response> {
       body: JSON.stringify({
         agent: agentId,
         environment_id: environmentId,
+        ...(vaultIds.length > 0 ? { vault_ids: vaultIds } : {}),
       }),
     });
     const sessRes = await handleCreateSession(sessReq);
