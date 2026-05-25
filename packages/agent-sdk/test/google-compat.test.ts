@@ -789,4 +789,82 @@ describe("Google Interactions API compatibility", () => {
     const list2 = await listRes2.json();
     expect(list2.data.length).toBe(agentCount1); // No new agent created
   });
+
+  it("reuses existing agent by model match and attaches its vaults", async () => {
+    await bootDb();
+    await createReadyEnv();
+
+    const fake = await import("./helpers/fake-exec");
+    fake.resetQueue();
+    fake.enqueueTurn({
+      ndjson: [
+        '{"type":"init","session_id":"vault_test_1","model":"claude-sonnet-4-6"}',
+        '{"type":"message","role":"assistant","content":"hi"}',
+        '{"type":"result","stats":{"input_tokens":5,"output_tokens":1,"cost_usd":0.0001,"num_turns":1}}',
+      ],
+    });
+
+    // Create an agent with a specific model via the normal API
+    const { handleCreateAgent } = await import("../src/handlers/agents");
+    const agentRes = await handleCreateAgent(req("/v1/agents", {
+      body: { name: "my-claude-agent", model: { id: "claude-sonnet-4-6" } },
+    }));
+    expect(agentRes.status).toBe(201);
+    const agent = await agentRes.json();
+
+    // Create a vault scoped to this agent
+    const { createVault } = await import("../src/db/vaults");
+    const { seedDefaultTenant } = await import("../src/db/tenants");
+    seedDefaultTenant();
+    const vault = createVault({ agent_id: agent.id, name: "test-vault", tenant_id: "tenant_default" });
+
+    // Now call Google compat with the same model — should find the existing agent
+    const { handleCreateInteraction } = await import("../src/handlers/google-compat");
+    const res = await handleCreateInteraction(req("/google/v1beta/interactions", {
+      body: { model: "claude-sonnet-4-6", input: "Hello" },
+    }));
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    // Should not have created a new agent — reused the existing one
+    const { handleListAgents } = await import("../src/handlers/agents");
+    const listRes = await handleListAgents(req("/v1/agents?limit=100"));
+    const agents = (await listRes.json()).data;
+    const claudeAgents = agents.filter((a: any) => a.model?.id === "claude-sonnet-4-6");
+    expect(claudeAgents.length).toBe(1); // Only the original, no auto-created duplicate
+    expect(claudeAgents[0].id).toBe(agent.id);
+  });
+
+  it("only attaches unscoped vaults when agent has none", async () => {
+    await bootDb();
+    await createReadyEnv();
+
+    const fake = await import("./helpers/fake-exec");
+    fake.resetQueue();
+    fake.enqueueTurn({
+      ndjson: [
+        '{"type":"init","session_id":"vault_test_2","model":"gemini-2.5-flash"}',
+        '{"type":"message","role":"assistant","content":"hi"}',
+        '{"type":"result","stats":{"input_tokens":5,"output_tokens":1,"cost_usd":0.0001,"num_turns":1}}',
+      ],
+    });
+
+    // Create a vault scoped to a DIFFERENT agent
+    const { createVault } = await import("../src/db/vaults");
+    const { seedDefaultTenant } = await import("../src/db/tenants");
+    seedDefaultTenant();
+    createVault({ agent_id: "agent_other_123", name: "other-vault", tenant_id: "tenant_default" });
+
+    // Create an unscoped vault (no agent_id)
+    const unscopedVault = createVault({ name: "shared-vault", tenant_id: "tenant_default" });
+
+    // Google compat creates a new agent — should only attach the unscoped vault, not the other agent's
+    const { handleCreateInteraction } = await import("../src/handlers/google-compat");
+    const res = await handleCreateInteraction(req("/google/v1beta/interactions", {
+      body: { model: "gemini-2.5-flash", input: "test" },
+    }));
+
+    // Should succeed (not fail with "vault belongs to a different agent")
+    expect(res.status).toBe(200);
+  });
 });

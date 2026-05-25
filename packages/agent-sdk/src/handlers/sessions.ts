@@ -295,7 +295,7 @@ export function handleCreateSession(request: Request): Promise<Response> {
             .get(vid) as { agent_id: string; tenant_id: string | null } | undefined;
           if (!vaultRow) throw badRequest(`vault not found: ${vid}`);
           assertResourceTenant(auth, vaultRow.tenant_id, `vault not found: ${vid}`);
-          if (vaultRow.agent_id !== agent.id) {
+          if (vaultRow.agent_id && vaultRow.agent_id !== agent.id) {
             throw badRequest(
               `vault ${vid} belongs to a different agent — vaults are scoped per-agent`,
             );

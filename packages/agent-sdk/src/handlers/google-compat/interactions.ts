@@ -122,21 +122,23 @@ export function handleCreateInteraction(request: Request): Promise<Response> {
     }
 
     // New interaction: resolve agent
-    const agentName = data.agent || `auto-${(data.model || "gemini-2.5-flash").replace(/[^a-z0-9-]/g, "-")}`;
+    const modelId = data.model || "gemini-2.5-flash";
+    const agentName = data.agent || `auto-${modelId.replace(/[^a-z0-9-]/g, "-")}`;
 
-    // Try to find existing agent by name
+    // Try to find existing agent: first by exact name, then by matching model ID.
+    // Reusing an existing agent preserves its vault associations.
     const listReq = new Request(request.url.replace(/\/google\/v1beta\/interactions.*/, `/v1/agents?limit=1000`), {
       headers: request.headers,
     });
     const listRes = await handleListAgents(listReq);
-    const listBody = await listRes.json() as { data: Array<{ id: string; name: string }> };
-    const existing = listBody.data?.find(a => a.name === agentName);
+    const listBody = await listRes.json() as { data: Array<{ id: string; name: string; model?: { id: string } }> };
+    const existing = listBody.data?.find(a => a.name === agentName)
+      ?? (data.agent ? undefined : listBody.data?.find(a => a.model?.id === modelId));
 
     if (existing) {
       agentId = existing.id;
     } else {
       // Create agent for this model
-      const modelId = data.model || "gemini-2.5-flash";
       const createReq = new Request(request.url.replace(/\/google\/v1beta\/interactions.*/, `/v1/agents`), {
         method: "POST",
         headers: request.headers,
@@ -178,15 +180,17 @@ export function handleCreateInteraction(request: Request): Promise<Response> {
 
     if (!environmentId) throw badRequest("no environment available");
 
-    // Resolve vault IDs: find vaults scoped to the agent or the caller's tenant.
-    // Without this, the session has no secrets and the agent can't authenticate.
+    // Resolve vault IDs: find vaults scoped to THIS agent or unscoped (no agent_id).
+    // Agent-scoped vaults belonging to other agents are excluded — the session
+    // handler rejects cross-agent vault references.
     const { listVaults } = await import("../../db/vaults");
     const { tenantFilter: getTenantFilter } = await import("../../auth/scope");
     const tenantVaults = listVaults({
       tenantFilter: getTenantFilter(auth),
     });
-    const agentVaults = tenantVaults.filter(v => v.agent_id === agentId || !v.agent_id);
-    const vaultIds = agentVaults.filter(v => !v.archived_at).map(v => v.id);
+    const vaultIds = tenantVaults
+      .filter(v => !v.archived_at && (v.agent_id === agentId || !v.agent_id))
+      .map(v => v.id);
 
     // Create session — use agent ID as a string (handleCreateSession accepts either string or {id, version})
     const sessReq = new Request(request.url.replace(/\/google\/v1beta\/interactions.*/, `/v1/sessions`), {
