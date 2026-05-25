@@ -7,11 +7,33 @@ Outcomes elevate a session from conversation to work. Instead of open-ended back
 
 The loop looks like this:
 
-1. You send a `user.define_outcome` event with a description, a rubric, and a max iteration count.
+1. You define outcome criteria — either at session creation time (via the `outcomes` field) or mid-session (via a `user.define_outcome` event).
 2. The agent starts working immediately.
 3. After each attempt, the grader evaluates the work against the rubric.
 4. If the rubric is not satisfied, the agent revises and tries again.
 5. The loop ends when the grader returns `satisfied`, the iteration limit is reached, or you interrupt.
+
+## Define outcomes at session creation
+
+You can set outcomes when creating the session, so the first message immediately triggers the evaluation loop:
+
+```json
+POST /v1/sessions
+{
+  "agent": { "id": "agent_01ABC..." },
+  "environment_id": "env_01ABC...",
+  "outcomes": {
+    "description": "Refactor the auth module to use JWT",
+    "rubric": [
+      { "name": "jwt_implementation", "description": "All session state is in the token", "weight": 1.0 },
+      { "name": "tests_pass", "description": "All existing tests still pass", "weight": 1.0 }
+    ],
+    "max_iterations": 3
+  }
+}
+```
+
+Alternatively, you can define outcomes mid-session using the `user.define_outcome` event (see below).
 
 ## Create a rubric
 

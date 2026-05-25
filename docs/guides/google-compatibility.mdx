@@ -1,0 +1,181 @@
+---
+title: Google Interactions API
+description: Use the Google Gen AI SDK with AgentStep Gateway.
+---
+
+AgentStep Gateway supports the Google Interactions API alongside the Anthropic-compatible API. This lets you use the `google-genai` Python or JavaScript SDK to run agents on your gateway.
+
+All Google endpoints live under `/google/v1beta/` and translate to the same internal primitives (sessions, events, agents) as the Anthropic surface.
+
+## Quick start
+
+### Python
+
+```python
+from google import genai
+
+client = genai.Client(
+    api_key="your-gateway-api-key",
+    http_options={"base_url": "http://localhost:4000/google"}
+)
+
+interaction = client.interactions.create(
+    model="gemini-2.5-flash",
+    input="Write a Python script that generates Fibonacci numbers and save it to fibonacci.py.",
+    environment="remote",
+)
+
+print(interaction.output_text)
+```
+
+### JavaScript
+
+```javascript
+import { GoogleGenAI } from "@google/genai";
+
+const client = new GoogleGenAI({
+    apiKey: "your-gateway-api-key",
+    httpOptions: { baseUrl: "http://localhost:4000/google" },
+});
+
+const interaction = await client.interactions.create({
+    model: "gemini-2.5-flash",
+    input: "Write a Python script that generates Fibonacci numbers.",
+    environment: "remote",
+});
+
+console.log(interaction.outputText);
+```
+
+### curl
+
+```bash
+curl -X POST http://localhost:4000/google/v1beta/interactions \
+  -H "Content-Type: application/json" \
+  -H "x-goog-api-key: your-gateway-api-key" \
+  -d '{
+    "model": "gemini-2.5-flash",
+    "input": "Hello, world!"
+  }'
+```
+
+## Authentication
+
+The Google SDK sends `x-goog-api-key`. The gateway translates this to `x-api-key` internally. Use your regular gateway API key.
+
+## How it works
+
+The Google Interactions API uses a simpler one-shot model compared to Anthropic's session-based approach:
+
+| Google concept | Maps to |
+|---------------|---------|
+| `interactions.create()` | Create session + send message + wait for completion |
+| `interaction.id` | Unique interaction ID (maps to session internally) |
+| `previous_interaction_id` | Multi-turn: reuses the same session |
+| `agents.create()` | Create agent with engine auto-inferred from model |
+| `environment: "remote"` | Uses first available environment |
+
+## Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/google/v1beta/interactions` | Create interaction |
+| GET | `/google/v1beta/interactions/:id` | Retrieve interaction |
+| DELETE | `/google/v1beta/interactions/:id` | Delete interaction |
+| POST | `/google/v1beta/interactions/:id/cancel` | Cancel in-progress |
+| POST | `/google/v1beta/agents` | Create managed agent |
+| GET | `/google/v1beta/agents` | List agents |
+| GET | `/google/v1beta/agents/:id` | Get agent |
+| DELETE | `/google/v1beta/agents/:id` | Delete agent |
+| GET | `/google/v1beta/files/environment-:id:download` | Download env files as tar |
+
+## Multi-turn conversations
+
+Use `previous_interaction_id` to continue a conversation:
+
+```python
+interaction1 = client.interactions.create(
+    model="gemini-2.5-flash",
+    input="Write a fibonacci function.",
+    environment="remote",
+)
+
+interaction2 = client.interactions.create(
+    model="gemini-2.5-flash",
+    previous_interaction_id=interaction1.id,
+    environment=interaction1.environment_id,
+    input="Now add unit tests for it.",
+)
+```
+
+## Custom agents with sources
+
+Create reusable agents with system instructions and skill files:
+
+```python
+agent = client.agents.create(
+    id="code-reviewer",
+    base_agent="antigravity-preview-05-2026",
+    system_instruction="You review pull requests for bugs, security issues, and style.",
+    base_environment={
+        "type": "remote",
+        "sources": [
+            {
+                "type": "inline",
+                "target": ".agents/AGENTS.md",
+                "content": "Always check for SQL injection and XSS vulnerabilities.",
+            },
+            {
+                "type": "inline",
+                "target": ".agents/skills/security-checklist/SKILL.md",
+                "content": "# Security Checklist\nCheck OWASP Top 10 for every PR.",
+            },
+        ],
+    },
+)
+
+result = client.interactions.create(
+    agent="code-reviewer",
+    input="Review this diff: ...",
+    environment="remote",
+)
+```
+
+Sources are translated internally:
+- `.agents/skills/*/SKILL.md` targets become agent skills
+- `.agents/AGENTS.md` content is appended to the system instruction
+- `base_agent: "antigravity-preview-05-2026"` maps to `engine: "gemini"`, `model: "gemini-2.5-flash"`
+
+## Function calling
+
+When the agent calls a function, the interaction returns with `status: "requires_action"`. Provide the result in a follow-up interaction:
+
+```python
+interaction = client.interactions.create(
+    model="gemini-2.5-flash",
+    input="What's the weather in London?",
+    tools=[{
+        "type": "function",
+        "name": "get_weather",
+        "description": "Get weather for a location",
+        "parameters": {"type": "object", "properties": {"location": {"type": "string"}}},
+    }],
+)
+
+if interaction.status == "requires_action":
+    result = client.interactions.create(
+        previous_interaction_id=interaction.id,
+        input=[{
+            "type": "function_result",
+            "call_id": interaction.steps[-1]["id"],
+            "result": "Sunny, 22C",
+        }],
+    )
+```
+
+## Limitations
+
+- **Streaming** (`stream: true`) is not yet supported — interactions block until completion
+- **Google-specific tools** (`google_search`, `google_maps`, `computer_use`) are not available — the agent uses its engine's built-in tools
+- **File download** returns files from the gateway's file storage, not a live VM snapshot
+- **`background: true`** mode is not yet supported

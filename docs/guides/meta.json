@@ -2,6 +2,7 @@
   "title": "Guides",
   "pages": [
     "anthropic-integration",
+    "google-compatibility",
     "migration",
     "multi-llm",
     "pricing-comparison",

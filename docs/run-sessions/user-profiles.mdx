@@ -1,0 +1,121 @@
+---
+title: User Profiles
+description: Per-user credential scoping for multi-user deployments.
+---
+
+User profiles map end-user identities to specific vault credentials via **trust grants**. When a session references a user profile, only the credentials listed in that profile's trust grants are available — other credentials in the vault are filtered out.
+
+## When to use
+
+Without user profiles, all credentials in a vault are available to all sessions. This is fine for single-user setups but problematic for teams. User profiles solve:
+
+- **Developer A** gets their own GitHub token, **Developer B** gets theirs
+- A shared agent uses the right credentials based on who's running it
+- OAuth enrollment lets each user authorize their own accounts
+
+## Create a user profile
+
+```http
+POST /v1/user_profiles
+```
+
+```json
+{
+  "external_id": "jane@company.com",
+  "display_name": "Jane Doe",
+  "trust_grants": [
+    {
+      "type": "vault_credential",
+      "vault_id": "vlt_01ABC...",
+      "credential_id": "cred_01XYZ..."
+    }
+  ]
+}
+```
+
+`external_id` is your application's user identifier (email, SSO ID, etc.). `trust_grants` lists which vault credentials this user can access.
+
+## Link a session to a user profile
+
+Pass `user_profile_id` when creating a session:
+
+```json
+POST /v1/sessions
+{
+  "agent": { "id": "agent_01ABC..." },
+  "environment_id": "env_01ABC...",
+  "vault_ids": ["vlt_01ABC..."],
+  "user_profile_id": "uprof_01XYZ..."
+}
+```
+
+During the session, `loadSessionSecrets` filters credentials: only those whose `(vault_id, credential_id)` pair appears in the profile's trust grants are injected. Vault entries (key-value secrets like API keys) are always available regardless of profile.
+
+## OAuth enrollment
+
+Instead of manually creating credentials and trust grants, you can let users authorize their own accounts through an OAuth flow.
+
+### Generate enrollment URL
+
+```http
+POST /v1/user_profiles/:id/enrollment_url
+```
+
+```json
+{
+  "vault_id": "vlt_01ABC...",
+  "authorize_url": "https://github.com/login/oauth/authorize",
+  "token_endpoint": "https://github.com/login/oauth/access_token",
+  "client_id": "your-oauth-client-id",
+  "client_secret": "your-oauth-client-secret",
+  "scope": "repo read:user"
+}
+```
+
+Response:
+
+```json
+{
+  "type": "enrollment_url",
+  "url": "https://github.com/login/oauth/authorize?response_type=code&client_id=...&state=...",
+  "state": "abc123...",
+  "redirect_uri": "http://localhost:4000/v1/oauth/callback",
+  "expires_in": 600
+}
+```
+
+### User authorizes
+
+Send the user to the returned `url`. After they authorize, the OAuth provider redirects to your gateway's callback endpoint (`/v1/oauth/callback`). The gateway:
+
+1. Exchanges the authorization code for access + refresh tokens
+2. Creates (or updates) a credential in the vault
+3. Adds a trust grant linking the credential to the user's profile
+
+The user sees a "Enrollment complete" confirmation page and can close the window.
+
+### Requirements
+
+- Your gateway must be reachable by the OAuth provider for the callback redirect
+- The `redirect_uri` defaults to `{gateway-origin}/v1/oauth/callback`
+- Enrollment URLs expire after 10 minutes
+
+## Manage profiles
+
+```http
+GET /v1/user_profiles              # List profiles (tenant-scoped)
+GET /v1/user_profiles/:id          # Get profile
+POST /v1/user_profiles/:id         # Update profile
+```
+
+Update trust grants by POSTing the full array:
+
+```json
+POST /v1/user_profiles/uprof_01XYZ...
+{
+  "trust_grants": [
+    { "type": "vault_credential", "vault_id": "vlt_01ABC...", "credential_id": "cred_01A..." },
+    { "type": "vault_credential", "vault_id": "vlt_01ABC...", "credential_id": "cred_01B..." }
+  ]
+}
+```

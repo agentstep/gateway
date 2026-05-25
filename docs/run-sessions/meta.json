@@ -4,6 +4,7 @@
     "sessions",
     "events",
     "vaults",
+    "user-profiles",
     "memory",
     "outcomes"
   ]
