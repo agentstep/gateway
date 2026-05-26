@@ -4,7 +4,7 @@
  *
  * Verifies that the gateway matches the Anthropic Managed Agents API spec:
  *   - ID prefixes (agent_, sesn_, vlt_, cred_, memstore_)
- *   - Pagination shape (data, next_page)
+ *   - Pagination shape (data, has_more, first_id, last_id)
  *   - Error envelope ({type: "error", error: {type, message}})
  *   - Auth headers (x-api-key and Authorization: Bearer)
  *   - Agent CRUD fields
@@ -201,7 +201,7 @@ describe("ID Prefixes", () => {
 describe("Pagination Shape", () => {
   beforeEach(() => freshDbEnv());
 
-  it("list agents returns {data, next_page}", async () => {
+  it("list agents returns {data, has_more, first_id, last_id}", async () => {
     await bootDb();
     const { handleCreateAgent, handleListAgents } = await import("../src/handlers/agents");
     await handleCreateAgent(req("/v1/agents", { body: { name: "Pag1", model: { id: "claude-sonnet-4-6" } } }));
@@ -209,10 +209,12 @@ describe("Pagination Shape", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(Array.isArray(body.data)).toBe(true);
-    expect("next_page" in body).toBe(true);
+    expect("has_more" in body).toBe(true);
+    expect("first_id" in body).toBe(true);
+    expect("last_id" in body).toBe(true);
   });
 
-  it("next_page is a string when more items exist beyond limit", async () => {
+  it("has_more is true and last_id is a string when more items exist beyond limit", async () => {
     await bootDb();
     const { handleCreateAgent, handleListAgents } = await import("../src/handlers/agents");
     await handleCreateAgent(req("/v1/agents", { body: { name: "HasMore1", model: { id: "claude-sonnet-4-6" } } }));
@@ -221,7 +223,8 @@ describe("Pagination Shape", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.data.length).toBe(1);
-    expect(body.next_page).toBeTypeOf("string");
+    expect(body.has_more).toBe(true);
+    expect(body.last_id).toBeTypeOf("string");
   });
 });
 
@@ -355,7 +358,9 @@ describe("Agent CRUD", () => {
     const body = await res.json();
     expect(Array.isArray(body.data)).toBe(true);
     expect(body.data.length).toBe(2);
-    expect("next_page" in body).toBe(true);
+    expect("has_more" in body).toBe(true);
+    expect("first_id" in body).toBe(true);
+    expect("last_id" in body).toBe(true);
   });
 
   it("delete (archive) returns type: agent_deleted", async () => {
@@ -755,7 +760,9 @@ describe("Events", () => {
     expect(Array.isArray(body.data)).toBe(true);
     expect(body.data.length).toBeGreaterThanOrEqual(2);
     // Pagination fields
-    expect("next_page" in body).toBe(true);
+    expect("has_more" in body).toBe(true);
+    expect("first_id" in body).toBe(true);
+    expect("last_id" in body).toBe(true);
   });
 });
 

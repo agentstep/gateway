@@ -544,7 +544,7 @@ describe("work queue — HTTP handlers", () => {
     expect(body.data[0].type).toBe("work");
   });
 
-  it("GET /environments/:id/work respects limit and returns next_page", async () => {
+  it("GET /environments/:id/work respects limit and returns has_more pagination", async () => {
     await bootDb();
     const fx = await seedFixtures();
     const { createWorkItem } = await import("../src/db/work");
@@ -571,11 +571,12 @@ describe("work queue — HTTP handlers", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.data).toHaveLength(3);
-    expect(body.next_page).toBeTruthy();
+    expect(body.has_more).toBe(true);
+    expect(body.last_id).toBeTypeOf("string");
 
-    // Fetch page 2
+    // Fetch page 2 using last_id as after_id cursor
     const res2 = await handleListWork(
-      req(`/v1/environments/${fx.selfHostedEnvId}/work?limit=3&page=${body.next_page}`),
+      req(`/v1/environments/${fx.selfHostedEnvId}/work?limit=3&after_id=${body.last_id}`),
       fx.selfHostedEnvId,
     );
     const body2 = await res2.json();

@@ -570,8 +570,8 @@ describe("Anthropic API spec alignment", () => {
   // =========================================================================
   // List response pagination shape
   // =========================================================================
-  describe("List response shape — next_page pagination", () => {
-    it("agents list has data + next_page, no has_more/first_id/last_id", async () => {
+  describe("List response shape — has_more pagination", () => {
+    it("agents list has data + has_more/first_id/last_id, no next_page", async () => {
       await bootDb();
       const { handleCreateAgent } = await import("../src/handlers/agents");
       await handleCreateAgent(
@@ -585,13 +585,13 @@ describe("Anthropic API spec alignment", () => {
 
       expect(body).toHaveProperty("data");
       expect(Array.isArray(body.data)).toBe(true);
-      expect(body).toHaveProperty("next_page");
-      expect(body).not.toHaveProperty("has_more");
-      expect(body).not.toHaveProperty("first_id");
-      expect(body).not.toHaveProperty("last_id");
+      expect(body).toHaveProperty("has_more");
+      expect(body).toHaveProperty("first_id");
+      expect(body).toHaveProperty("last_id");
+      expect(body).not.toHaveProperty("next_page");
     });
 
-    it("sessions list has data + next_page, no has_more/first_id/last_id", async () => {
+    it("sessions list has data + has_more/first_id/last_id, no next_page", async () => {
       await bootDb();
       const { handleCreateAgent } = await import("../src/handlers/agents");
       const agentRes = await handleCreateAgent(
@@ -612,13 +612,13 @@ describe("Anthropic API spec alignment", () => {
 
       expect(body).toHaveProperty("data");
       expect(Array.isArray(body.data)).toBe(true);
-      expect(body).toHaveProperty("next_page");
-      expect(body).not.toHaveProperty("has_more");
-      expect(body).not.toHaveProperty("first_id");
-      expect(body).not.toHaveProperty("last_id");
+      expect(body).toHaveProperty("has_more");
+      expect(body).toHaveProperty("first_id");
+      expect(body).toHaveProperty("last_id");
+      expect(body).not.toHaveProperty("next_page");
     });
 
-    it("environments list has data + next_page, no has_more/first_id/last_id", async () => {
+    it("environments list has data + has_more/first_id/last_id, no next_page", async () => {
       await bootDb();
       await createReadyEnv({ name: "list-env-1" });
 
@@ -629,13 +629,13 @@ describe("Anthropic API spec alignment", () => {
 
       expect(body).toHaveProperty("data");
       expect(Array.isArray(body.data)).toBe(true);
-      expect(body).toHaveProperty("next_page");
-      expect(body).not.toHaveProperty("has_more");
-      expect(body).not.toHaveProperty("first_id");
-      expect(body).not.toHaveProperty("last_id");
+      expect(body).toHaveProperty("has_more");
+      expect(body).toHaveProperty("first_id");
+      expect(body).toHaveProperty("last_id");
+      expect(body).not.toHaveProperty("next_page");
     });
 
-    it("vaults list has data + next_page, no has_more/first_id/last_id", async () => {
+    it("vaults list has data + has_more/first_id/last_id, no next_page", async () => {
       await bootDb();
       const { handleCreateAgent } = await import("../src/handlers/agents");
       const agentRes = await handleCreateAgent(
@@ -655,13 +655,13 @@ describe("Anthropic API spec alignment", () => {
 
       expect(body).toHaveProperty("data");
       expect(Array.isArray(body.data)).toBe(true);
-      expect(body).toHaveProperty("next_page");
-      expect(body).not.toHaveProperty("has_more");
-      expect(body).not.toHaveProperty("first_id");
-      expect(body).not.toHaveProperty("last_id");
+      expect(body).toHaveProperty("has_more");
+      expect(body).toHaveProperty("first_id");
+      expect(body).toHaveProperty("last_id");
+      expect(body).not.toHaveProperty("next_page");
     });
 
-    it("next_page is null when all results fit in one page", async () => {
+    it("has_more is false when all results fit in one page", async () => {
       await bootDb();
       const { handleCreateAgent } = await import("../src/handlers/agents");
       await handleCreateAgent(
@@ -671,7 +671,7 @@ describe("Anthropic API spec alignment", () => {
       const { handleListAgents } = await import("../src/handlers/agents");
       const res = await handleListAgents(req("/v1/agents"));
       const body = await res.json();
-      expect(body.next_page).toBeNull();
+      expect(body.has_more).toBe(false);
     });
   });
 
