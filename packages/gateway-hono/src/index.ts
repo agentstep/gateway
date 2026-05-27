@@ -207,6 +207,15 @@ const serveUI = (c: Context) =>
     sentryDsn: process.env.SENTRY_DSN,
   });
 
+// ── /anthropic/v1/* alias — rewrite to /v1/* so the same handlers serve both
+app.use("/anthropic/v1/*", async (c, next) => {
+  const rewritten = new URL(c.req.url);
+  rewritten.pathname = rewritten.pathname.replace(/^\/anthropic\/v1/, "/v1");
+  const newReq = new Request(rewritten.toString(), c.req.raw);
+  const res = await app.fetch(newReq, c.env);
+  return res;
+});
+
 // ── Health ────────────────────────────────────────────────────────────────
 app.get("/api/health", (c) => c.json({ status: "ok" }));
 
