@@ -10,6 +10,7 @@
  */
 import { getConfig } from "../config";
 import { ApiError } from "../errors";
+import { ContainerGone } from "../providers/types";
 
 export interface Sprite {
   name: string;
@@ -271,6 +272,12 @@ export async function httpExec(
   );
   if (!res.ok) {
     const text = await res.text().catch(() => "");
+    // 404 from sprites.dev means the container was reaped upstream — surface
+    // as a typed error so the driver can drop the pool entry and re-acquire
+    // instead of bubbling a 502 to the caller.
+    if (res.status === 404) {
+      throw new ContainerGone(name, `httpExec: 404 ${text.slice(0, 300)}`);
+    }
     throw new ApiError(502, "server_error", `httpExec: ${res.status} ${text.slice(0, 300)}`);
   }
   const ct = res.headers.get("content-type") || "";

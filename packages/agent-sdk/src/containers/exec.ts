@@ -17,6 +17,7 @@
  */
 import { getConfig } from "../config";
 import { ApiError } from "../errors";
+import { ContainerGone } from "../providers/types";
 
 export interface ExecResult {
   code: number;
@@ -99,6 +100,11 @@ export async function startExec(
   if (!res.ok) {
     clearTimeout(timeoutId);
     const text = await res.text().catch(() => "");
+    // 404 = sprites.dev reaped the container while our pool entry was cached.
+    // Translate to a typed error so the driver can drop + re-acquire.
+    if (res.status === 404) {
+      throw new ContainerGone(sandboxName, `sandbox exec failed (404): ${text.slice(0, 300)}`);
+    }
     throw new ApiError(
       502,
       "server_error",

@@ -35,6 +35,7 @@ import { getConfig } from "../config";
 import { markUserEventProcessed, listEvents } from "../db/events";
 import { acquireForFirstTurn, installSkills, provisionResources, wrapProviderWithSecrets } from "../containers/lifecycle";
 import * as pool from "../containers/pool";
+import { ContainerGone } from "../providers/types";
 import { resolveBackend } from "../backends/registry";
 import { resolveProvider, resolveProviderName } from "../providers/registry";
 import { BLOCKED_ENV_KEYS, resolveVaultSecrets } from "../providers/resolve-secrets";
@@ -567,14 +568,52 @@ export async function runTurn(
       secrets,
     });
   } catch (err) {
-    runtime.inFlightRuns.delete(sessionId);
-    const msg = err instanceof Error ? err.message : String(err);
-    // Close the open turn span before returning — see buildTurn catch above.
-    emit("span.model_request_end", { model: agent.model.id, model_usage: null, status: "error" });
-    emit("session.error", { error: { type: "server_error", message: `exec failed: ${msg}` } });
-    emit("session.status_idle", { stop_reason: formatStopReason("error") });
-    updateSessionStatus(sessionId, "idle", "error");
-    return;
+    // ContainerGone: sprites.dev (or another provider) reaped the sandbox
+    // upstream while our pool entry was still cached — common when a session
+    // sat idle longer than sprites's own container TTL. Drop the stale
+    // entry, re-acquire a fresh container, and retry the exec once. If the
+    // retry also fails (or fails with a different error), fall through to
+    // the standard error path.
+    if (err instanceof ContainerGone) {
+      console.warn(`[driver] ${sessionId} sandbox ${sandboxName} reaped upstream; re-acquiring and retrying once`);
+      try {
+        pool.unregister(sessionId);
+        // Best-effort upstream delete in case the entry isn't actually gone
+        // — sprites.dev's reap response is sometimes racy, and we'd rather
+        // have two delete calls than a leaked sandbox name.
+        await provider.delete(sandboxName, secrets).catch(() => {});
+        sandboxName = await acquireForFirstTurn(sessionId);
+        // The wrapper script + skills + resources are tied to the sandbox;
+        // re-install them on the new sandbox before retrying the turn.
+        await backend.prepareOnSandbox(sandboxName, wrapProviderWithSecrets(provider, secrets));
+        if (agent.skills && agent.skills.length > 0) {
+          await installSkills(sandboxName, wrapProviderWithSecrets(provider, secrets), agent.skills, agent.engine);
+        }
+        exec = await provider.startExec(sandboxName, {
+          argv,
+          stdin,
+          signal: controller.signal,
+          secrets,
+        });
+      } catch (retryErr) {
+        runtime.inFlightRuns.delete(sessionId);
+        const msg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+        emit("span.model_request_end", { model: agent.model.id, model_usage: null, status: "error" });
+        emit("session.error", { error: { type: "server_error", message: `exec failed after re-acquire: ${msg}` } });
+        emit("session.status_idle", { stop_reason: formatStopReason("error") });
+        updateSessionStatus(sessionId, "idle", "error");
+        return;
+      }
+    } else {
+      runtime.inFlightRuns.delete(sessionId);
+      const msg = err instanceof Error ? err.message : String(err);
+      // Close the open turn span before returning — see buildTurn catch above.
+      emit("span.model_request_end", { model: agent.model.id, model_usage: null, status: "error" });
+      emit("session.error", { error: { type: "server_error", message: `exec failed: ${msg}` } });
+      emit("session.status_idle", { stop_reason: formatStopReason("error") });
+      updateSessionStatus(sessionId, "idle", "error");
+      return;
+    }
   }
 
   // Stream and translate

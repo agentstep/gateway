@@ -16,6 +16,21 @@ export type ProviderName = "sprites" | "docker" | "apple-container" | "apple-fir
 /** Optional provider credential overrides from vault secrets. */
 export type ProviderSecrets = Record<string, string>;
 
+/**
+ * Thrown when a provider's backing sandbox no longer exists (e.g. sprites.dev
+ * returns 404 "sprite not found" — the container was reaped upstream while
+ * the gateway's pool entry was still cached). Callers catch this to drop the
+ * stale pool entry and re-acquire a fresh container.
+ */
+export class ContainerGone extends Error {
+  readonly sandboxName: string;
+  constructor(sandboxName: string, message?: string) {
+    super(message ?? `container ${sandboxName} no longer exists upstream`);
+    this.name = "ContainerGone";
+    this.sandboxName = sandboxName;
+  }
+}
+
 export interface ExecOptions {
   argv: string[];
   stdin?: string;
