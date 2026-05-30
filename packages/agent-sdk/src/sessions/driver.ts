@@ -581,7 +581,9 @@ export async function runTurn(
         // Best-effort upstream delete in case the entry isn't actually gone
         // — sprites.dev's reap response is sometimes racy, and we'd rather
         // have two delete calls than a leaked sandbox name.
-        await provider.delete(sandboxName, secrets).catch(() => {});
+        await provider.delete(sandboxName, secrets).catch((err) => {
+          console.warn(`[driver] best-effort delete of reaped sandbox ${sandboxName} failed:`, err);
+        });
         sandboxName = await acquireForFirstTurn(sessionId);
         // The wrapper script + skills + resources are tied to the sandbox;
         // re-install them on the new sandbox before retrying the turn.
@@ -1310,7 +1312,9 @@ export async function checkToolBridgeSentinel(
       console.warn(
         `[driver] tool bridge request file unreadable for ${sessionId} (exit ${result.exit_code}): ${(result.stderr || result.stdout).slice(0, 200)}`,
       );
-      await provider.exec(sandboxName, ["rm", "-f", TOOL_BRIDGE_PENDING_PATH], { secrets }).catch(() => {});
+      await provider.exec(sandboxName, ["rm", "-f", TOOL_BRIDGE_PENDING_PATH], { secrets }).catch((err) => {
+        console.warn(`[driver] failed to remove stale tool-bridge sentinel for ${sessionId}:`, err);
+      });
       return;
     }
 
@@ -1321,7 +1325,9 @@ export async function checkToolBridgeSentinel(
       console.warn(
         `[driver] tool bridge request for ${sessionId} is not JSON (starts with ${JSON.stringify(clean.slice(0, 40))}), removing stale sentinel`,
       );
-      await provider.exec(sandboxName, ["rm", "-f", TOOL_BRIDGE_PENDING_PATH], { secrets }).catch(() => {});
+      await provider.exec(sandboxName, ["rm", "-f", TOOL_BRIDGE_PENDING_PATH], { secrets }).catch((err) => {
+        console.warn(`[driver] failed to remove non-JSON tool-bridge sentinel for ${sessionId}:`, err);
+      });
       return;
     }
 
