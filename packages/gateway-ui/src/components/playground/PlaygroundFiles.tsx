@@ -71,7 +71,7 @@ export function PlaygroundFiles({ sessionId }: Props) {
 
   function handleDownload(file: SessionFile) {
     const apiKey = useAppStore.getState().apiKey;
-    window.open(`/v1/files/${file.id}/content?x-api-key=${encodeURIComponent(apiKey)}`, "_blank");
+    window.open(`/anthropic/v1/files/${file.id}/content?x-api-key=${encodeURIComponent(apiKey)}`, "_blank");
   }
 
   async function handleUpload(file: globalThis.File) {
@@ -81,7 +81,7 @@ export function PlaygroundFiles({ sessionId }: Props) {
       const formData = new FormData();
       formData.append("file", file);
       const apiKey = useAppStore.getState().apiKey;
-      const res = await fetch(`/v1/files?scope_id=${sessionId}&scope_type=session`, {
+      const res = await fetch(`/anthropic/v1/files?scope_id=${sessionId}&scope_type=session`, {
         method: "POST",
         headers: { "x-api-key": apiKey },
         body: formData,

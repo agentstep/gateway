@@ -69,10 +69,10 @@ export function AgentsTab() {
                           <MoreHorizontal className="size-4" />
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
-                        <DropdownMenuItem onSelect={() => setTimeout(() => openAgent(a.id), 0)}>
+                        <DropdownMenuItem onClick={() => openAgent(a.id)}>
                           <Pencil className="mr-2 size-3.5" /> Edit
                         </DropdownMenuItem>
-                        <DropdownMenuItem className="text-destructive" onSelect={() => setDeleteAgent({ id: a.id, name: a.name })}>
+                        <DropdownMenuItem className="text-destructive" onClick={() => setDeleteAgent({ id: a.id, name: a.name })}>
                           <Trash2 className="mr-2 size-3.5" /> Delete
                         </DropdownMenuItem>
                       </DropdownMenuContent>

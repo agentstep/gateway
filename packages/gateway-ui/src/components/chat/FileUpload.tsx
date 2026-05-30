@@ -29,7 +29,7 @@ export function FileUpload({ onFileAttached }: Props) {
       const formData = new FormData();
       formData.append("file", file);
       const apiKey = useAppStore.getState().apiKey;
-      const res = await fetch(`/v1/files?scope_id=${sessionId}&scope_type=session`, {
+      const res = await fetch(`/anthropic/v1/files?scope_id=${sessionId}&scope_type=session`, {
         method: "POST",
         headers: { "x-api-key": apiKey },
         body: formData,

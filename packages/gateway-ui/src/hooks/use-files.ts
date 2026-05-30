@@ -36,7 +36,7 @@ export function useUploadFile() {
       const formData = new FormData();
       formData.append("file", file);
       const apiKey = useAppStore.getState().apiKey;
-      const res = await fetch("/v1/files", {
+      const res = await fetch("/anthropic/v1/files", {
         method: "POST",
         headers: { "x-api-key": apiKey },
         body: formData,
@@ -61,7 +61,7 @@ export function useDeleteFile() {
 
 export async function downloadFile(id: string, filename: string) {
   const apiKey = useAppStore.getState().apiKey;
-  const res = await fetch(`/v1/files/${id}/content`, {
+  const res = await fetch(`/anthropic/v1/files/${id}/content`, {
     headers: { "x-api-key": apiKey },
   });
   if (!res.ok) throw new Error("Download failed");

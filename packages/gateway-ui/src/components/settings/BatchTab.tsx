@@ -7,8 +7,8 @@ import { toast } from "sonner";
 
 const EXAMPLE = JSON.stringify({
   operations: [
-    { method: "GET", path: "/v1/agents" },
-    { method: "GET", path: "/v1/environments" },
+    { method: "GET", path: "/anthropic/v1/agents" },
+    { method: "GET", path: "/anthropic/v1/environments" },
   ]
 }, null, 2);
 

@@ -37,7 +37,7 @@ export function WelcomeHero({ apiKey }: Props) {
   const [copiedKey, setCopiedKey] = useState(false);
   const [copiedCurl, setCopiedCurl] = useState(false);
 
-  const curlCmd = `curl http://localhost:4000/v1/agents \\
+  const curlCmd = `curl http://localhost:4000/anthropic/v1/agents \\
   -H "x-api-key: ${apiKey || "YOUR_API_KEY"}"`;
 
   async function copy(text: string, which: "key" | "curl") {

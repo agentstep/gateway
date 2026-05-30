@@ -13,7 +13,7 @@ const BASE_URL = "http://localhost:4111";
 
 const agents: ResourceSnippets = {
   list: {
-    curl: `curl -H "x-api-key: $KEY" ${BASE_URL}/v1/agents`,
+    curl: `curl -H "x-api-key: $KEY" ${BASE_URL}/anthropic/v1/agents`,
     python: `from anthropic import Anthropic
 client = Anthropic(base_url="${BASE_URL}")
 agents = client.beta.agents.list()`,
@@ -22,7 +22,7 @@ const client = new Anthropic({ baseURL: "${BASE_URL}" });
 const agents = await client.beta.agents.list();`,
   },
   get: {
-    curl: `curl -H "x-api-key: $KEY" ${BASE_URL}/v1/agents/{id}`,
+    curl: `curl -H "x-api-key: $KEY" ${BASE_URL}/anthropic/v1/agents/{id}`,
     python: `from anthropic import Anthropic
 client = Anthropic(base_url="${BASE_URL}")
 agent = client.beta.agents.retrieve("{id}")`,
@@ -33,7 +33,7 @@ const agent = await client.beta.agents.retrieve("{id}");`,
   update: {
     curl: `curl -X PUT -H "x-api-key: $KEY" -H "Content-Type: application/json" \\
   -d '{"name":"updated-name"}' \\
-  ${BASE_URL}/v1/agents/{id}`,
+  ${BASE_URL}/anthropic/v1/agents/{id}`,
     python: `from anthropic import Anthropic
 client = Anthropic(base_url="${BASE_URL}")
 agent = client.beta.agents.update("{id}", name="updated-name")`,
@@ -42,7 +42,7 @@ const client = new Anthropic({ baseURL: "${BASE_URL}" });
 const agent = await client.beta.agents.update("{id}", { name: "updated-name" });`,
   },
   delete: {
-    curl: `curl -X DELETE -H "x-api-key: $KEY" ${BASE_URL}/v1/agents/{id}`,
+    curl: `curl -X DELETE -H "x-api-key: $KEY" ${BASE_URL}/anthropic/v1/agents/{id}`,
     python: `from anthropic import Anthropic
 client = Anthropic(base_url="${BASE_URL}")
 client.beta.agents.delete("{id}")`,
@@ -56,7 +56,7 @@ await client.beta.agents.delete("{id}");`,
 
 const sessions: ResourceSnippets = {
   list: {
-    curl: `curl -H "x-api-key: $KEY" ${BASE_URL}/v1/sessions`,
+    curl: `curl -H "x-api-key: $KEY" ${BASE_URL}/anthropic/v1/sessions`,
     python: `from anthropic import Anthropic
 client = Anthropic(base_url="${BASE_URL}")
 sessions = client.beta.sessions.list()`,
@@ -65,7 +65,7 @@ const client = new Anthropic({ baseURL: "${BASE_URL}" });
 const sessions = await client.beta.sessions.list();`,
   },
   get: {
-    curl: `curl -H "x-api-key: $KEY" ${BASE_URL}/v1/sessions/{id}`,
+    curl: `curl -H "x-api-key: $KEY" ${BASE_URL}/anthropic/v1/sessions/{id}`,
     python: `from anthropic import Anthropic
 client = Anthropic(base_url="${BASE_URL}")
 session = client.beta.sessions.retrieve("{id}")`,
@@ -74,7 +74,7 @@ const client = new Anthropic({ baseURL: "${BASE_URL}" });
 const session = await client.beta.sessions.retrieve("{id}");`,
   },
   delete: {
-    curl: `curl -X DELETE -H "x-api-key: $KEY" ${BASE_URL}/v1/sessions/{id}`,
+    curl: `curl -X DELETE -H "x-api-key: $KEY" ${BASE_URL}/anthropic/v1/sessions/{id}`,
     python: `from anthropic import Anthropic
 client = Anthropic(base_url="${BASE_URL}")
 client.beta.sessions.delete("{id}")`,
@@ -88,30 +88,30 @@ await client.beta.sessions.delete("{id}");`,
 
 const environments: ResourceSnippets = {
   list: {
-    curl: `curl -H "x-api-key: $KEY" ${BASE_URL}/v1/environments`,
+    curl: `curl -H "x-api-key: $KEY" ${BASE_URL}/anthropic/v1/environments`,
     python: `import httpx
-resp = httpx.get("${BASE_URL}/v1/environments", headers={"x-api-key": KEY})
+resp = httpx.get("${BASE_URL}/anthropic/v1/environments", headers={"x-api-key": KEY})
 environments = resp.json()`,
-    typescript: `const res = await fetch("${BASE_URL}/v1/environments", {
+    typescript: `const res = await fetch("${BASE_URL}/anthropic/v1/environments", {
   headers: { "x-api-key": KEY },
 });
 const environments = await res.json();`,
   },
   get: {
-    curl: `curl -H "x-api-key: $KEY" ${BASE_URL}/v1/environments/{id}`,
+    curl: `curl -H "x-api-key: $KEY" ${BASE_URL}/anthropic/v1/environments/{id}`,
     python: `import httpx
-resp = httpx.get("${BASE_URL}/v1/environments/{id}", headers={"x-api-key": KEY})
+resp = httpx.get("${BASE_URL}/anthropic/v1/environments/{id}", headers={"x-api-key": KEY})
 env = resp.json()`,
-    typescript: `const res = await fetch("${BASE_URL}/v1/environments/{id}", {
+    typescript: `const res = await fetch("${BASE_URL}/anthropic/v1/environments/{id}", {
   headers: { "x-api-key": KEY },
 });
 const env = await res.json();`,
   },
   delete: {
-    curl: `curl -X DELETE -H "x-api-key: $KEY" ${BASE_URL}/v1/environments/{id}`,
+    curl: `curl -X DELETE -H "x-api-key: $KEY" ${BASE_URL}/anthropic/v1/environments/{id}`,
     python: `import httpx
-httpx.delete("${BASE_URL}/v1/environments/{id}", headers={"x-api-key": KEY})`,
-    typescript: `await fetch("${BASE_URL}/v1/environments/{id}", {
+httpx.delete("${BASE_URL}/anthropic/v1/environments/{id}", headers={"x-api-key": KEY})`,
+    typescript: `await fetch("${BASE_URL}/anthropic/v1/environments/{id}", {
   method: "DELETE",
   headers: { "x-api-key": KEY },
 });`,
@@ -122,11 +122,11 @@ httpx.delete("${BASE_URL}/v1/environments/{id}", headers={"x-api-key": KEY})`,
 
 const secrets: ResourceSnippets = {
   list: {
-    curl: `curl -H "x-api-key: $KEY" ${BASE_URL}/v1/vaults`,
+    curl: `curl -H "x-api-key: $KEY" ${BASE_URL}/anthropic/v1/vaults`,
     python: `import httpx
-resp = httpx.get("${BASE_URL}/v1/vaults", headers={"x-api-key": KEY})
+resp = httpx.get("${BASE_URL}/anthropic/v1/vaults", headers={"x-api-key": KEY})
 vaults = resp.json()`,
-    typescript: `const res = await fetch("${BASE_URL}/v1/vaults", {
+    typescript: `const res = await fetch("${BASE_URL}/anthropic/v1/vaults", {
   headers: { "x-api-key": KEY },
 });
 const vaults = await res.json();`,
