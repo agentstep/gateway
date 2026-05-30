@@ -138,19 +138,15 @@ export async function installSkills(
     }
   }
 
-  if (engine === "claude") {
-    // Claude Code reads from $HOME/.claude/skills/ directory
-    await provider.exec(sandboxName, ["mkdir", "-p", `${homeDir}/.claude/skills`]);
-
+  // Backend-specific skill dirs (e.g. claude reads .claude/skills/),
+  // plus the universal .agents/skills/ that all engines support.
+  const backend = resolveBackend(engine);
+  const skillDirs = [...(backend.extraSkillDirs ?? []), ".agents/skills"];
+  for (const dir of skillDirs) {
+    await provider.exec(sandboxName, ["mkdir", "-p", `${homeDir}/${dir}`]);
     for (const skill of safeSkills) {
-      await writeSkillFiles(skill, `${homeDir}/.claude/skills/${skill.name}`);
+      await writeSkillFiles(skill, `${homeDir}/${dir}/${skill.name}`);
     }
-  }
-
-  // Also write to $HOME/.agents/skills/ for universal agent compatibility
-  await provider.exec(sandboxName, ["mkdir", "-p", `${homeDir}/.agents/skills`]);
-  for (const skill of safeSkills) {
-    await writeSkillFiles(skill, `${homeDir}/.agents/skills/${skill.name}`);
   }
 }
 
@@ -254,7 +250,7 @@ export async function acquireForFirstTurn(sessionId: string): Promise<string> {
 
     try {
       // Session-specific steps that cannot be pre-run at warm fill time.
-      if (agent.engine === "claude") {
+      if (backend.supportsCustomTools) {
         const customTools = agent.tools.filter(
           (t): t is import("../types").CustomTool => t.type === "custom",
         );
@@ -374,8 +370,10 @@ export async function acquireForFirstTurn(sessionId: string): Promise<string> {
     await backend.prepareOnSandbox(name, sp);
     lcLog(`[lifecycle] ${sessionId} engine installed`);
 
-    // Install custom tool bridge if the agent has custom tools or threads_enabled (claude backend only)
-    if (agent.engine === "claude") {
+    // Install custom tool bridge if the agent has custom tools or
+    // threads_enabled (any backend that declares supportsCustomTools — today
+    // only claude, but the path is engine-neutral).
+    if (backend.supportsCustomTools) {
       const customTools = agent.tools.filter(
         (t): t is import("../types").CustomTool => t.type === "custom",
       );

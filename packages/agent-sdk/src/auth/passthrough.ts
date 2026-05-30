@@ -46,6 +46,19 @@ export function isAnthropicApiKey(key: string): boolean {
 }
 
 /**
+ * Anthropic OAuth token shape. `sk-ant-oat*` issued by `claude setup-token`
+ * for subscription-OAuth flows. Distinct from API keys: requires header
+ * remapping (CLAUDE_CODE_OAUTH_TOKEN, not ANTHROPIC_API_KEY) and is rejected
+ * by the gateway's anthropic-proxy provider for hosted execution.
+ *
+ * Centralised here so the five places that previously did
+ * `value.startsWith("sk-ant-oat")` inline agree on the predicate.
+ */
+export function isAnthropicOAuthToken(value: string | null | undefined): boolean {
+  return typeof value === "string" && value.startsWith("sk-ant-oat");
+}
+
+/**
  * Routes under `/anthropic/v1/*` that mirror Anthropic's Managed Agents
  * API and may be forwarded via passthrough. A request whose normalized
  * path matches any of these patterns will be proxied to

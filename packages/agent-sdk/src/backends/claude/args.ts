@@ -16,6 +16,7 @@ import { getConfig } from "../../config";
 import { withGatewayPreamble, type MountedMemoryStore } from "../shared/wrap-prompt";
 import type { Agent, McpServerConfig } from "../../types";
 import { resolveToolset } from "../../sessions/tools";
+import { isAnthropicOAuthToken } from "../../auth/passthrough";
 
 export interface BuildArgsInput {
   agent: Agent;
@@ -111,7 +112,7 @@ export function buildClaudeAuthEnv(): Record<string, string> {
 
   const token = cfg.claudeToken || cfg.anthropicApiKey;
   if (token) {
-    if (token.startsWith("sk-ant-oat")) {
+    if (isAnthropicOAuthToken(token)) {
       env.CLAUDE_CODE_OAUTH_TOKEN = token;
     } else {
       env.ANTHROPIC_API_KEY = token;

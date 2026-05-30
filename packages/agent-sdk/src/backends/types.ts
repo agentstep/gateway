@@ -89,4 +89,38 @@ export interface Backend {
    * the driver before acquireForFirstTurn.
    */
   validateRuntime?(): string | null;
+
+  // ── Capability flags (replaces driver/lifecycle `if (engine === "claude")` checks) ──
+
+  /**
+   * Default MCP_TIMEOUT env var (ms) to set on the wrapper if the user
+   * hasn't overridden it via vault. Claude defaults to 30000 because
+   * Firecracker VMs have ~1.2s Node.js cold-start that exceeds the
+   * native 5s default. Omit if this engine doesn't use MCP.
+   */
+  mcpTimeoutMs?: number;
+
+  /**
+   * True if this backend's CLI supports mid-turn custom-tool re-entry
+   * (e.g. claude's --input-format stream-json + tool-bridge sentinel
+   * file). The driver uses this to gate `user.custom_tool_result`
+   * acceptance and to start the tool-bridge poll timer.
+   */
+  supportsCustomTools?: boolean;
+
+  /**
+   * Additional skill directories beyond `.agents/skills/<name>/` that
+   * `installSkills` should write each skill's SKILL.md into. Claude
+   * returns `[".claude/skills"]` so Claude Code can auto-discover via
+   * its native skill loader. Paths are $HOME-relative.
+   */
+  extraSkillDirs?: readonly string[];
+
+  /**
+   * Backend-specific argv tweaks that depend on the container provider.
+   * Used for codex+firecracker (`--full-auto` → `--yolo` because bwrap
+   * conflicts with the firecracker VM). Mutates turnBuild in place;
+   * runs in the driver after buildTurn() returns.
+   */
+  applyProviderQuirks?(turnBuild: BuildTurnResult, providerName: string): void;
 }

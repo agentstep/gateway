@@ -186,6 +186,16 @@ export const claudeBackend: Backend = {
   createTranslator: (opts: TranslatorOptions) => createClaudeTranslator(opts),
   prepareOnSandbox: (name: string, provider: ContainerProvider) => installClaudeWrapper(name, provider),
   validateRuntime,
+  // Firecracker / Cloud Run cold-start (~1.2s Node) exceeds claude's
+  // default 5s MCP server connect timeout. 30s is a safe margin.
+  mcpTimeoutMs: 30_000,
+  // Claude Code's --input-format stream-json + tool-bridge sentinel
+  // file support custom-tool re-entry via user.custom_tool_result.
+  supportsCustomTools: true,
+  // Claude Code auto-discovers skills from .claude/skills/ in $HOME.
+  // installSkills also writes to .agents/skills/ for cross-engine
+  // compatibility (handled in lifecycle.ts).
+  extraSkillDirs: [".claude/skills"],
 };
 
 // Re-export utilities needed by tests or other modules that historically

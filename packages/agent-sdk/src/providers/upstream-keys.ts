@@ -21,6 +21,7 @@ import { listEntries } from "../db/vaults";
 import { getSession } from "../db/sessions";
 import { selectNextUpstreamKey, disableUpstreamKey } from "../db/upstream_keys";
 import { getConfig } from "../config";
+import { isAnthropicOAuthToken } from "../auth/passthrough";
 
 const CONSECUTIVE_FAIL_THRESHOLD = 3;
 
@@ -46,7 +47,7 @@ function rejectOAuth(provider: UpstreamProvider, value: string | null | undefine
   // Anthropic: managed-agents proxy refuses OAuth tokens; reject them
   // up-front so the user gets a clean error from the wizard instead of a
   // confusing 401 from the upstream.
-  if (provider === "anthropic" && value.startsWith("sk-ant-oat")) return null;
+  if (provider === "anthropic" && isAnthropicOAuthToken(value)) return null;
   return value;
 }
 

@@ -36,6 +36,7 @@ import { markUserEventProcessed, listEvents } from "../db/events";
 import { acquireForFirstTurn, installSkills, provisionResources, wrapProviderWithSecrets } from "../containers/lifecycle";
 import * as pool from "../containers/pool";
 import { ContainerGone } from "../providers/types";
+import { isAnthropicOAuthToken } from "../auth/passthrough";
 import { resolveBackend } from "../backends/registry";
 import { resolveProvider, resolveProviderName } from "../providers/registry";
 import { BLOCKED_ENV_KEYS, resolveVaultSecrets } from "../providers/resolve-secrets";
@@ -376,27 +377,13 @@ export async function runTurn(
     return;
   }
 
-  // Codex bwrap conflicts with Firecracker: the inner bubblewrap sandbox
-  // requires user namespaces that Firecracker VMs don't expose. The outer VM
-  // already provides hardware-level isolation. Replace --full-auto with
-  // --dangerously-bypass-approvals-and-sandbox (--yolo) which skips bwrap
-  // entirely. The two flags conflict — can't use both. (openai/codex#15282)
-  if (agent.engine === "codex") {
+  // Backend-specific provider quirks (e.g. codex+firecracker → --yolo).
+  // Lives on each backend's definition so the driver doesn't grow an
+  // `if (engine === ...)` per quirk.
+  if (backend.applyProviderQuirks) {
     const envRow = getEnvironment(session.environment_id);
     const provName = resolveProviderName({ envConfigProvider: envRow?.config?.provider });
-    const firecrackerProviders = new Set(["sprites", "fly", "apple-firecracker"]);
-    if (firecrackerProviders.has(provName)) {
-      // Remove --full-auto (conflicts with --yolo)
-      const faIdx = turnBuild.argv.indexOf("--full-auto");
-      if (faIdx >= 0) turnBuild.argv.splice(faIdx, 1);
-      // Insert --yolo before the trailing `-` (stdin marker)
-      const lastIdx = turnBuild.argv.lastIndexOf("-");
-      if (lastIdx >= 0) {
-        turnBuild.argv.splice(lastIdx, 0, "--dangerously-bypass-approvals-and-sandbox");
-      } else {
-        turnBuild.argv.push("--dangerously-bypass-approvals-and-sandbox");
-      }
-    }
+    backend.applyProviderQuirks(turnBuild, provName);
   }
 
   console.log(`[driver] ${sessionId} executing turn (engine: ${agent.engine}, model: ${agent.model.id})`);
@@ -408,10 +395,11 @@ export async function runTurn(
     turnBuild.env.RESOURCES_DIR = "/tmp/resources";
   }
 
-  // Give agent-configured MCP servers more time to connect on Firecracker VMs
-  // where Node.js cold-start takes ~1.2s. Default is 5s which is too tight.
-  if (agent.engine === "claude" && !turnBuild.env.MCP_TIMEOUT) {
-    turnBuild.env.MCP_TIMEOUT = "30000";
+  // Backend default for MCP server connect timeout. Claude needs 30s on
+  // Firecracker VMs where Node cold-start takes ~1.2s; other engines may
+  // not use MCP at all (backend.mcpTimeoutMs omitted).
+  if (backend.mcpTimeoutMs && !turnBuild.env.MCP_TIMEOUT) {
+    turnBuild.env.MCP_TIMEOUT = String(backend.mcpTimeoutMs);
   }
 
   // Inject vault entries as env vars (override server defaults).
@@ -432,7 +420,7 @@ export async function runTurn(
   // move it to CLAUDE_CODE_OAUTH_TOKEN. Claude CLI doesn't recognize
   // OAuth tokens in ANTHROPIC_API_KEY — it expects them in a separate
   // env var. Without this, the CLI garbles stdin parsing (Bug #2/#5).
-  if (turnBuild.env.ANTHROPIC_API_KEY?.startsWith("sk-ant-oat")) {
+  if (isAnthropicOAuthToken(turnBuild.env.ANTHROPIC_API_KEY)) {
     turnBuild.env.CLAUDE_CODE_OAUTH_TOKEN = turnBuild.env.ANTHROPIC_API_KEY;
     delete turnBuild.env.ANTHROPIC_API_KEY;
   }
@@ -529,7 +517,7 @@ export async function runTurn(
 
   // Tool bridge: if this is a custom tool result re-entry on claude backend,
   // write response.json and remove the pending sentinel before --resume.
-  if (agent.engine === "claude" && toolResults.length > 0) {
+  if (backend.supportsCustomTools && toolResults.length > 0) {
     const { TOOL_BRIDGE_RESPONSE_PATH, TOOL_BRIDGE_PENDING_PATH } = await import("../backends/claude/tool-bridge");
     const sandboxName = getSessionRow(sessionId)?.sandbox_name;
     if (sandboxName) {
@@ -649,7 +637,7 @@ export async function runTurn(
   // for the client to respond with user.custom_tool_result (which calls
   // writeToolBridgeResponse to unblock the bridge inside the container).
   let toolBridgePollTimer: ReturnType<typeof setInterval> | null = null;
-  if (agent.engine === "claude" && tools.customToolNames.size > 0) {
+  if (backend.supportsCustomTools && tools.customToolNames.size > 0) {
     toolBridgePollTimer = setInterval(() => {
       void checkToolBridgeSentinel(sessionId, sandboxName, provider, secrets, trace).catch(
         (err: unknown) => {

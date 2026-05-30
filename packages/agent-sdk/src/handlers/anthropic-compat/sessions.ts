@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { routeWrap, jsonOk, paginatedOk, decodeCursor } from "../../http";
 import { getDb } from "../../db/client";
+import { isAnthropicOAuthToken } from "../../auth/passthrough";
 import {
   createSession,
   getSession,
@@ -340,11 +341,11 @@ export function handleCreateSession(request: Request): Promise<Response> {
           const { getConfig } = await import("../../config");
           const { listEntries } = await import("../../db/vaults");
           const cfg = getConfig();
-          let hasOAuth = cfg.anthropicApiKey?.startsWith("sk-ant-oat") || !!cfg.claudeToken;
+          let hasOAuth = isAnthropicOAuthToken(cfg.anthropicApiKey) || !!cfg.claudeToken;
           if (!hasOAuth && data.vault_ids?.length) {
             for (const vid of data.vault_ids) {
               const entries = listEntries(vid);
-              if (entries.some(e => e.key === "ANTHROPIC_API_KEY" && e.value.startsWith("sk-ant-oat"))) {
+              if (entries.some(e => e.key === "ANTHROPIC_API_KEY" && isAnthropicOAuthToken(e.value))) {
                 hasOAuth = true;
                 break;
               }
