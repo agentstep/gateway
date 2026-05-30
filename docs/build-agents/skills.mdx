@@ -84,6 +84,25 @@ For all other engines (`opencode`, `codex`, `gemini`, etc.), skills are written 
 
 Engines that natively support skill discovery can look here; others can be prompted to reference the path via the system prompt.
 
+## Skills as reference vs. instruction
+
+A common surprise: a skill is attached and the agent acknowledges it ("Using Skill") — yet the steps inside `SKILL.md` aren't actually executed.
+
+This is expected. **For the Claude engine, skill content is loaded as reference material, not as a list of instructions to execute.** Claude Code reads the SKILL.md, treats it like a knowledge base the model can consult, and then decides for itself how (or whether) to use it. If the SKILL.md is phrased as "the review workflow does X, then Y, then Z" the model is just as likely to summarize the workflow back to you as to execute it.
+
+If you need a skill to be **run** rather than **consulted**, do one of:
+
+- **Phrase imperatively and reiterate**: write the SKILL.md as a command sequence and re-emphasise it in the user message. e.g.:
+  ```
+  USER: Use the `review` skill. Read the files, run the review steps,
+        and call save_output with the result. Do not stop until
+        save_output has been called.
+  ```
+- **Put the workflow in the agent's `system` prompt** instead of a skill. The system prompt is treated as binding instruction; skills are treated as documents.
+- **For non-Claude engines** (`opencode`, `codex`, `gemini`), skill content is prepended to the user prompt with a `<skill name="…">…</skill>` block, so the imperative effect is stronger than on Claude. The trade-off is token cost on every turn.
+
+Skills work best as named, reusable knowledge ("here's our code style guide") — not as procedural turn-by-turn scripts.
+
 ## Browsing the skills catalog
 
 The gateway exposes a read-only skills catalog backed by the agentstep.com index (72k+ community skills):
