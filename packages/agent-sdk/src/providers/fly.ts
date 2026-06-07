@@ -18,6 +18,7 @@
  * Env vars: FLY_API_TOKEN, FLY_APP_NAME, FLY_IMAGE (default: "node:22")
  */
 import type { ContainerProvider, ExecOptions, ExecSession, ProviderSecrets } from "./types";
+import { ContainerGone } from "./types";
 import { shellEscape } from "./shared";
 import { readEnvOrSetting, getConfig } from "../config";
 
@@ -200,7 +201,9 @@ export const flyProvider: ContainerProvider = {
     if (!machineId) {
       await refreshMachineMap("ca-sess-", secrets);
       machineId = machines.get(name);
-      if (!machineId) throw new Error(`Fly machine not found for name: ${name}`);
+      // Not in the app's machine list → reaped upstream. ContainerGone so the
+      // driver re-acquires and retries rather than failing the turn.
+      if (!machineId) throw new ContainerGone(name, `Fly machine not found for name: ${name}`);
     }
     const app = getAppName(secrets);
 
@@ -219,6 +222,9 @@ export const flyProvider: ContainerProvider = {
 
     if (!res.ok) {
       const text = await res.text().catch(() => "");
+      if (res.status === 404) {
+        throw new ContainerGone(name, `Fly machine ${machineId} gone (404): ${text}`);
+      }
       throw new Error(`Fly exec failed (${res.status}): ${text}`);
     }
 
@@ -240,7 +246,7 @@ export const flyProvider: ContainerProvider = {
     if (!machineId) {
       await refreshMachineMap("ca-sess-", secrets);
       machineId = machines.get(name);
-      if (!machineId) throw new Error(`Fly machine not found for name: ${name}`);
+      if (!machineId) throw new ContainerGone(name, `Fly machine not found for name: ${name}`);
     }
     const app = getAppName(secrets);
 
@@ -277,6 +283,9 @@ export const flyProvider: ContainerProvider = {
 
     if (!res.ok) {
       const text = await res.text().catch(() => "");
+      if (res.status === 404) {
+        throw new ContainerGone(name, `Fly machine ${machineId} gone (404): ${text}`);
+      }
       throw new Error(`Fly exec failed (${res.status}): ${text}`);
     }
 

@@ -15,6 +15,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { ContainerProvider, ProviderSecrets } from "./types";
+import { ContainerGone } from "./types";
 import { shellEscape } from "./shared";
 import { readEnvOrSetting } from "../config";
 
@@ -74,6 +75,12 @@ type ModalClient = {
 
 let clientInstance: ModalClient | null = null;
 
+// Serializes the override path below. That path temporarily mutates the global
+// process.env (MODAL_TOKEN_ID/SECRET) while constructing the SDK client, so two
+// concurrent creates with different vault creds would otherwise race and one
+// could observe the other's tokens. The chain forces them to run one-at-a-time.
+let envOverrideLock: Promise<unknown> = Promise.resolve();
+
 async function getClient(secrets?: Record<string, string>): Promise<ModalClient> {
   // Resolve auth: vault secrets first, then env, then gateway settings.
   // If any source provides creds we create a fresh client with them set
@@ -90,31 +97,37 @@ async function getClient(secrets?: Record<string, string>): Promise<ModalClient>
     (resolvedSecret && resolvedSecret !== process.env.MODAL_TOKEN_SECRET),
   );
   if (needsOverride) {
-    const origId = process.env.MODAL_TOKEN_ID;
-    const origSecret = process.env.MODAL_TOKEN_SECRET;
-    try {
-      if (resolvedId) process.env.MODAL_TOKEN_ID = resolvedId;
-      if (resolvedSecret) process.env.MODAL_TOKEN_SECRET = resolvedSecret;
-      const mod = await import("modal");
-      const ClientClass = (mod as any).ModalClient ?? (mod as any).default?.ModalClient;
-      if (!ClientClass) throw new Error("ModalClient not found in modal exports");
-      return new ClientClass() as ModalClient;
-    } catch (err) {
-      if (
-        err instanceof Error &&
-        (err.message.includes("Cannot find module") ||
-          err.message.includes("MODULE_NOT_FOUND") ||
-          err.message.includes("ERR_MODULE_NOT_FOUND"))
-      ) {
-        throw new Error("Modal requires the modal package. Install with: npm install modal");
+    const build = async (): Promise<ModalClient> => {
+      const origId = process.env.MODAL_TOKEN_ID;
+      const origSecret = process.env.MODAL_TOKEN_SECRET;
+      try {
+        if (resolvedId) process.env.MODAL_TOKEN_ID = resolvedId;
+        if (resolvedSecret) process.env.MODAL_TOKEN_SECRET = resolvedSecret;
+        const mod = await import("modal");
+        const ClientClass = (mod as any).ModalClient ?? (mod as any).default?.ModalClient;
+        if (!ClientClass) throw new Error("ModalClient not found in modal exports");
+        return new ClientClass() as ModalClient;
+      } catch (err) {
+        if (
+          err instanceof Error &&
+          (err.message.includes("Cannot find module") ||
+            err.message.includes("MODULE_NOT_FOUND") ||
+            err.message.includes("ERR_MODULE_NOT_FOUND"))
+        ) {
+          throw new Error("Modal requires the modal package. Install with: npm install modal");
+        }
+        throw err;
+      } finally {
+        if (origId !== undefined) process.env.MODAL_TOKEN_ID = origId;
+        else delete process.env.MODAL_TOKEN_ID;
+        if (origSecret !== undefined) process.env.MODAL_TOKEN_SECRET = origSecret;
+        else delete process.env.MODAL_TOKEN_SECRET;
       }
-      throw err;
-    } finally {
-      if (origId !== undefined) process.env.MODAL_TOKEN_ID = origId;
-      else delete process.env.MODAL_TOKEN_ID;
-      if (origSecret !== undefined) process.env.MODAL_TOKEN_SECRET = origSecret;
-      else delete process.env.MODAL_TOKEN_SECRET;
-    }
+    };
+    // Chain onto the lock so the env-mutating section never overlaps another.
+    const run = envOverrideLock.then(build, build);
+    envOverrideLock = run.then(() => undefined, () => undefined);
+    return run;
   }
 
   // Default: cached client using env vars / config file
@@ -216,7 +229,9 @@ export const modalProvider: ContainerProvider = {
 
   async exec(name, argv, opts) {
     const sandbox = sandboxes.get(name);
-    if (!sandbox) throw new Error(`Modal sandbox not found: ${name}`);
+    // ContainerGone → the driver re-acquires and retries (e.g. the in-memory
+    // instance map was lost on restart, or the sandbox hit its max lifetime).
+    if (!sandbox) throw new ContainerGone(name, `Modal sandbox not found: ${name}`);
 
     const cmd = argv.map((a) => shellEscape(a)).join(" ");
 
@@ -238,7 +253,7 @@ export const modalProvider: ContainerProvider = {
 
   async startExec(name, opts) {
     const sandbox = sandboxes.get(name);
-    if (!sandbox) throw new Error(`Modal sandbox not found: ${name}`);
+    if (!sandbox) throw new ContainerGone(name, `Modal sandbox not found: ${name}`);
 
     const cmd = opts.argv.map((a) => shellEscape(a)).join(" ");
 

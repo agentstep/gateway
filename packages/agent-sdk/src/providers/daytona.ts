@@ -18,6 +18,7 @@
  *           DAYTONA_PROXY_URL (default: https://proxy.app.daytona.io/toolbox)
  */
 import type { ContainerProvider, ExecOptions, ExecSession, ProviderSecrets } from "./types";
+import { ContainerGone } from "./types";
 import { shellEscape } from "./shared";
 
 function getApiUrl(secrets?: ProviderSecrets): string {
@@ -169,6 +170,11 @@ export const daytonaProvider: ContainerProvider = {
 
     if (!res.ok) {
       const text = await res.text().catch(() => "");
+      // 404 means the sandbox was reaped upstream — signal ContainerGone so the
+      // driver drops the stale pool entry, re-acquires, and retries.
+      if (res.status === 404) {
+        throw new ContainerGone(name, `Daytona sandbox ${sandboxId} gone (404): ${text}`);
+      }
       throw new Error(`Daytona exec failed (${res.status}): ${text}`);
     }
 
@@ -227,6 +233,9 @@ export const daytonaProvider: ContainerProvider = {
 
     if (!res.ok) {
       const text = await res.text().catch(() => "");
+      if (res.status === 404) {
+        throw new ContainerGone(name, `Daytona sandbox ${sandboxId} gone (404): ${text}`);
+      }
       throw new Error(`Daytona exec failed (${res.status}): ${text}`);
     }
 

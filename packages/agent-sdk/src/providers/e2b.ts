@@ -13,6 +13,7 @@
  * Env vars: E2B_API_KEY (required), E2B_TEMPLATE (default: "base")
  */
 import type { ContainerProvider, ProviderSecrets } from "./types";
+import { ContainerGone } from "./types";
 import { shellEscape } from "./shared";
 
 // Lazy-loaded SDK types matching e2b@2.x
@@ -135,7 +136,10 @@ export const e2bProvider: ContainerProvider = {
 
   async exec(name, argv, opts) {
     const sandbox = sandboxes.get(name);
-    if (!sandbox) throw new Error(`E2B sandbox not found: ${name}`);
+    // ContainerGone (not a generic Error) so the driver re-acquires a fresh
+    // sandbox and retries — e.g. after a process restart dropped the
+    // in-memory instance map, or the sandbox timed out upstream.
+    if (!sandbox) throw new ContainerGone(name, `E2B sandbox not found: ${name}`);
 
     const cmd = argv.map((a) => shellEscape(a)).join(" ");
 
@@ -157,7 +161,7 @@ export const e2bProvider: ContainerProvider = {
 
   async startExec(name, opts) {
     const sandbox = sandboxes.get(name);
-    if (!sandbox) throw new Error(`E2B sandbox not found: ${name}`);
+    if (!sandbox) throw new ContainerGone(name, `E2B sandbox not found: ${name}`);
 
     const cmd = opts.argv.map((a) => shellEscape(a)).join(" ");
 

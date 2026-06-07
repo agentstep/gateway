@@ -17,6 +17,7 @@
  *           VERCEL_SANDBOX_RUNTIME (default: "node24")
  */
 import type { ContainerProvider, ExecOptions, ExecSession, ProviderSecrets } from "./types";
+import { ContainerGone } from "./types";
 import { shellEscape } from "./shared";
 import { readEnvOrSetting } from "../config";
 
@@ -155,7 +156,9 @@ export const vercelProvider: ContainerProvider = {
 
   async exec(name, argv, opts) {
     const sandbox = sandboxes.get(name);
-    if (!sandbox) throw new Error(`Vercel sandbox not found: ${name}`);
+    // ContainerGone → the driver re-acquires and retries (e.g. the in-memory
+    // instance map was lost on restart, or the sandbox was stopped upstream).
+    if (!sandbox) throw new ContainerGone(name, `Vercel sandbox not found: ${name}`);
 
     const cmd = argv.map((a) => shellEscape(a)).join(" ");
 
@@ -184,7 +187,7 @@ export const vercelProvider: ContainerProvider = {
 
   async startExec(name, opts) {
     const sandbox = sandboxes.get(name);
-    if (!sandbox) throw new Error(`Vercel sandbox not found: ${name}`);
+    if (!sandbox) throw new ContainerGone(name, `Vercel sandbox not found: ${name}`);
 
     const cmd = opts.argv.map((a) => shellEscape(a)).join(" ");
 
