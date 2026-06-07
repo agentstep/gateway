@@ -23,6 +23,96 @@ import type { ContainerProvider, ProviderSecrets } from "./types";
 import { getConfig } from "../config/index";
 import { ApiError } from "../errors";
 
+/**
+ * The bridge streams the agent's NDJSON stdout, then emits the process exit
+ * code as a final NDJSON line: `{"exit_code": N}`. We must (a) surface that
+ * code on `exit` so the driver can pick the right stop reason, and (b) strip
+ * it from the consumer stream so it never reaches the agent NDJSON translator.
+ *
+ * Strategy: split into lines and hold the most-recent complete line back by
+ * one (a one-line lookahead). Whatever line is held when the stream ends is
+ * the exit-code candidate; if it parses as a lone `{"exit_code": N}` we consume
+ * it, otherwise we emit it and default to code 0 (older bridge with no footer).
+ */
+function parseStreamWithExitCode(source: ReadableStream<Uint8Array>): {
+  stdout: ReadableStream<Uint8Array>;
+  exit: Promise<{ code: number }>;
+} {
+  let exitResolve!: (v: { code: number }) => void;
+  const exit = new Promise<{ code: number }>((r) => (exitResolve = r));
+  let settled = false;
+  const settle = (code: number) => {
+    if (!settled) {
+      settled = true;
+      exitResolve({ code });
+    }
+  };
+
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+
+  const tryExitCode = (line: string): number | null => {
+    const t = line.trim();
+    if (!t) return null;
+    try {
+      const obj = JSON.parse(t) as Record<string, unknown>;
+      if (
+        obj && typeof obj === "object" &&
+        Object.keys(obj).length === 1 &&
+        typeof obj.exit_code === "number"
+      ) {
+        return obj.exit_code;
+      }
+    } catch {
+      // Not JSON — a normal agent stdout line.
+    }
+    return null;
+  };
+
+  const stdout = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const reader = source.getReader();
+      let buf = "";
+      // Most recent complete segment (newline included), held back by one so
+      // we can decide whether the final segment is the exit-code footer.
+      let held: string | null = null;
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let nl: number;
+          while ((nl = buf.indexOf("\n")) >= 0) {
+            const seg = buf.slice(0, nl + 1); // keep the newline → byte-exact
+            buf = buf.slice(nl + 1);
+            // The previously held segment is definitely not the last → emit it.
+            if (held !== null) controller.enqueue(encoder.encode(held));
+            held = seg;
+          }
+        }
+        // Flush any trailing partial (exit-code footer may arrive unterminated).
+        if (buf.length > 0) {
+          if (held !== null) controller.enqueue(encoder.encode(held));
+          held = buf;
+        }
+        // `held` is now the final segment — the exit-code candidate.
+        if (held !== null) {
+          const code = tryExitCode(held);
+          if (code === null) controller.enqueue(encoder.encode(held));
+          else settle(code);
+        }
+        controller.close();
+        settle(0);
+      } catch (err) {
+        try { controller.error(err); } catch { /* already errored */ }
+        settle(0);
+      }
+    },
+  });
+
+  return { stdout, exit };
+}
+
 function resolveConfig(secrets?: ProviderSecrets): { url: string; secret: string } {
   const cfg = getConfig();
   const url = secrets?.CLOUDFLARE_SANDBOX_URL
@@ -109,11 +199,18 @@ export const cloudflareProvider: ContainerProvider = {
   },
 
   async list(opts) {
+    // Best-effort, like every other provider's list(): boot recovery and the
+    // sweeper call this and must not crash if the bridge URL is unset or the
+    // bridge is unreachable. resolveConfig() throws on a missing URL, so guard.
     const prefix = opts?.prefix ?? "ca-sess-";
-    const result = await cfJson<{ sandboxes: Array<{ name: string }> }>("/sandboxes", {
-      secrets: undefined,
-    });
-    return result.sandboxes.filter((s) => s.name.startsWith(prefix));
+    try {
+      const result = await cfJson<{ sandboxes: Array<{ name: string }> }>("/sandboxes", {
+        secrets: undefined,
+      });
+      return result.sandboxes.filter((s) => s.name.startsWith(prefix));
+    } catch {
+      return [];
+    }
   },
 
   async exec(name, argv, opts) {
@@ -149,32 +246,14 @@ export const cloudflareProvider: ContainerProvider = {
       throw new ApiError(502, "server_error", `cloudflare stream exec failed (${res.status}): ${text.slice(0, 300)}`);
     }
 
-    const stdout = res.body as ReadableStream<Uint8Array>;
+    const source = res.body as ReadableStream<Uint8Array>;
 
-    // The bridge sends exit code as the last NDJSON line: {"exit_code": N}
-    // For now, we wait for the stream to end and assume success.
-    let exitResolve!: (v: { code: number }) => void;
-    const exit = new Promise<{ code: number }>((resolve) => {
-      exitResolve = resolve;
-    });
-
-    // Monitor the stream end
-    const [streamForConsumer, streamForMonitor] = stdout.tee();
-    (async () => {
-      const reader = streamForMonitor.getReader();
-      try {
-        while (true) {
-          const { done } = await reader.read();
-          if (done) break;
-        }
-      } catch {
-        // Stream error
-      }
-      exitResolve({ code: 0 });
-    })();
+    // Parse the bridge's trailing `{"exit_code": N}` footer into `exit` and
+    // strip it from the consumer stream (see parseStreamWithExitCode).
+    const { stdout, exit } = parseStreamWithExitCode(source);
 
     return {
-      stdout: streamForConsumer,
+      stdout,
       exit,
       async kill() {
         // Send kill request to bridge

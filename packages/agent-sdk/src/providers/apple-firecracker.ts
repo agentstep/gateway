@@ -17,11 +17,20 @@
  */
 import { spawn } from "node:child_process";
 import { createCliProvider } from "./cli-provider";
+import type { ContainerProvider, ProviderName } from "./types";
 
 const NET_POLICY = process.env.MVM_NET_POLICY ?? "deny";
 
-export const mvmProvider = createCliProvider({
-  name: "apple-firecracker",
+/**
+ * Both the `apple-firecracker` and `mvm` registry keys are backed by the same
+ * `mvm` binary. They were collapsed into a single provider whose `.name` was
+ * hardcoded to `apple-firecracker`, which meant sessions configured with
+ * `provider: "mvm"` were mislabelled as `apple-firecracker` in metrics, logs,
+ * and traces. Build one provider per name so each reports its configured name.
+ */
+function makeMvmProvider(name: ProviderName): ContainerProvider {
+  return createCliProvider({
+  name,
   binary: "mvm",
 
   createSteps: (name) => [
@@ -126,4 +135,11 @@ export const mvmProvider = createCliProvider({
 
     return { available: true };
   },
-});
+  });
+}
+
+/** Backed by the `mvm` binary; reports name `apple-firecracker`. */
+export const mvmProvider = makeMvmProvider("apple-firecracker");
+
+/** Same binary, but reports name `mvm` for the `mvm` registry key. */
+export const mvmAliasProvider = makeMvmProvider("mvm");

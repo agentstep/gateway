@@ -70,7 +70,7 @@ The turn driver (`packages/agent-sdk/src/sessions/driver.ts`) orchestrates every
 
 **Model ID standard**: Users always pass **bare** model IDs at the API level (`gemini-3.5-flash`, `claude-sonnet-4-6`, `gpt-5.4`). Each backend normalizes internally for its CLI's expected format: Pi and OpenCode add provider prefixes (`google/`, `anthropic/`, `openai/`); Claude, Gemini, Codex pass bare IDs directly. Engine is auto-inferred from model prefix when not specified (`gemini-*` → gemini, `gpt-*` → codex, `claude-*` → claude).
 
-**Provider interface** (`providers/types.ts`): `create()`, `delete()`, `exec()`, `startExec()`. Eleven implementations: sprites (default), docker, apple-container, apple-firecracker, podman, e2b, vercel, daytona, fly, modal, mvm. Lazy dynamic imports in `providers/registry.ts`.
+**Provider interface** (`providers/types.ts`): `create()`, `delete()`, `exec()`, `startExec()`. Thirteen registry entries: sprites (default), docker, apple-container, apple-firecracker, podman, e2b, vercel, daytona, fly, modal, mvm (alias of apple-firecracker), anthropic (no-op; managed-agents proxy), cloudflare. Lazy dynamic imports in `providers/registry.ts`.
 
 **Config cascade** (`config/index.ts`): env vars → settings DB table → defaults. Cached 30s. Use `PUT /v1/settings` or `writeSetting()` to persist.
 

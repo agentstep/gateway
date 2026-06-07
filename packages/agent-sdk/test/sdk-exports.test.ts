@@ -82,8 +82,10 @@ describe("Provider Registry", () => {
     const { resolveContainerProvider } = await import("../src/providers/registry");
     const mvmProvider = await resolveContainerProvider("mvm");
     const afProvider = await resolveContainerProvider("apple-firecracker");
-    // Both aliases should resolve to the same underlying provider object
-    expect(mvmProvider.name).toBe(afProvider.name);
+    // Both keys are backed by the same `mvm` binary, but each reports its own
+    // configured name so sessions aren't mislabelled in metrics/logs/traces.
+    expect(mvmProvider.name).toBe("mvm");
+    expect(afProvider.name).toBe("apple-firecracker");
   });
 
   it("throws on unknown provider name", async () => {

@@ -1,9 +1,11 @@
 /**
  * Container provider abstraction.
  *
- * Both sprites.dev and Docker implement this interface. The driver,
- * lifecycle, and backend setup code call these methods instead of
- * directly using sprites.dev's REST API or Docker's CLI. The provider
+ * Every sandbox backend implements this interface — local runtimes
+ * (sprites.dev, docker, podman, apple-container, mvm) and cloud sandboxes
+ * (e2b, vercel, daytona, fly, modal, cloudflare), plus the no-op anthropic
+ * managed-agents proxy. The driver, lifecycle, and backend setup code call
+ * these methods instead of any provider's native API directly. The provider
  * is selected per-environment via `EnvironmentConfig.provider`.
  *
  * Cloud providers accept an optional `secrets` param on methods that

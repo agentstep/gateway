@@ -103,6 +103,83 @@ describe("Cloudflare Sandbox provider", () => {
     expect(result[1].name).toBe("ca-sess-def");
   });
 
+  it("list returns [] when the bridge URL is unset (best-effort, no throw)", async () => {
+    delete process.env.CLOUDFLARE_SANDBOX_URL;
+    const { cloudflareProvider } = await import("../src/providers/cloudflare");
+    await expect(cloudflareProvider.list({ prefix: "ca-sess-" })).resolves.toEqual([]);
+  });
+
+  it("list returns [] when the bridge is unreachable (best-effort, no throw)", async () => {
+    fetchMock.mockRejectedValueOnce(new Error("connect refused"));
+    const { cloudflareProvider } = await import("../src/providers/cloudflare");
+    await expect(cloudflareProvider.list({ prefix: "ca-sess-" })).resolves.toEqual([]);
+  });
+
+  // Helper: build a streaming Response from NDJSON lines.
+  const streamResponse = (lines: string[]) =>
+    new Response(
+      new ReadableStream<Uint8Array>({
+        start(c) {
+          const enc = new TextEncoder();
+          for (const l of lines) c.enqueue(enc.encode(l));
+          c.close();
+        },
+      }),
+      { status: 200 },
+    );
+
+  // Drain an ExecSession's stdout into a string.
+  const drain = async (stream: ReadableStream<Uint8Array>) => {
+    const reader = stream.getReader();
+    const dec = new TextDecoder();
+    let out = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      out += dec.decode(value);
+    }
+    return out;
+  };
+
+  it("startExec surfaces the trailing {exit_code} footer and strips it from stdout", async () => {
+    fetchMock.mockResolvedValueOnce(
+      streamResponse(['{"type":"a"}\n', '{"type":"b"}\n', '{"exit_code":3}\n']),
+    );
+    const { cloudflareProvider } = await import("../src/providers/cloudflare");
+    const sess = await cloudflareProvider.startExec("ca-sess-test", { argv: ["claude"] });
+    const out = await drain(sess.stdout);
+    const { code } = await sess.exit;
+
+    expect(code).toBe(3);
+    // The exit-code line must not reach the agent NDJSON translator.
+    expect(out).not.toContain("exit_code");
+    expect(out).toBe('{"type":"a"}\n{"type":"b"}\n');
+  });
+
+  it("startExec defaults to exit 0 when no footer is present (older bridge)", async () => {
+    fetchMock.mockResolvedValueOnce(streamResponse(['{"type":"a"}\n', '{"type":"b"}\n']));
+    const { cloudflareProvider } = await import("../src/providers/cloudflare");
+    const sess = await cloudflareProvider.startExec("ca-sess-test", { argv: ["claude"] });
+    const out = await drain(sess.stdout);
+    const { code } = await sess.exit;
+
+    expect(code).toBe(0);
+    expect(out).toBe('{"type":"a"}\n{"type":"b"}\n');
+  });
+
+  it("startExec handles an unterminated exit_code footer (no trailing newline)", async () => {
+    fetchMock.mockResolvedValueOnce(
+      streamResponse(['{"type":"a"}\n', '{"exit_code":1}']),
+    );
+    const { cloudflareProvider } = await import("../src/providers/cloudflare");
+    const sess = await cloudflareProvider.startExec("ca-sess-test", { argv: ["claude"] });
+    const out = await drain(sess.stdout);
+    const { code } = await sess.exit;
+
+    expect(code).toBe(1);
+    expect(out).toBe('{"type":"a"}\n');
+  });
+
   it("exec sends POST /sandboxes/:name/exec with argv and stdin", async () => {
     fetchMock.mockResolvedValueOnce(
       new Response(
