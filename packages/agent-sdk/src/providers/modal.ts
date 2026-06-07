@@ -20,6 +20,11 @@ import { shellEscape } from "./shared";
 import { readEnvOrSetting } from "../config";
 
 // Lazy-loaded SDK types matching modal@0.7.x
+// proc.stdout/stderr are ModalReadStream<string> — a ReadableStream<string>
+// with a .readText() convenience. We stream the reader for incremental output
+// and fall back to readText() when a reader isn't available.
+type ModalReadStream = ReadableStream<string> & { readText(): Promise<string> };
+
 type ModalSandbox = {
   sandboxId: string;
   exec(
@@ -33,8 +38,8 @@ type ModalSandbox = {
       pty?: boolean;
     },
   ): Promise<{
-    stdout: { readText(): Promise<string> };
-    stderr: { readText(): Promise<string> };
+    stdout: ModalReadStream;
+    stderr: ModalReadStream;
     stdin: { writeText(data: string): Promise<void>; close(): Promise<void> };
     wait(): Promise<number>;
   }>;
@@ -69,6 +74,8 @@ type ModalClient = {
       },
     ): Promise<ModalSandbox>;
     fromId(sandboxId: string): Promise<ModalSandbox>;
+    // Reconnect to a running sandbox by the `name` we passed at create time.
+    fromName(appName: string, name: string): Promise<ModalSandbox>;
     list(opts?: { appId?: string; tags?: Record<string, string> }): AsyncIterable<ModalSandbox>;
   };
 };
@@ -220,11 +227,30 @@ export const modalProvider: ContainerProvider = {
 
   async list(opts) {
     const prefix = opts?.prefix ?? "ca-sess-";
-    // In-memory map — Modal's list() returns sandboxes but we can't
-    // easily reconnect without the app context after a restart.
-    return Array.from(sandboxes.keys())
-      .filter((n) => n.startsWith(prefix))
-      .map((name) => ({ name }));
+    const names = new Set(
+      Array.from(sandboxes.keys()).filter((n) => n.startsWith(prefix)),
+    );
+    // Boot recovery calls list({ prefix: <exact session sandbox name> }). Modal
+    // sandboxes are addressable by the `name` we passed at create time, so we
+    // can reconnect after a restart (which dropped the in-memory map) via
+    // fromName — instead of orphaning a still-running, billing sandbox and
+    // force-recreating. Only attempt when the prefix is a concrete session
+    // name (not the "ca-sess-" sweep prefix). Best-effort.
+    const looksLikeExactName = prefix.startsWith("ca-sess-") && prefix.length > "ca-sess-".length;
+    if (looksLikeExactName && !names.has(prefix)) {
+      try {
+        const client = await getClient();
+        const sb = await client.sandboxes.fromName(APP_NAME, prefix);
+        if (sb) {
+          sandboxes.set(prefix, sb);
+          names.add(prefix);
+        }
+      } catch {
+        // Not found upstream / SDK error — leave it out; exec throws
+        // ContainerGone and the driver re-acquires.
+      }
+    }
+    return Array.from(names).map((name) => ({ name }));
   },
 
   async exec(name, argv, opts) {
@@ -265,7 +291,9 @@ export const modalProvider: ContainerProvider = {
       await proc.stdin.close();
     }
 
-    // Stream stdout as a ReadableStream
+    // Stream stdout as a ReadableStream. proc.stdout is a ReadableStream<string>
+    // so we forward chunks incrementally (live output), falling back to a
+    // buffered readText() if a reader can't be obtained.
     const encoder = new TextEncoder();
     let streamController: ReadableStreamDefaultController<Uint8Array>;
 
@@ -275,10 +303,30 @@ export const modalProvider: ContainerProvider = {
       },
     });
 
-    // Read stdout in background and push to stream
-    const exit = proc.stdout.readText().then(async (text) => {
-      try {
+    const pump = async (): Promise<void> => {
+      const src = proc.stdout as unknown as {
+        getReader?: () => { read(): Promise<{ done: boolean; value?: string | Uint8Array }> };
+        readText?: () => Promise<string>;
+      };
+      if (typeof src.getReader === "function") {
+        const reader = src.getReader();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value != null) {
+            streamController.enqueue(
+              typeof value === "string" ? encoder.encode(value) : value,
+            );
+          }
+        }
+      } else {
+        const text = await proc.stdout.readText();
         if (text) streamController.enqueue(encoder.encode(text));
+      }
+    };
+
+    const exit = pump().then(async () => {
+      try {
         streamController.close();
       } catch {
         // Already closed

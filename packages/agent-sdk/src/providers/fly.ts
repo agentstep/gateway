@@ -57,26 +57,66 @@ function getImage(secrets?: ProviderSecrets): string {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Build the exec request body per the Machines API spec. */
-function buildExecBody(
-  argv: string[],
-  opts?: { stdin?: string; timeoutMs?: number },
-): Record<string, unknown> {
-  const cmd = argv.map((a) => shellEscape(a)).join(" ");
-  // The API documents a `stdin` field but it doesn't actually pipe data
-  // to the command. Encode via base64 to avoid leaking secrets in shell args.
-  let fullCmd: string;
-  if (opts?.stdin) {
-    const b64 = Buffer.from(opts.stdin).toString("base64");
-    fullCmd = `echo '${b64}' | base64 -d | ${cmd}`;
-  } else {
-    fullCmd = cmd;
-  }
+// Above this many base64 chars, inlining stdin as `echo '<b64>'` risks blowing
+// the kernel per-arg limit (MAX_ARG_STRLEN ~128KB). Past it, write the base64
+// to a temp file in bounded chunks (each a separate small exec) instead.
+const STDIN_INLINE_LIMIT = 96_000;
+const STDIN_CHUNK = 48_000;
+
+/** Build the exec request body per the Machines API spec from a final command. */
+function buildExecBody(fullCmd: string, timeoutMs?: number): Record<string, unknown> {
   return {
     // `command` (string[]) is the current field; `cmd` (string) is deprecated.
     command: ["bash", "-c", fullCmd],
-    timeout: opts?.timeoutMs ? Math.ceil(opts.timeoutMs / 1000) : 60,
+    timeout: timeoutMs ? Math.ceil(timeoutMs / 1000) : 60,
   };
+}
+
+/** Run a raw shell command on a machine (used for chunked stdin writes). */
+async function execRaw(
+  name: string,
+  app: string,
+  machineId: string,
+  command: string,
+  secrets: ProviderSecrets | undefined,
+): Promise<void> {
+  const res = await fetch(`${BASE_URL}/v1/apps/${app}/machines/${machineId}/exec`, {
+    method: "POST",
+    headers: headers(secrets),
+    body: JSON.stringify({ command: ["bash", "-c", command], timeout: 60 }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    if (res.status === 404) throw new ContainerGone(name, `Fly machine ${machineId} gone (404): ${text}`);
+    throw new Error(`Fly stdin write failed (${res.status}): ${text}`);
+  }
+}
+
+/**
+ * Build the full shell command, piping stdin in. Small stdin is inlined via
+ * base64; large stdin is written to a temp file in chunks (Fly's Machines exec
+ * has no file-write API, so we append via repeated small execs) to dodge
+ * ARG_MAX, then decoded. base64 contains no single quotes, so quoting is safe.
+ */
+async function buildStdinFullCmd(
+  name: string,
+  app: string,
+  machineId: string,
+  argv: string[],
+  stdin: string | undefined,
+  secrets: ProviderSecrets | undefined,
+): Promise<string> {
+  const cmd = argv.map((a) => shellEscape(a)).join(" ");
+  if (!stdin) return cmd;
+  const b64 = Buffer.from(stdin).toString("base64");
+  if (b64.length <= STDIN_INLINE_LIMIT) {
+    return `echo '${b64}' | base64 -d | ${cmd}`;
+  }
+  const path = `/tmp/_stdin_${Date.now()}_${Math.random().toString(36).slice(2)}.b64`;
+  for (let i = 0; i < b64.length; i += STDIN_CHUNK) {
+    await execRaw(name, app, machineId, `printf '%s' '${b64.slice(i, i + STDIN_CHUNK)}' >> ${path}`, secrets);
+  }
+  return `base64 -d ${path} | ${cmd} ; rm -f ${path}`;
 }
 
 /** Refresh the in-memory name→machineId map from the Fly API. */
@@ -207,7 +247,8 @@ export const flyProvider: ContainerProvider = {
     }
     const app = getAppName(secrets);
 
-    const execBody = buildExecBody(argv, opts);
+    const fullCmd = await buildStdinFullCmd(name, app, machineId, argv, opts?.stdin, secrets);
+    const execBody = buildExecBody(fullCmd, opts?.timeoutMs);
     const timeoutSec = (execBody.timeout as number) ?? 60;
 
     const res = await fetch(
@@ -250,10 +291,8 @@ export const flyProvider: ContainerProvider = {
     }
     const app = getAppName(secrets);
 
-    const execBody = buildExecBody(opts.argv, {
-      stdin: opts.stdin,
-      timeoutMs: opts.timeoutMs ?? getConfig().agentTimeoutMs,
-    });
+    const fullCmd = await buildStdinFullCmd(name, app, machineId, opts.argv, opts.stdin, secrets);
+    const execBody = buildExecBody(fullCmd, opts.timeoutMs ?? getConfig().agentTimeoutMs);
 
     const controller = new AbortController();
     if (opts.signal) {

@@ -37,11 +37,17 @@ type E2BSandbox = {
   kill(): Promise<void>;
 };
 
+type E2BSandboxInfo = { sandboxId: string; metadata?: Record<string, string> };
+type E2BPaginator = { nextItems(): Promise<E2BSandboxInfo[]> };
+
 type E2BSandboxStatic = {
   create(template: string, opts?: {
     apiKey?: string;
     timeoutMs?: number;
     envs?: Record<string, string>;
+    // We tag sandboxes with our session name so list() can correlate live
+    // cloud sandboxes back to gateway sessions after a process restart.
+    metadata?: Record<string, string>;
   }): Promise<E2BSandbox>;
   connect(sandboxId: string, opts?: {
     apiKey?: string;
@@ -49,6 +55,7 @@ type E2BSandboxStatic = {
   kill(sandboxId: string, opts?: {
     apiKey?: string;
   }): Promise<boolean>;
+  list?(opts?: { apiKey?: string }): E2BPaginator;
 };
 
 let SandboxClass: E2BSandboxStatic | null = null;
@@ -112,6 +119,7 @@ export const e2bProvider: ContainerProvider = {
     const sandbox = await Sandbox.create(DEFAULT_TEMPLATE, {
       apiKey,
       timeoutMs: 300_000,
+      metadata: { name },
     });
     sandboxes.set(name, sandbox);
   },
@@ -129,9 +137,43 @@ export const e2bProvider: ContainerProvider = {
 
   async list(opts) {
     const prefix = opts?.prefix ?? "ca-sess-";
-    return Array.from(sandboxes.keys())
-      .filter((n) => n.startsWith(prefix))
-      .map((name) => ({ name }));
+    // Start with live instances created in this process.
+    const names = new Set(
+      Array.from(sandboxes.keys()).filter((n) => n.startsWith(prefix)),
+    );
+    // Also query E2B for sandboxes we tagged with our session name. This lets
+    // boot recovery see still-running sandboxes after a restart (which dropped
+    // the in-memory map) and reconnect to them, instead of orphaning a paid
+    // sandbox and force-recreating. Best-effort: any failure falls back to the
+    // in-memory view (prior behaviour).
+    try {
+      const Sandbox = await loadSdk();
+      const apiKey = process.env.E2B_API_KEY;
+      if (Sandbox.list && apiKey) {
+        const paginator = Sandbox.list({ apiKey });
+        for (let page = 0; page < 20; page++) {
+          const infos = await paginator.nextItems();
+          if (!infos || infos.length === 0) break;
+          for (const info of infos) {
+            const n = info.metadata?.name;
+            if (typeof n === "string" && n.startsWith(prefix)) {
+              names.add(n);
+              if (!sandboxes.has(n) && Sandbox.connect) {
+                try {
+                  sandboxes.set(n, await Sandbox.connect(info.sandboxId, { apiKey }));
+                } catch {
+                  // Couldn't reconnect — leave it out of the live map; exec will
+                  // throw ContainerGone and the driver re-acquires.
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch {
+      // SDK/list unavailable — in-memory view only.
+    }
+    return Array.from(names).map((name) => ({ name }));
   },
 
   async exec(name, argv, opts) {

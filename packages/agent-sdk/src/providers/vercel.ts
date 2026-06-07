@@ -29,17 +29,25 @@ type VercelCommandFinished = {
   stderr(opts?: { signal?: AbortSignal }): Promise<string>;
 };
 
+// A detached command — exposes an incremental log stream so we can forward
+// output live instead of buffering it all until completion.
+type VercelLog = { stream: "stdout" | "stderr"; data: string | Uint8Array };
+type VercelCommand = {
+  logs(): AsyncIterable<VercelLog>;
+  wait(): Promise<{ exitCode: number }>;
+  kill(signal?: string): Promise<unknown>;
+};
+
 type VercelSandbox = {
   sandboxId: string;
   writeFiles(
     files: Array<{ path: string; content: string | Uint8Array; mode?: number }>,
     opts?: { signal?: AbortSignal },
   ): Promise<void>;
-  runCommand(
-    cmd: string,
-    args?: string[],
-    opts?: { signal?: AbortSignal },
-  ): Promise<VercelCommandFinished>;
+  runCommand: {
+    (cmd: string, args?: string[], opts?: { signal?: AbortSignal }): Promise<VercelCommandFinished>;
+    (params: { cmd: string; args?: string[]; detached: true }): Promise<VercelCommand>;
+  };
   stop(opts?: { blocking?: boolean; signal?: AbortSignal }): Promise<unknown>;
 };
 
@@ -203,7 +211,8 @@ export const vercelProvider: ContainerProvider = {
       : cmd;
 
     const encoder = new TextEncoder();
-    let streamController: ReadableStreamDefaultController<Uint8Array>;
+    // Assigned synchronously in start() below, before the IIFE runs.
+    let streamController!: ReadableStreamDefaultController<Uint8Array>;
 
     const stdout = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -211,31 +220,45 @@ export const vercelProvider: ContainerProvider = {
       },
     });
 
-    const resultPromise = sandbox.runCommand("bash", ["-c", fullCmd]);
-
-    const exit = resultPromise.then(async (result) => {
+    // Run detached so we can forward stdout incrementally via the command's
+    // log stream, rather than buffering everything until the turn completes.
+    let command: VercelCommand | null = null;
+    const exit = (async () => {
       try {
-        const out = await result.stdout();
-        streamController.enqueue(encoder.encode(out));
-        streamController.close();
-      } catch {
-        // Already closed
+        command = await sandbox.runCommand({ cmd: "bash", args: ["-c", fullCmd], detached: true });
+        for await (const log of command.logs()) {
+          if (log.stream === "stdout" && log.data != null) {
+            streamController.enqueue(
+              typeof log.data === "string" ? encoder.encode(log.data) : log.data,
+            );
+          }
+        }
+        const finished = await command.wait();
+        try {
+          streamController.close();
+        } catch {
+          // Already closed
+        }
+        return { code: finished.exitCode };
+      } catch (err) {
+        try {
+          streamController.error(err);
+        } catch {
+          // Already closed
+        }
+        throw err;
       }
-      return { code: result.exitCode };
-    }).catch((err) => {
-      try {
-        streamController.error(err);
-      } catch {
-        // Already closed
-      }
-      throw err;
-    });
+    })();
 
     return {
       stdout,
       exit,
       async kill() {
-        // Vercel SDK doesn't support killing individual commands
+        try {
+          await command?.kill();
+        } catch {
+          // Best-effort
+        }
       },
     };
   },
