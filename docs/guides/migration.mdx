@@ -162,7 +162,7 @@ See [Provider Comparison](/infrastructure/provider-comparison) for help choosing
 - `POST /anthropic/v1/environments` — create, update, archive, list, get
 - `POST /anthropic/v1/sessions` — create with `agent_id`, `environment_id`, `vault_ids`, `resources`
 - `POST /anthropic/v1/sessions/:id/events` — send user messages and tool results
-- `GET /anthropic/v1/sessions/:id/stream` — SSE event stream with the same event types
+- `GET /anthropic/v1/sessions/:id/events/stream` — SSE event stream with the same event types
 - `GET /anthropic/v1/sessions/:id/events` — paginated event list
 - `POST /anthropic/v1/vaults` — create, list, get, archive, put/get/delete entries
 - `POST /v1/credentials` — create, list, get, archive

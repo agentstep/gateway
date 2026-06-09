@@ -17,7 +17,6 @@ await build({
   external: [
     ...nodeExternals,
     "libsql",
-    "sharp",
     "cbor-x",
   ],
   packages: "bundle",
