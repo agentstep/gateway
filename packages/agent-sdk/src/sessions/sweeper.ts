@@ -118,7 +118,7 @@ async function evictIdleSessions(): Promise<void> {
   for (const { id: sessionId } of rows) {
     if (stopping) return;
     try {
-      await getActor(sessionId).enqueue(async () => {
+      const evicted = await getActor(sessionId).enqueue(async () => {
         // CRITICAL: runTurn executes OUTSIDE the actor lock (see
         // app/v1/sessions/[id]/events/route.ts — enqueueTurn launches runTurn
         // after releasing the actor). Checking session.status in the DB is
@@ -126,10 +126,10 @@ async function evictIdleSessions(): Promise<void> {
         // POST /events fired off a new turn. The in-memory inFlightRuns map
         // is the authoritative "turn in progress" signal.
         const rt = getRuntime();
-        if (rt.inFlightRuns.has(sessionId)) return;
+        if (rt.inFlightRuns.has(sessionId)) return false;
 
         const row = getSessionRow(sessionId);
-        if (!row || row.status !== "idle" || row.archived_at != null) return;
+        if (!row || row.status !== "idle" || row.archived_at != null) return false;
 
         // Per-env idle_timeout_ms overrides the global sessionMaxAgeMs.
         const env = getEnvironment(row.environment_id);
@@ -138,7 +138,7 @@ async function evictIdleSessions(): Promise<void> {
         // Re-check the TTL inside the lock — if another code path already
         // bumped idle_since forward (turn completed), bail.
         const base = row.idle_since ?? row.created_at;
-        if (base + maxAge >= now) return;
+        if (base + maxAge >= now) return false;
 
         await releaseSession(sessionId);
 
@@ -150,9 +150,16 @@ async function evictIdleSessions(): Promise<void> {
         });
         updateSessionStatus(sessionId, "terminated", "idle_ttl");
         archiveSession(sessionId);
+        return true;
       });
-      dropActor(sessionId);
-      dropEmitter(sessionId);
+      // Only tear down the actor + emitter if we actually evicted. Dropping
+      // them when a guard bailed (a turn started between the SQL scan and the
+      // lock) would orphan live SSE subscribers and split the actor chain for
+      // a still-active session.
+      if (evicted) {
+        dropActor(sessionId);
+        dropEmitter(sessionId);
+      }
     } catch (err) {
       // Per-candidate isolation: one stuck session must not block the rest
       // of the sweep. `releaseSession` is already best-effort internally,

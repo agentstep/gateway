@@ -122,6 +122,12 @@ export async function startExec(
     exitResolve = resolve;
     exitReject = reject;
   });
+  // Always keep `exit` handled. On the interrupt path the driver's read loop
+  // throws and returns without awaiting `exit`, but the watcher below still
+  // rejects it on abort — with no handler that is an unhandledRejection,
+  // which terminates the process under plain `node` (no Next.js to absorb it).
+  // This no-op handler does not consume the rejection for a real `await`.
+  void exit.catch(() => {});
 
   // Tee the body: one side goes to the consumer, the other is a watcher that
   // resolves `exit` when the stream ends or rejects on abort.

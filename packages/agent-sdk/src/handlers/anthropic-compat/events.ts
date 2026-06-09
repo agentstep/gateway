@@ -8,7 +8,7 @@ import { getActor } from "../../sessions/actor";
 import { interruptSession } from "../../sessions/interrupt";
 import { runTurn, writePermissionResponse } from "../../sessions/driver";
 import { enqueueTurn } from "../../queue";
-import { pushPendingUserInput, type TurnInput } from "../../state";
+import { pushPendingUserInput, isTurnActive, markTurnStarting, clearTurnStarting, type TurnInput } from "../../state";
 import { isProxied } from "../../db/proxy";
 import { resolveRemoteSessionId } from "../../db/sync";
 import { forwardToAnthropic } from "../../proxy/forward";
@@ -595,7 +595,10 @@ export function handlePostEvents(request: Request, sessionId: string): Promise<R
 
           const inp: TurnInput = { kind: "text", eventId: row.id, text };
           const currentStatus = getSessionRow(sessionId)?.status ?? "idle";
-          if (currentStatus === "running" || sawInterrupt) {
+          // `isTurnActive` covers the sandbox-acquire window where a turn is
+          // scheduled but status is still "idle" — without it a second POST
+          // during acquire would launch a concurrent turn on the same session.
+          if (currentStatus === "running" || sawInterrupt || isTurnActive(sessionId)) {
             pushPendingUserInput({ sessionId, input: inp });
           } else {
             pendingForTurn.push(inp);
@@ -721,7 +724,7 @@ export function handlePostEvents(request: Request, sessionId: string): Promise<R
           });
           const inp: TurnInput = { kind: "text", eventId: descRow.id, text: event.description };
           const currentStatus = getSessionRow(sessionId)?.status ?? "idle";
-          if (currentStatus === "running" || sawInterrupt) {
+          if (currentStatus === "running" || sawInterrupt || isTurnActive(sessionId)) {
             pushPendingUserInput({ sessionId, input: inp });
           } else {
             pendingForTurn.push(inp);
@@ -736,6 +739,12 @@ export function handlePostEvents(request: Request, sessionId: string): Promise<R
     if (appended.pendingForTurn.length > 0) {
       const row = getSessionRow(sessionId);
       if (row) {
+        // Mark the session active synchronously, before yielding to the event
+        // loop, so a near-simultaneous second POST (whose actor turn runs
+        // next) sees the turn as in-flight and queues instead of launching a
+        // concurrent run. Cleared by runTurn's finally (inline path) or
+        // explicitly below (work-queue path, where status="running" guards).
+        markTurnStarting(sessionId);
         const env = getEnvironment(row.environment_id);
         // Decide: inline execution vs work queue.
         // Use work queue ONLY for self_hosted envs when no inline executor
@@ -764,6 +773,9 @@ export function handlePostEvents(request: Request, sessionId: string): Promise<R
             origin: "server",
             processedAt: nowMs(),
           });
+          // Work queued for a remote worker — no inline runTurn will run, so
+          // clear the marker here (status="running" now guards re-entry).
+          clearTurnStarting(sessionId);
         } else {
           // Inline execution — gateway serve has a provider available
           void enqueueTurn(row.environment_id, () => runTurn(sessionId, appended.pendingForTurn)).catch(

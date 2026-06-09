@@ -46,15 +46,16 @@ function state(): State {
 }
 
 /**
- * Enqueue a turn-runner against the given environment. Throws `serverBusy`
- * immediately if the queue depth limit is exceeded.
+ * Enqueue a turn-runner against the given environment. Rejects with
+ * `serverBusy` if the queue depth limit is exceeded. (Rejecting rather than
+ * throwing synchronously matters because callers use
+ * `void enqueueTurn(...).catch(...)` — a sync throw would escape that catch.)
  */
 export function enqueueTurn<T>(envId: string, run: () => Promise<T>): Promise<T> {
   const s = state();
-  const cfg = getConfig();
   const maxDepth = 100; // generous — each job is lightweight
   if (s.queue.length >= maxDepth) {
-    throw serverBusy("turn queue is full");
+    return Promise.reject(serverBusy("turn queue is full"));
   }
 
   return new Promise<T>((resolve, reject) => {

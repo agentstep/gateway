@@ -27,8 +27,8 @@
 import { appendEventsBatch, appendEvent } from "./bus";
 import { newTrace, childSpan, type TraceContext } from "./trace";
 import type { AppendInput } from "../db/events";
-import { getRuntime, drainPendingUserInputs, type TurnInput } from "../state";
-import { getSession, setBackendSessionId, updateSessionStatus, updateSessionMutable, bumpSessionStats, setIdleSince, getSessionRow, getOutcomeCriteria, setOutcomeCriteria } from "../db/sessions";
+import { getRuntime, drainPendingUserInputs, clearTurnStarting, markTurnStarting, type TurnInput } from "../state";
+import { getSession, setBackendSessionId, updateSessionStatus, updateSessionMutable, bumpSessionStats, setIdleSince, getSessionRow, getOutcomeCriteria, setOutcomeCriteria, setSessionSandbox } from "../db/sessions";
 import { getAgent } from "../db/agents";
 import { getEnvironment } from "../db/environments";
 import { getConfig } from "../config";
@@ -74,7 +74,54 @@ function formatStopReason(reason: string, eventIds?: string[]): Record<string, u
   return { type: reason };
 }
 
+/**
+ * Public entry point. Wraps {@link runTurnInner} so that *no* unexpected
+ * throw can strand a session in `running` forever: a large amount of work
+ * (usage persistence, file sync, provider re-resolution, dynamic imports)
+ * runs after the stream loop's own try/finally, and a throw there would
+ * otherwise leave status="running", inFlightRuns deleted (so interrupt is a
+ * no-op) and the sweeper skipping it. The catch here is the backstop that
+ * always returns the session to idle. The `finally` clears the
+ * scheduled-turn marker and drains any inputs that arrived mid-turn — the
+ * inner happy/abort paths drain too, so this only matters for error exits.
+ */
 export async function runTurn(
+  sessionId: string,
+  inputs: TurnInput[],
+  _depth = 0,
+  parentTrace?: TraceContext,
+): Promise<void> {
+  try {
+    await runTurnInner(sessionId, inputs, _depth, parentTrace);
+  } catch (err) {
+    console.error(`[driver] runTurn crashed for ${sessionId}:`, err);
+    try {
+      getRuntime().inFlightRuns.delete(sessionId);
+      const msg = err instanceof Error ? err.message : String(err);
+      appendEvent(sessionId, {
+        type: "session.error",
+        payload: { error: { type: "server_error", message: msg } },
+        origin: "server",
+        processedAt: nowMs(),
+      });
+      appendEvent(sessionId, {
+        type: "session.status_idle",
+        payload: { stop_reason: { type: "error" } },
+        origin: "server",
+        processedAt: nowMs(),
+      });
+      updateSessionStatus(sessionId, "idle", "error");
+      setIdleSince(sessionId, nowMs());
+    } catch (e2) {
+      console.error(`[driver] failed to mark ${sessionId} idle after crash:`, e2);
+    }
+  } finally {
+    clearTurnStarting(sessionId);
+    scheduleDrain(sessionId);
+  }
+}
+
+async function runTurnInner(
   sessionId: string,
   inputs: TurnInput[],
   _depth = 0,
@@ -487,6 +534,27 @@ export async function runTurn(
   // Both backends' wrappers read env until blank line; from there claude
   // pipes stdin into `claude`, while opencode captures stdin into $PROMPT
   // and re-passes it as a trailing argv entry to `opencode`.
+  // The wrapper reads `KEY=value` lines until a blank line. A key with odd
+  // characters or a value containing a newline would corrupt that framing —
+  // a blank line *inside* a value terminates the env block early, spilling
+  // every remaining env var (other secrets included) into the prompt. Reject
+  // such entries up front rather than leak them.
+  const badEnv = Object.entries(turnBuild.env).find(
+    ([k, v]) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(k) || /[\r\n]/.test(String(v)),
+  );
+  if (badEnv) {
+    emit("span.model_request_end", { model: agent.model.id, model_usage: null, status: "error" });
+    emit("session.error", {
+      error: {
+        type: "invalid_request_error",
+        message: `environment variable "${badEnv[0]}" has an unsupported name or a value containing a newline`,
+      },
+    });
+    emit("session.status_idle", { stop_reason: formatStopReason("error") });
+    updateSessionStatus(sessionId, "idle", "error");
+    return;
+  }
+
   const envLines = Object.entries(turnBuild.env)
     .map(([k, v]) => `${k}=${v}`)
     .join("\n");
@@ -572,6 +640,11 @@ export async function runTurn(
         await provider.delete(sandboxName, secrets).catch((err) => {
           console.warn(`[driver] best-effort delete of reaped sandbox ${sandboxName} failed:`, err);
         });
+        // Clear the stale binding BEFORE re-acquiring. acquireForFirstTurn
+        // short-circuits and returns the existing sandbox_name if the row
+        // still has one — without this the "re-acquire" would hand back the
+        // very sandbox we just deleted, and the retry would 404 again.
+        setSessionSandbox(sessionId, null);
         sandboxName = await acquireForFirstTurn(sessionId);
         // The wrapper script + skills + resources are tied to the sandbox;
         // re-install them on the new sandbox before retrying the turn.
@@ -710,23 +783,31 @@ export async function runTurn(
       buffer = "";
     }
 
+    // CLI providers (docker/podman/apple) close stdout cleanly when their
+    // child is killed on interrupt, so the read loop above exits via `done`
+    // rather than throwing — detect that here so we report `interrupted`
+    // instead of a spurious end_turn/backend error. (Sprites' HTTP exec
+    // throws on abort and is handled in the catch below.)
+    if (controller.signal.aborted) aborted = true;
+
     const exitResult = await exec.exit;
     if (process.env.DEBUG_NDJSON && exitResult) {
       console.log(`[driver] ${sessionId} exit code: ${(exitResult as { code?: number }).code}`);
     }
-    // If the process exited with non-zero and the translator received no
-    // meaningful output, surface an error. We check toolCallsInTurn as a
-    // proxy for "translator saw events" — if the CLI responded then crashed
-    // (exit code 2), the response is already committed and an error event
-    // would be confusing (Bug #3).
+    // If the turn produced no meaningful output, surface an error. We can't
+    // rely on the exit code alone: sprites' HTTP exec has no real exit status
+    // and always reports 0, so a CLI that died instantly (bad install, OOM)
+    // would otherwise look like a silent, empty end_turn. `translatorSawOutput`
+    // (a tool call or a stop reason) is the real signal that the CLI ran.
+    // A normal turn always sets a stop reason, so this won't false-positive.
     const exitCode = (exitResult as { code?: number })?.code;
     const translatorSawOutput = toolCallsInTurn > 0 || translator.getTurnResult()?.stopReason != null;
-    if (exitCode !== 0 && !translatorSawOutput) {
+    if (!aborted && !translatorSawOutput) {
       const code = exitCode ?? "unknown";
       emit("session.error", {
         error: {
           type: "backend_error",
-          message: `Backend CLI exited with code ${code} and no output. Check that the engine is installed and the API key is valid.`,
+          message: `Backend CLI produced no output (exit code ${code}). Check that the engine is installed and the API key is valid.`,
         },
       });
     }
@@ -744,6 +825,12 @@ export async function runTurn(
         emit("session.error", { error: { type: "server_error", message: msg, classified } });
         emit("session.status_rescheduled", { retry_attempt: retry.attempt, retry_delay_ms: retry.delayMs });
         runtime.inFlightRuns.delete(sessionId);
+        // Stop the sentinel pollers before sleeping — otherwise they keep
+        // polling the (possibly dead) sandbox throughout the backoff and can
+        // emit duplicate tool/permission events. The finally clears them too,
+        // but the finally doesn't run until after the recursive call returns.
+        if (permissionPollTimer) clearInterval(permissionPollTimer);
+        if (toolBridgePollTimer) clearInterval(toolBridgePollTimer);
         await retryDelay(retry.delayMs);
         // Re-run the turn (recursive call with original inputs + incremented depth)
         return runTurn(sessionId, inputs, _depth + 1, parentTrace);
@@ -1111,8 +1198,10 @@ async function handleServerSideTool(
 function scheduleDrain(sessionId: string): void {
   const pending = drainPendingUserInputs(sessionId);
   if (pending.length === 0) return;
-  // Fire-and-forget — the next turn runs on its own, and the status flag
-  // (flipped to "running" by runTurn's first step) prevents concurrent turns.
+  // Mark the session active synchronously BEFORE launching the turn so a
+  // POST that races the (async) sandbox acquire is queued rather than
+  // starting a second concurrent turn. runTurn's finally clears the marker.
+  markTurnStarting(sessionId);
   void runTurn(sessionId, pending).catch((err: unknown) => {
     console.error(`[driver] scheduleDrain runTurn failed:`, err);
   });

@@ -26,6 +26,15 @@ export function installShutdownHandlers(): void {
   process.on("SIGINT", () => {
     void shutdown("SIGINT");
   });
+
+  // Last-resort backstop: a stray rejected promise (e.g. an exec watcher that
+  // rejects after the driver moved on) must not terminate the gateway. Node's
+  // default for unhandledRejection is to crash the process; log and carry on
+  // instead. Individual call sites still handle their own rejections — this
+  // only catches the ones that slip through.
+  process.on("unhandledRejection", (reason) => {
+    console.error("[unhandledRejection]", reason);
+  });
 }
 
 let shuttingDown = false;
