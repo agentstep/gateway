@@ -534,20 +534,23 @@ async function runTurnInner(
   // Both backends' wrappers read env until blank line; from there claude
   // pipes stdin into `claude`, while opencode captures stdin into $PROMPT
   // and re-passes it as a trailing argv entry to `opencode`.
-  // The wrapper reads `KEY=value` lines until a blank line. A key with odd
-  // characters or a value containing a newline would corrupt that framing —
-  // a blank line *inside* a value terminates the env block early, spilling
-  // every remaining env var (other secrets included) into the prompt. Reject
-  // such entries up front rather than leak them.
-  const badEnv = Object.entries(turnBuild.env).find(
-    ([k, v]) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(k) || /[\r\n]/.test(String(v)),
+  //
+  // The wrapper reads `KEY=base64(value)` lines until a blank line. Values are
+  // base64-encoded so that secrets containing newlines (PEM/SSH keys) survive
+  // intact — a raw newline inside a value would otherwise terminate the env
+  // block early and spill every remaining var (other secrets included) into
+  // the prompt. The key name must still be a valid shell identifier since the
+  // wrapper `export`s it directly. (Wrapper and driver ship together, so the
+  // encode/decode contract can't drift across a release.)
+  const badKey = Object.keys(turnBuild.env).find(
+    (k) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(k),
   );
-  if (badEnv) {
+  if (badKey) {
     emit("span.model_request_end", { model: agent.model.id, model_usage: null, status: "error" });
     emit("session.error", {
       error: {
         type: "invalid_request_error",
-        message: `environment variable "${badEnv[0]}" has an unsupported name or a value containing a newline`,
+        message: `environment variable "${badKey}" has an unsupported name (must be a valid shell identifier)`,
       },
     });
     emit("session.status_idle", { stop_reason: formatStopReason("error") });
@@ -556,7 +559,7 @@ async function runTurnInner(
   }
 
   const envLines = Object.entries(turnBuild.env)
-    .map(([k, v]) => `${k}=${v}`)
+    .map(([k, v]) => `${k}=${Buffer.from(String(v)).toString("base64")}`)
     .join("\n");
   const stdin = `${envLines}\n\n${turnBuild.stdin}`;
 
@@ -867,6 +870,12 @@ async function runTurnInner(
     emit("session.status_idle", { stop_reason: formatStopReason("interrupted") });
     updateSessionStatus(sessionId, "idle", "interrupted");
     setIdleSince(sessionId, nowMs());
+    // Stop the orphaned engine on the sandbox BEFORE draining queued input.
+    // Sprites' HTTP exec abort only closes our connection — without this a
+    // rapid re-prompt would start a second engine on the same sandbox,
+    // racing the first on shared `--resume` state. Awaited so the next turn
+    // (scheduleDrain or a racing POST) can't overlap it.
+    await killTurnProcess(provider, sandboxName, secrets, agent.engine);
     scheduleDrain(sessionId);
     return;
   }
@@ -1195,6 +1204,47 @@ async function handleServerSideTool(
  * subsequent event POSTs. Concurrent turns for the same session are
  * prevented by the status flag.
  */
+/**
+ * Engine CLI binary names for best-effort process matching on interrupt.
+ * factory's binary is `droid`; the rest match the engine name.
+ */
+const ENGINE_BINARY: Record<string, string> = {
+  claude: "claude",
+  codex: "codex",
+  gemini: "gemini",
+  opencode: "opencode",
+  factory: "droid",
+  pi: "pi",
+};
+
+/**
+ * Best-effort: stop the engine process left running on the sandbox after an
+ * interrupt. The wrapper records its PID in /tmp/.agent-turn.pid; we kill that
+ * process group (the whole turn tree) and, as a fallback, the engine binary by
+ * exact name. Never throws — a missing pidfile, a non-group-leader wrapper, or
+ * an absent `pkill` just means we did what we could. (CLI providers already
+ * SIGKILL the child on abort, so for them this is a harmless no-op.)
+ */
+async function killTurnProcess(
+  provider: ContainerProvider,
+  sandboxName: string,
+  secrets: Record<string, string> | undefined,
+  engine: string,
+): Promise<void> {
+  const binary = ENGINE_BINARY[engine];
+  const killByName = binary ? `pkill -9 -x ${binary} 2>/dev/null; ` : "";
+  const script =
+    'PID=$(cat /tmp/.agent-turn.pid 2>/dev/null); ' +
+    'if [ -n "$PID" ]; then kill -9 -"$PID" 2>/dev/null; kill -9 "$PID" 2>/dev/null; fi; ' +
+    killByName +
+    "true";
+  try {
+    await provider.exec(sandboxName, ["sh", "-c", script], { secrets, timeoutMs: 5000 });
+  } catch (err) {
+    console.warn(`[driver] best-effort interrupt kill on ${sandboxName} failed:`, err);
+  }
+}
+
 function scheduleDrain(sessionId: string): void {
   const pending = drainPendingUserInputs(sessionId);
   if (pending.length === 0) return;

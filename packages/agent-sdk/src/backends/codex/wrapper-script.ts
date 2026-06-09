@@ -12,8 +12,12 @@ export const CODEX_WRAPPER_PATH = "/tmp/.codex-wrapper";
 
 const SANDBOX_WRAPPER_SCRIPT = [
   "#!/bin/bash",
-  // Read env vars from stdin until blank line
-  'while IFS= read -r line; do [ -z "$line" ] && break; export "$line"; done',
+  // Record our PID so the gateway can stop this turn's process group on
+  // interrupt (sprites HTTP exec has no kill API). Best-effort.
+  'echo $$ > /tmp/.agent-turn.pid 2>/dev/null || true',
+  // Read env vars from stdin until blank line. Values are base64-encoded by
+  // the driver so secrets with newlines (PEM/SSH keys) survive the framing.
+  'while IFS= read -r line; do [ -z "$line" ] && break; __k=${line%%=*}; __v=$(printf "%s" "${line#*=}" | base64 -d); export "$__k=$__v"; done',
   // Save remaining stdin (the prompt) to a temp file — avoids partial-stdin
   // issues when exec replaces the process, matching the claude wrapper pattern.
   'PROMPT_FILE=$(mktemp)',

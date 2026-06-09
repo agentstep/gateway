@@ -48,7 +48,8 @@ describe("M1 e2e smoke", () => {
     const installCmd = [
       "cat > /home/sprite/.claude-wrapper << 'WRAPPER'",
       "#!/bin/bash",
-      'while IFS= read -r line; do [ -z "$line" ] && break; export "$line"; done',
+      // Mirror production: env values arrive base64-encoded, one KEY=val per line.
+      'while IFS= read -r line; do [ -z "$line" ] && break; __k=${line%%=*}; __v=$(printf "%s" "${line#*=}" | base64 -d); export "$__k=$__v"; done',
       'exec claude "$@"',
       "WRAPPER",
       "chmod +x /home/sprite/.claude-wrapper",
@@ -90,7 +91,8 @@ describe("M1 e2e smoke", () => {
 
     const isOAuth = CLAUDE_TOKEN!.startsWith("sk-ant-oat");
     const envKey = isOAuth ? "CLAUDE_CODE_OAUTH_TOKEN" : "ANTHROPIC_API_KEY";
-    const stdinBody = `${envKey}=${CLAUDE_TOKEN}\n\nsay hello in exactly one word`;
+    // Env value is base64-encoded to match the wrapper's decode step.
+    const stdinBody = `${envKey}=${Buffer.from(CLAUDE_TOKEN!).toString("base64")}\n\nsay hello in exactly one word`;
 
     const res = await fetch(spriteUrl(`/exec?${params.toString()}`), {
       method: "POST",
