@@ -1,6 +1,7 @@
 import { routeWrap, jsonOk } from "../http";
 import { writeSetting, readSetting } from "../config";
-import { badRequest, notFound } from "../errors";
+import { badRequest } from "../errors";
+import { requireGlobalAdmin } from "../auth/scope";
 
 /** Non-secret settings — plain JSON-like values the UI can read verbatim. */
 const NON_SECRET_KEYS = new Set([
@@ -46,7 +47,13 @@ function maskSecret(value: string): string {
 }
 
 export function handlePutSetting(request: Request): Promise<Response> {
-  return routeWrap(request, async () => {
+  return routeWrap(request, async ({ auth }) => {
+    // Settings are instance-global (not tenant-scoped) and include provider
+    // credentials and server-side-fetched URLs (skills_feed_url). Only a
+    // global admin may read or write them — routeWrap authenticates but does
+    // not authorize.
+    requireGlobalAdmin(auth);
+
     const body = await request.json().catch(() => null) as { key?: string; value?: string } | null;
     if (!body?.key || typeof body.value !== "string") {
       throw badRequest("key and value are required");
@@ -62,7 +69,8 @@ export function handlePutSetting(request: Request): Promise<Response> {
 }
 
 export function handleGetSetting(request: Request, key: string): Promise<Response> {
-  return routeWrap(request, async () => {
+  return routeWrap(request, async ({ auth }) => {
+    requireGlobalAdmin(auth);
     if (!ALLOWED_KEYS.includes(key)) {
       throw badRequest(`setting "${key}" is not readable via API`);
     }
