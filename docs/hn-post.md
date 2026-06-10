@@ -1,6 +1,8 @@
 # Show HN post
 
-**Title:** Show HN: AgentStep Gateway – self-hosted drop-in replacement for the Claude Managed Agents API
+**Title:** Show HN: Self-hosted drop-in replacement for the Claude Managed Agents API
+
+<!-- 74 chars — HN truncates titles at 80; the project name arrives via the URL. -->
 
 **URL:** https://github.com/agentstep/gateway
 
@@ -16,7 +18,7 @@ The part that turned out to be the most fun: the engine behind the API is plugga
 
 A few design decisions that might be interesting:
 
-- The CLI and the HTTP server execute the same handler functions — the CLI constructs `Request` objects and calls them directly, so there's exactly one code path and the ~1,400 tests cover both.
+- The CLI and the HTTP server execute the same handler functions — the CLI constructs `Request` objects and calls them directly, so there's exactly one code path and the ~1,150 tests cover both.
 - Per-session mutations are serialized through a FIFO promise-chain actor; the event log is append-only with the DB authoritative and an EventEmitter as live tail.
 - There's a hybrid mode: mark an environment `provider: "anthropic"` and the gateway syncs your agent config to the real hosted API (idempotent via config hash), proxies the session, and tees every SSE event back into your local log. Vault *shapes* sync; secret values never leave your box. So you can use Anthropic's hosted sandboxes today and move in-house later without client changes.
 - Whole thing bundles to a single `gateway.js` via esbuild, with the React console inlined as one HTML file.

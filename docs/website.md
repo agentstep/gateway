@@ -42,7 +42,7 @@ import anthropic
 
 client = anthropic.Anthropic(
     base_url="http://localhost:4000/anthropic",
-    api_key="ask-...",                # your gateway key
+    api_key="ck_...",                 # your gateway key
 )
 
 agent = client.beta.agents.create(
@@ -113,7 +113,7 @@ Multi-tenant isolation with admin and user roles. An append-only audit log of ev
      ⭐ GitHub stars · contributors · "X,000 sessions replayed this month"
      One developer quote beats ten adjectives. -->
 
-**1,400+ automated tests** cover the full API surface, every engine, and the vault cryptography. The CLI and the server run the *same* code — what you test locally is what serves production.
+**1,100+ automated tests** cover the full API surface, every engine, and the vault cryptography. The CLI and the server run the *same* code — what you test locally is what serves production.
 
 ---
 
@@ -134,7 +134,7 @@ The honest read: if a hosted platform meets your requirements, use it — they'r
 ## Pricing
 
 ### Community — free, forever
-Everything an individual or a small team needs, with no telemetry and no strings: every engine, every sandbox provider, the full API, vaults, outcomes, dreaming, the web console, and the CLI. Up to 20 API keys and a week of audit history.
+Everything an individual or a small team needs, with no strings — and no telemetry unless you opt in: every engine, every sandbox provider, the full API, vaults, outcomes, dreaming, the web console, and the CLI. Up to 20 API keys and a week of audit history.
 
 ### Enterprise — one license key
 For platform teams running the gateway as shared, governed infrastructure: multi-tenancy with roles, budgets, per-key analytics, a cross-provider key pool, Redis-backed rate limiting for replicas, and unlimited keys and audit retention. Licensing validates offline — the gateway never phones home per request.
