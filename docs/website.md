@@ -1,6 +1,6 @@
 # AgentStep Gateway
 
-> ## The drop-in replacement for Managed Agents. With full control.
+> ## A drop-in replacement for the Claude Managed Agents API. With full control.
 >
 > AgentStep Gateway is an open-source, self-hosted implementation of the Claude Managed Agents API. Change one line — the `base_url` — and your agents keep working exactly as they do today. Everything else changes hands: the models, the infrastructure, and the data are now yours.
 
@@ -174,3 +174,5 @@ npx @agentstep/gateway quickstart
 **Drop it in. Take control.**
 
 [GitHub](https://github.com/agentstep/gateway) · [Documentation](https://github.com/agentstep/gateway/tree/main/docs) · [agentstep.com](https://agentstep.com) · Apache-2.0
+
+*Claude is a trademark of Anthropic, PBC; Gemini is a trademark of Google LLC. Names are used solely to identify API compatibility. AgentStep is an independent project — not affiliated with or endorsed by Anthropic or Google.*

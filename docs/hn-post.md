@@ -1,6 +1,6 @@
 # Show HN post
 
-**Title:** Show HN: AgentStep Gateway – self-hosted, drop-in replacement for Claude Managed Agents
+**Title:** Show HN: AgentStep Gateway – self-hosted drop-in replacement for the Claude Managed Agents API
 
 **URL:** https://github.com/agentstep/gateway
 
