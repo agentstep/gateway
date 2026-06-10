@@ -86,7 +86,17 @@ export function inferEngineFromModel(model: string): string | null {
  * synchronously. Agent creation handlers should call getModels()
  * for a more complete check when they need it.
  */
-export function isValidModelForEngine(engine: string, model: string): boolean {
+export function isValidModelForEngine(
+  engine: string,
+  model: string,
+  opts: { baseUrlOverride?: boolean } = {},
+): boolean {
+  // A base-url override points the claude engine (Claude Code honours
+  // ANTHROPIC_BASE_URL) at an arbitrary Anthropic-compatible endpoint, so
+  // any model ID the endpoint serves is fair game. Other engines have no
+  // equivalent mechanism — the override must not loosen their checks.
+  if (opts.baseUrlOverride && engine === "claude") return true;
+
   const allowed = FALLBACK_MODELS[engine];
   if (!allowed) return true; // Unknown engine — defer to backend validation
 

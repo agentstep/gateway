@@ -112,6 +112,16 @@ export interface AgentVersionRow {
 
 export interface ModelConfig {
   speed?: "standard" | "fast";
+  /**
+   * Anthropic-compatible endpoint override for the claude engine. Claude
+   * Code honours ANTHROPIC_BASE_URL, so the claude harness can drive any
+   * backend implementing /v1/messages + /v1/messages/count_tokens (Ollama's
+   * compat endpoint, provider-native compat endpoints, a LiteLLM hop).
+   * Auth: the gateway key is passed through if set; a real per-agent token
+   * can be supplied via a vault entry (ANTHROPIC_API_KEY /
+   * ANTHROPIC_AUTH_TOKEN), which overrides the build-time env.
+   */
+  anthropic_base_url?: string;
 }
 
 export interface AgentSkill {

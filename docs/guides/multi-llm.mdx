@@ -68,6 +68,7 @@ The default engine. Runs the Claude Code CLI inside the container with `--print`
 - Skills installation
 - OAuth token support (`CLAUDE_CODE_OAUTH_TOKEN`)
 - `--fast` mode via `model_config.speed: "fast"`
+- Custom Anthropic-compatible endpoints via `model_config.anthropic_base_url`
 
 **Configuration**:
 ```json
@@ -78,6 +79,38 @@ The default engine. Runs the Claude Code CLI inside the container with `--print`
   "tools": [{ "type": "agent_toolset_20260401" }]
 }
 ```
+
+#### Any model through the Claude Code harness
+
+Claude Code honours `ANTHROPIC_BASE_URL`, so the claude engine can drive any
+backend that implements the Anthropic Messages API (`/v1/messages` and
+`/v1/messages/count_tokens`): Ollama's compatibility endpoint for local
+models, provider-native compatible endpoints, or a LiteLLM proxy in front of
+anything else. Because it stays on the Claude Code harness, you keep the
+features other engines lack — mid-turn custom tool re-entry, the permission
+bridge, and skills.
+
+Set `model_config.anthropic_base_url` on a claude-engine agent. With an
+override in place, any model ID is accepted — it's passed through to the
+endpoint as-is:
+
+```json
+{
+  "name": "local-agent",
+  "engine": "claude",
+  "model": { "id": "gemma4" },
+  "model_config": { "anthropic_base_url": "http://host.docker.internal:11434" }
+}
+```
+
+Authentication: the gateway's Anthropic key is passed through when set;
+endpoints that need their own token can get one from a vault entry
+(`ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`), which overrides the
+build-time value. Endpoints that ignore auth (Ollama) need nothing.
+
+Caveats: the endpoint must implement token counting; prompt caching and
+beta features degrade gracefully when unsupported; harness prompts are
+tuned for Claude, so tool-call quality varies by model.
 
 ### Codex (`codex`)
 

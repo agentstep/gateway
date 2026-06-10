@@ -42,6 +42,20 @@ function buildTurn(input: BuildTurnInput): BuildTurnResult {
   });
   const env = buildClaudeAuthEnv();
 
+  // Point the CLI at an Anthropic-compatible endpoint when the agent has a
+  // base-url override (local Ollama, provider compat endpoints, LiteLLM).
+  // Claude Code refuses to start with no credential at all, but endpoints
+  // like Ollama ignore the value — inject a placeholder when the gateway
+  // has no key. Vault entries merge AFTER buildTurn and override the env,
+  // so a real per-agent key from a vault still wins.
+  const baseUrl = agent.model_config?.anthropic_base_url;
+  if (baseUrl) {
+    env.ANTHROPIC_BASE_URL = baseUrl;
+    if (!env.ANTHROPIC_API_KEY && !env.CLAUDE_CODE_OAUTH_TOKEN) {
+      env.ANTHROPIC_API_KEY = "gateway-base-url-placeholder";
+    }
+  }
+
   // With --bare, MCP servers must be passed explicitly via --mcp-config.
   // Merge the tool bridge server (if agent has custom tools) with any
   // agent-level mcp_servers into a single --mcp-config JSON blob.
