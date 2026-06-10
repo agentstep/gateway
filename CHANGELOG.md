@@ -34,9 +34,14 @@ Pre-release hardening pass. Intermediate 0.5.x releases are tracked on
   clears the stale sandbox binding instead of handing back the deleted name.
 - **No more stuck "running" sessions** — the turn driver is wrapped so any
   post-stream error returns the session to idle.
-- **Concurrent-turn race** during sandbox acquire eliminated.
-- Multi-line environment values are rejected rather than corrupting the
-  wrapper's env framing (which could leak other secrets into the prompt).
+- **Concurrent-turn race** during sandbox acquire eliminated. The
+  scheduled-turn marker is ownership-checked (epochs), so a finishing turn
+  can no longer clear the marker belonging to the next queued turn; a full
+  turn queue no longer leaves the session permanently marked active.
+- Environment values are base64-framed to the wrapper, so multi-line secrets
+  (PEM/SSH keys) survive intact — including trailing newlines — instead of
+  corrupting the env framing (which could leak other secrets into the
+  prompt); invalid variable names are rejected.
 - Idle sweeper no longer orphans live SSE subscribers for sessions it didn't
   evict; the event-stream backlog now pages past 500 events.
 

@@ -41,6 +41,9 @@ export async function routeWrap(
     // Reject oversized request bodies up front (before reading them into
     // memory). Default 64MB — comfortably above the 50MB file-upload cap
     // plus multipart overhead; override with GATEWAY_MAX_BODY_BYTES.
+    // Only requests that declare Content-Length are covered — a chunked
+    // upload bypasses this; per-handler caps (e.g. getMaxFileSize) remain
+    // the backstop there.
     const declaredLen = Number(request.headers.get("content-length"));
     if (Number.isFinite(declaredLen) && declaredLen > maxRequestBodyBytes()) {
       status = 413;
