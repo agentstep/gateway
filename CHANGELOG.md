@@ -4,6 +4,47 @@ All notable changes to AgentStep Gateway are documented here. Dates are UTC.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project uses [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+Pre-release hardening pass. Intermediate 0.5.x releases are tracked on
+[GitHub Releases](https://github.com/agentstep/gateway/releases).
+
+### Security
+
+- **Settings API now requires global admin** — `GET`/`PUT /v1/settings` were
+  authenticated but not authorized, allowing any valid key to read or
+  overwrite instance-global provider credentials and the server-fetched
+  skills-feed URL.
+- **File-upload path traversal fixed** — upload filenames are reduced to a
+  single safe path component, closing an arbitrary host-file-write vector.
+- **OAuth callback hardened** — interpolated HTML is escaped (reflected XSS)
+  and `authorize_url`/`token_endpoint` are restricted to public https hosts
+  (SSRF).
+- **CORS** no longer reflects arbitrary origins; only loopback and
+  `GATEWAY_CORS_ORIGINS` are echoed with credentials.
+- List endpoints clamp `limit`; requests carry a 64MB body cap
+  (`GATEWAY_MAX_BODY_BYTES`).
+
+### Fixed
+
+- **Interrupts no longer crash the gateway** — exec watchers and CLI exec
+  timeouts could raise unhandled promise rejections; added handlers plus a
+  process-level backstop.
+- **Reaped-sandbox recovery works** — the ContainerGone re-acquire path now
+  clears the stale sandbox binding instead of handing back the deleted name.
+- **No more stuck "running" sessions** — the turn driver is wrapped so any
+  post-stream error returns the session to idle.
+- **Concurrent-turn race** during sandbox acquire eliminated. The
+  scheduled-turn marker is ownership-checked (epochs), so a finishing turn
+  can no longer clear the marker belonging to the next queued turn; a full
+  turn queue no longer leaves the session permanently marked active.
+- Environment values are base64-framed to the wrapper, so multi-line secrets
+  (PEM/SSH keys) survive intact — including trailing newlines — instead of
+  corrupting the env framing (which could leak other secrets into the
+  prompt); invalid variable names are rejected.
+- Idle sweeper no longer orphans live SSE subscribers for sessions it didn't
+  evict; the event-stream backlog now pages past 500 events.
+
 ## [0.4.12] — 2026-04-25
 
 ### Added

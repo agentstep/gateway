@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { routeWrap, jsonOk, paginatedOk } from "../../http";
+import { routeWrap, jsonOk, paginatedOk, parseLimit } from "../../http";
 import { getDb } from "../../db/client";
 import { createVault, getVault, updateVault, archiveVault, deleteVault, listVaults, listEntries, getEntry, setEntry, deleteEntry } from "../../db/vaults";
 import { getAgent } from "../../db/agents";
@@ -111,7 +111,7 @@ export function handleListVaults(request: Request): Promise<Response> {
   return routeWrap(request, async ({ auth, request: req }) => {
     const url = new URL(req.url);
     const agentId = url.searchParams.get("agent_id") ?? undefined;
-    const requestedLimit = Number(url.searchParams.get("limit") || "100");
+    const requestedLimit = parseLimit(url.searchParams.get("limit"), 100);
     const data = listVaults({ agent_id: agentId, tenantFilter: tenantFilter(auth) });
     return paginatedOk(data, requestedLimit);
   });

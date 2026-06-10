@@ -42,7 +42,7 @@ gateway serve
 The server starts on `http://localhost:4000` (loopback only by default). You'll see:
 
 ```
-  AgentStep Gateway v0.4.24
+  AgentStep Gateway v0.5.42
 
   → UI:      http://localhost:4000
   → API:     http://localhost:4000/v1
@@ -71,7 +71,7 @@ An agent is a versioned config: model, engine, and system prompt.
 **curl:**
 
 ```bash
-curl -s -X POST http://localhost:4000/v1/agents \
+curl -s -X POST http://localhost:4000/anthropic/v1/agents \
   -H "x-api-key: $GATEWAY_KEY" \
   -H "anthropic-beta: managed-agents-2026-04-01" \
   -H "Content-Type: application/json" \
@@ -96,7 +96,7 @@ An environment is the sandbox where the agent runs. Use `docker` if Docker is in
 **curl:**
 
 ```bash
-curl -s -X POST http://localhost:4000/v1/environments \
+curl -s -X POST http://localhost:4000/anthropic/v1/environments \
   -H "x-api-key: $GATEWAY_KEY" \
   -H "anthropic-beta: managed-agents-2026-04-01" \
   -H "Content-Type: application/json" \
@@ -125,7 +125,7 @@ A session links an agent version to an environment. Create the session, then sen
 **curl — create session:**
 
 ```bash
-SESSION=$(curl -s -X POST http://localhost:4000/v1/sessions \
+SESSION=$(curl -s -X POST http://localhost:4000/anthropic/v1/sessions \
   -H "x-api-key: $GATEWAY_KEY" \
   -H "anthropic-beta: managed-agents-2026-04-01" \
   -H "Content-Type: application/json" \
@@ -136,12 +136,14 @@ echo "Session: $SESSION"
 
 **curl — send a turn:**
 
+A turn is a `user.message` event posted to the session's `events` endpoint:
+
 ```bash
-curl -s -X POST "http://localhost:4000/v1/sessions/$SESSION/turns" \
+curl -s -X POST "http://localhost:4000/anthropic/v1/sessions/$SESSION/events" \
   -H "x-api-key: $GATEWAY_KEY" \
   -H "anthropic-beta: managed-agents-2026-04-01" \
   -H "Content-Type: application/json" \
-  -d '{"content": [{"type": "text", "text": "Write a hello world Python script and run it."}]}'
+  -d '{"events": [{"type": "user.message", "content": [{"type": "text", "text": "Write a hello world Python script and run it."}]}]}'
 ```
 
 **CLI (creates session + starts chat loop in one step):**
@@ -160,7 +162,7 @@ Open an SSE connection to receive events as the agent works. The stream closes a
 **curl:**
 
 ```bash
-curl -N "http://localhost:4000/v1/sessions/$SESSION/stream" \
+curl -N "http://localhost:4000/anthropic/v1/sessions/$SESSION/events/stream" \
   -H "x-api-key: $GATEWAY_KEY" \
   -H "anthropic-beta: managed-agents-2026-04-01" \
   -H "Accept: text/event-stream"
@@ -170,17 +172,16 @@ You'll see a series of SSE events:
 
 ```
 data: {"type":"session.status_running","seq":1,...}
-data: {"type":"message_start","seq":2,...}
-data: {"type":"content_block_delta","seq":3,"delta":{"type":"text_delta","text":"Here's a..."}}
-data: {"type":"tool_use","seq":4,...}
-data: {"type":"tool_result","seq":5,...}
-data: {"type":"session.status_idle","seq":6,...}
+data: {"type":"agent.message","seq":2,...}
+data: {"type":"agent.tool_use","seq":3,...}
+data: {"type":"agent.tool_result","seq":4,...}
+data: {"type":"session.status_idle","seq":5,...}
 ```
 
 To fetch the completed event log at any time:
 
 ```bash
-curl -s "http://localhost:4000/v1/sessions/$SESSION/events" \
+curl -s "http://localhost:4000/anthropic/v1/sessions/$SESSION/events" \
   -H "x-api-key: $GATEWAY_KEY" \
   -H "anthropic-beta: managed-agents-2026-04-01" \
   | jq '.data[].type'
@@ -195,5 +196,5 @@ If you want to skip the manual steps above, the `quickstart` command does everyt
 ```bash
 gateway quickstart
 # or with flags for non-interactive use:
-gateway quickstart --engine claude --model '{"id":"claude-sonnet-4-6"}' --provider docker
+gateway quickstart --engine claude --model claude-sonnet-4-6 --provider docker
 ```

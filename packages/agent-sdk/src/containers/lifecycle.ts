@@ -36,6 +36,7 @@ import { nowMs } from "../util/clock";
 import { resolveProvider, tryResolveProvider } from "../providers/registry";
 import { dockerProvider } from "../providers/docker";
 import { resolveVaultSecrets } from "../providers/resolve-secrets";
+import { isTurnActive } from "../state";
 import type { SessionResource, AgentSkill } from "../types";
 import { ulid } from "ulid";
 
@@ -831,6 +832,10 @@ async function evictOldestIdleInEnv(envId: string): Promise<string | null> {
   type Candidate = { sessionId: string; idleSince: number };
   const eligible: Candidate[] = [];
   for (const entry of candidates) {
+    // Skip sessions with a turn running or scheduled — DB status can still
+    // read "idle" during the sandbox-acquire window, so checking the in-memory
+    // signal as well prevents evicting a sandbox out from under a live turn.
+    if (isTurnActive(entry.sessionId)) continue;
     const row = getSessionRow(entry.sessionId);
     if (!row || row.status !== "idle" || row.archived_at != null) continue;
     const idleSince = row.idle_since ?? row.created_at;

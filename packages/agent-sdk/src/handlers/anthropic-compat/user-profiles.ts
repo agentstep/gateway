@@ -2,7 +2,7 @@
  * HTTP handlers for user profiles (per-user credential scoping).
  */
 import { z } from "zod";
-import { routeWrap, jsonOk, paginatedOk } from "../../http";
+import { routeWrap, jsonOk, paginatedOk, parseLimit } from "../../http";
 import { badRequest, notFound } from "../../errors";
 import { resolveCreateTenant, tenantFilter } from "../../auth/scope";
 import {
@@ -62,7 +62,7 @@ export function handleCreateUserProfile(request: Request): Promise<Response> {
 export function handleListUserProfiles(request: Request): Promise<Response> {
   return routeWrap(request, async ({ auth }) => {
     const url = new URL(request.url);
-    const limit = Math.min(Number(url.searchParams.get("limit") ?? 50), 100);
+    const limit = parseLimit(url.searchParams.get("limit"), 50, 100);
     const afterId = url.searchParams.get("after_id") ?? undefined;
 
     const filter = tenantFilter(auth);

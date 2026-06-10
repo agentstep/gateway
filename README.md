@@ -91,7 +91,7 @@ Prerequisites: Node.js 22+, and at least one of `ANTHROPIC_API_KEY`, `OPENAI_API
 2. **Create an environment** -- pick a sandbox provider (Docker, Sprites, E2B, ...).
 3. **Start a session** -- the gateway lazy-acquires a container on first turn.
 4. **Send messages** -- `POST /anthropic/v1/sessions/:id/events` with `user.message`.
-5. **Stream results** -- `GET /anthropic/v1/sessions/:id/stream` returns SSE events: `agent.message`, `agent.tool_use`, `session.status_idle`.
+5. **Stream results** -- `GET /anthropic/v1/sessions/:id/events/stream` returns SSE events: `agent.message`, `agent.tool_use`, `session.status_idle`.
 
 Each turn drives the agent CLI inside the container. NDJSON output is translated into the Managed Agents event model and streamed to your client.
 
@@ -112,7 +112,7 @@ gateway quickstart                     # interactive setup
 gateway serve [--host 0.0.0.0]        # start server
 gateway agents create --name bot --model claude-sonnet-4-6
 gateway environments create --name dev --provider docker
-gateway sessions create --agent <id> --environment <id>
+gateway sessions create --agent <id> --env <id>
 gateway chat <session-id>              # interactive chat with markdown rendering
 ```
 

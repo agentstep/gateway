@@ -23,7 +23,7 @@ export function registerAgentCommands(parent: Command): void {
     .requiredOption("--name <name>", "Agent name")
     .requiredOption("--model <model>", "Model identifier")
     .option("--system <prompt>", "System prompt")
-    .option("--engine <engine>", "Agent harness: claude, opencode, codex, anthropic", "claude")
+    .option("--engine <engine>", "Agent harness: claude, opencode, codex, gemini, factory, pi", "claude")
     .option("--confirmation-mode", "Enable tool confirmation")
     .action(async (opts) => {
       const b = await initBackend();

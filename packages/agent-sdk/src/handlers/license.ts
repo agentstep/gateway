@@ -2,8 +2,9 @@
  * /v1/license — public license info endpoint.
  *
  * Returns the plan (community/enterprise) and enabled features so the
- * UI can show/hide enterprise controls. No auth required — the plan
- * tier isn't a secret. The raw license key is never returned.
+ * UI can show/hide enterprise controls. Requires a valid API key (via
+ * routeWrap) but no special role — the plan tier isn't a secret. The raw
+ * license key is never returned.
  */
 import { routeWrap, jsonOk } from "../http";
 import { getLicenseInfo } from "../license";

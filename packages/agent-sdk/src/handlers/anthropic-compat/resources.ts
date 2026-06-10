@@ -7,7 +7,7 @@
  * DELETE /v1/sessions/:id/resources/:rid      — remove resource
  */
 import { z } from "zod";
-import { routeWrap, jsonOk } from "../../http";
+import { routeWrap, jsonOk, parseLimit } from "../../http";
 import { getDb } from "../../db/client";
 import { getSession, updateSessionResources } from "../../db/sessions";
 import {
@@ -101,7 +101,7 @@ export function handleListResources(request: Request, sessionId: string): Promis
     if (!session) throw notFound(`session not found: ${sessionId}`);
 
     const url = new URL(request.url);
-    const limit = Number(url.searchParams.get("limit") || "100");
+    const limit = parseLimit(url.searchParams.get("limit"));
     const after_id = url.searchParams.get("after_id") || undefined;
     const before_id = url.searchParams.get("before_id") || undefined;
 

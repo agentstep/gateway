@@ -115,7 +115,7 @@ The gateway implements custom tools via a synthetic MCP stdio server (the "tool 
 
 1. The bridge writes the call to `/tmp/tool-bridge/request.json` and creates a `/tmp/tool-bridge/pending` sentinel.
 2. The session stops with `stop_reason: "custom_tool_call"`. Your application receives the tool name and input via the event stream.
-3. Your application calls the real implementation and sends the result back with `POST /v1/sessions/:id/turns`:
+3. Your application calls the real implementation and sends the result back with `POST /anthropic/v1/sessions/:id/events`:
 
 ```json
 {

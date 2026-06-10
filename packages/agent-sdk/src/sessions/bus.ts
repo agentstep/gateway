@@ -238,11 +238,19 @@ export function subscribe(
   const em = getOrCreateEmitter(sessionId);
   let lastDeliveredSeq = fromSeq;
 
-  // Backlog drain
-  const backlog = listEvents(sessionId, { limit: 500, order: "asc", afterSeq: fromSeq });
-  for (const row of backlog) {
-    onEvent(rowToManagedEvent(row));
-    if (row.seq > lastDeliveredSeq) lastDeliveredSeq = row.seq;
+  // Backlog drain — page until exhausted. A single 500-row read would leave a
+  // permanent gap for a client reconnecting with an old after_seq on a chatty
+  // session (tool-heavy turns easily exceed 500 events): it would get the
+  // first 500, then live events with much higher seqs, and never the middle.
+  const PAGE = 500;
+  for (;;) {
+    const backlog = listEvents(sessionId, { limit: PAGE, order: "asc", afterSeq: lastDeliveredSeq });
+    if (backlog.length === 0) break;
+    for (const row of backlog) {
+      onEvent(rowToManagedEvent(row));
+      if (row.seq > lastDeliveredSeq) lastDeliveredSeq = row.seq;
+    }
+    if (backlog.length < PAGE) break;
   }
 
   const handler = (row: EventRow) => {

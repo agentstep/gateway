@@ -8,7 +8,7 @@ Every interaction with a session goes through an **event log**: an append-only s
 ## Send events
 
 ```http
-POST /v1/sessions/:id/events
+POST /anthropic/v1/sessions/:id/events
 ```
 
 The body is a batch of one or more events:
@@ -207,7 +207,7 @@ Common `stop_reason` values:
 
 ### `session.status_terminated`
 
-The session has been permanently closed (e.g. after a `DELETE /v1/sessions/:id` request).
+The session has been permanently closed (e.g. after a `DELETE /anthropic/v1/sessions/:id` request).
 
 ```json
 {
@@ -282,7 +282,7 @@ Span events carry OpenTelemetry-style trace context. Each event carries `trace_i
 ## Stream events over SSE
 
 ```http
-GET /v1/sessions/:id/stream
+GET /anthropic/v1/sessions/:id/events/stream
 ```
 
 Opens a Server-Sent Events connection that delivers events in real time. Each SSE message carries the event type and the full JSON event object:
@@ -308,7 +308,7 @@ data: {"type":"ping"}
 On reconnect, pass the `Last-Event-ID` header with the last `seq` you received, or the `after_seq` query parameter. The stream will replay any events you missed before switching to live delivery:
 
 ```http
-GET /v1/sessions/:id/stream?after_seq=5
+GET /anthropic/v1/sessions/:id/events/stream?after_seq=5
 Last-Event-ID: 5
 ```
 
@@ -371,7 +371,7 @@ Each turn's stream starts exactly where the previous one ended. The same contain
 ## List past events
 
 ```http
-GET /v1/sessions/:id/events
+GET /anthropic/v1/sessions/:id/events
 ```
 
 Returns a paginated list of all events from the session's log.
@@ -407,7 +407,7 @@ When an agent has a custom tool defined, the session enters a requires-action st
 
 ```typescript
 // Minimal custom tool loop
-const stream = openSSE(`/v1/sessions/${sessionId}/stream`);
+const stream = openSSE(`/anthropic/v1/sessions/${sessionId}/events/stream`);
 
 for await (const event of stream) {
   if (event.type === "session.status_idle" && event.stop_reason === "custom_tool_call") {

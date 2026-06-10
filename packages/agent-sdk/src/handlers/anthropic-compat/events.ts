@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { routeWrap, jsonOk, paginatedOk } from "../../http";
+import { routeWrap, jsonOk, paginatedOk, parseLimit } from "../../http";
 import { getDb } from "../../db/client";
 import { getSession, getSessionRow, setOutcomeCriteria, bumpSessionStats, updateSessionMutable } from "../../db/sessions";
 import { listEvents, rowToManagedEvent } from "../../db/events";
@@ -8,7 +8,7 @@ import { getActor } from "../../sessions/actor";
 import { interruptSession } from "../../sessions/interrupt";
 import { runTurn, writePermissionResponse } from "../../sessions/driver";
 import { enqueueTurn } from "../../queue";
-import { pushPendingUserInput, type TurnInput } from "../../state";
+import { pushPendingUserInput, isTurnActive, markTurnStarting, clearTurnStarting, type TurnInput } from "../../state";
 import { isProxied } from "../../db/proxy";
 import { resolveRemoteSessionId } from "../../db/sync";
 import { forwardToAnthropic } from "../../proxy/forward";
@@ -595,7 +595,10 @@ export function handlePostEvents(request: Request, sessionId: string): Promise<R
 
           const inp: TurnInput = { kind: "text", eventId: row.id, text };
           const currentStatus = getSessionRow(sessionId)?.status ?? "idle";
-          if (currentStatus === "running" || sawInterrupt) {
+          // `isTurnActive` covers the sandbox-acquire window where a turn is
+          // scheduled but status is still "idle" — without it a second POST
+          // during acquire would launch a concurrent turn on the same session.
+          if (currentStatus === "running" || sawInterrupt || isTurnActive(sessionId)) {
             pushPendingUserInput({ sessionId, input: inp });
           } else {
             pendingForTurn.push(inp);
@@ -721,7 +724,7 @@ export function handlePostEvents(request: Request, sessionId: string): Promise<R
           });
           const inp: TurnInput = { kind: "text", eventId: descRow.id, text: event.description };
           const currentStatus = getSessionRow(sessionId)?.status ?? "idle";
-          if (currentStatus === "running" || sawInterrupt) {
+          if (currentStatus === "running" || sawInterrupt || isTurnActive(sessionId)) {
             pushPendingUserInput({ sessionId, input: inp });
           } else {
             pendingForTurn.push(inp);
@@ -736,6 +739,13 @@ export function handlePostEvents(request: Request, sessionId: string): Promise<R
     if (appended.pendingForTurn.length > 0) {
       const row = getSessionRow(sessionId);
       if (row) {
+        // Mark the session active synchronously, before yielding to the event
+        // loop, so a near-simultaneous second POST (whose actor turn runs
+        // next) sees the turn as in-flight and queues instead of launching a
+        // concurrent run. Cleared by runTurn's finally (inline path) or
+        // explicitly below (work-queue path, where status="running" guards).
+        // The epoch scopes the clear to THIS mark — see clearTurnStarting.
+        const markerEpoch = markTurnStarting(sessionId);
         const env = getEnvironment(row.environment_id);
         // Decide: inline execution vs work queue.
         // Use work queue ONLY for self_hosted envs when no inline executor
@@ -764,10 +774,17 @@ export function handlePostEvents(request: Request, sessionId: string): Promise<R
             origin: "server",
             processedAt: nowMs(),
           });
+          // Work queued for a remote worker — no inline runTurn will run, so
+          // clear the marker here (status="running" now guards re-entry).
+          clearTurnStarting(sessionId, markerEpoch);
         } else {
           // Inline execution — gateway serve has a provider available
           void enqueueTurn(row.environment_id, () => runTurn(sessionId, appended.pendingForTurn)).catch(
             (err: unknown) => {
+              // runTurn never ran (e.g. queue full), so its finally can't
+              // clear the marker — clear here or the session is stuck
+              // "active" forever and every later input queues without draining.
+              clearTurnStarting(sessionId, markerEpoch);
               console.error(`[events] enqueueTurn failed:`, err);
             },
           );
@@ -795,7 +812,7 @@ export function handleListEvents(request: Request, sessionId: string): Promise<R
     if (!session) throw notFound(`session ${sessionId} not found`);
 
     const url = new URL(request.url);
-    const limit = Number(url.searchParams.get("limit") ?? "50");
+    const limit = parseLimit(url.searchParams.get("limit"), 50);
     const order = (url.searchParams.get("order") === "desc" ? "desc" : "asc") as "asc" | "desc";
     const afterSeq = Number(url.searchParams.get("after_seq") ?? url.searchParams.get("page") ?? "0");
 

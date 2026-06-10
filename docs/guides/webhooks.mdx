@@ -112,5 +112,5 @@ timeout. If your receiver returns non-2xx or times out, the delivery
 is dropped silently. There is no retry queue.
 
 If you need durable delivery, subscribe to the SSE stream
-(`/v1/sessions/:id/stream`) which is replay-safe via the
+(`/anthropic/v1/sessions/:id/events/stream`) which is replay-safe via the
 `last-event-id` header.

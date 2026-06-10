@@ -150,10 +150,33 @@ import { cors } from "hono/cors";
 
 const app = new Hono();
 
-// CORS: only allow same-origin requests. Without this, any site can make
-// authenticated API calls if the user's API key is in localStorage.
-app.use("/v1/*", cors({ origin: (origin) => origin, credentials: true }));
-app.use("/anthropic/v1/*", cors({ origin: (origin) => origin, credentials: true }));
+// CORS: echo only loopback origins (the bundled SPA) plus any operator-
+// configured origins (GATEWAY_CORS_ORIGINS, comma-separated). Reflecting
+// *every* origin — the previous behaviour — meant any website could make
+// credentialed cross-origin calls; an explicit allowlist closes that.
+// Requests with no Origin header (same-origin / non-browser clients) are
+// unaffected since CORS only governs cross-origin browser requests.
+const extraCorsOrigins = (process.env.GATEWAY_CORS_ORIGINS ?? "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+function allowOrigin(origin: string): string | null {
+  if (!origin) return origin; // no Origin header — nothing to allow/deny
+  if (extraCorsOrigins.includes(origin)) return origin;
+  try {
+    const host = new URL(origin).hostname;
+    if (host === "localhost" || host === "127.0.0.1" || host === "::1") {
+      return origin;
+    }
+  } catch {
+    /* malformed Origin — fall through to deny */
+  }
+  return null;
+}
+
+app.use("/v1/*", cors({ origin: allowOrigin, credentials: true }));
+app.use("/anthropic/v1/*", cors({ origin: allowOrigin, credentials: true }));
 
 // Security headers for all responses
 app.use("*", async (c, next) => {
