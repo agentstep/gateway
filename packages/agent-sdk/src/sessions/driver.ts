@@ -75,6 +75,25 @@ function formatStopReason(reason: string, eventIds?: string[]): Record<string, u
 }
 
 /**
+ * Run `task` to settlement while invoking `onBeat` every `intervalMs`.
+ * Used to emit `span.outcome_evaluation_ongoing` heartbeats during long
+ * grader calls (the hosted API's cadence). The beat stops the moment the
+ * task settles — resolution and rejection both pass through untouched.
+ */
+export async function withHeartbeat<T>(
+  task: Promise<T>,
+  onBeat: () => void,
+  intervalMs: number,
+): Promise<T> {
+  const timer = setInterval(onBeat, intervalMs);
+  try {
+    return await task;
+  } finally {
+    clearInterval(timer);
+  }
+}
+
+/**
  * Public entry point. Wraps {@link runTurnInner} so that *no* unexpected
  * throw can strand a session in `running` forever: a large amount of work
  * (usage persistence, file sync, provider re-resolution, dynamic imports)
@@ -1157,19 +1176,11 @@ async function runTurnInner(
 
         // Heartbeat while the grader call is in flight, matching the hosted
         // API's span.outcome_evaluation_ongoing cadence for long evaluations.
-        const heartbeat = setInterval(() => {
-          emit("span.outcome_evaluation_ongoing", { outcome_id: outcomeId, iteration });
-        }, 10_000);
-        let evaluation: Awaited<ReturnType<typeof runGraderEvaluation>>;
-        try {
-          evaluation = await runGraderEvaluation(
-            criteria.rubric,
-            lastAgentText,
-            agent.model.id,
-          );
-        } finally {
-          clearInterval(heartbeat);
-        }
+        const evaluation = await withHeartbeat(
+          runGraderEvaluation(criteria.rubric, lastAgentText, agent.model.id),
+          () => emit("span.outcome_evaluation_ongoing", { outcome_id: outcomeId, iteration }),
+          10_000,
+        );
 
         // Track grader token usage in session stats
         if (evaluation.usage.input_tokens || evaluation.usage.output_tokens) {

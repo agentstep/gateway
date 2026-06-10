@@ -50,6 +50,9 @@ agent = client.beta.agents.create(
     model="gpt-5.4",                  # or claude-opus-4-8, gemini-3.1-pro,
     system="You review pull requests.",  # or llama3.3 running on your GPU
 )
+env = client.beta.environments.create(
+    name="dev", config={"type": "self_hosted", "provider": "docker"},
+)
 session = client.beta.sessions.create(agent=agent.id, environment_id=env.id)
 ```
 
