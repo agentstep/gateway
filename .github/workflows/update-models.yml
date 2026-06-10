@@ -5,6 +5,12 @@ on:
     - cron: "0 6 * * *" # Daily at 6am UTC
   workflow_dispatch: # Manual trigger
 
+# The default GITHUB_TOKEN is read-only in this repo; the catalog-update
+# branch push and `gh pr create` both need explicit write grants.
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
   update:
     runs-on: ubuntu-latest
@@ -84,9 +90,11 @@ jobs:
               TOTAL=$(python3 -c "import json; print(len(json.load(open('/tmp/curated.json'))))")
               echo "Curated: $TOTAL models"
             else
-              echo "Curation failed — using pre-filtered list"
-              cp /tmp/pre-filtered.json packages/agent-sdk/src/lib/model-catalog.json
-              TOTAL=$(python3 -c "import json; print(len(json.load(open('/tmp/pre-filtered.json'))))")
+              # A key exists but curation failed (billing/outage). Shipping the
+              # raw pre-filtered list would replace the curated catalog with a
+              # worse one — keep the existing catalog instead (no diff, no PR).
+              echo "Curation failed — keeping existing catalog unchanged"
+              TOTAL=$(python3 -c "import json; print(len(json.load(open('packages/agent-sdk/src/lib/model-catalog.json'))))")
             fi
           else
             echo "No ANTHROPIC_API_KEY — using pre-filtered list"
