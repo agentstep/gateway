@@ -68,7 +68,7 @@ jobs:
 
           RULES:
           - Keep ALL versions in the current generation of each model family
-          - Anthropic: keep claude-4.x only (haiku-4-5, sonnet-4-5/4-6, opus-4-5/4-6/4-7). Remove ALL claude-3.x.
+          - Anthropic: keep the Mythos class (claude-fable-*, claude-mythos-*) and ALL claude-4.x (haiku-4-5, sonnet-4-5/4-6, opus-4-5 and later, including opus-4-8). Remove ALL claude-3.x.
           - OpenAI: keep gpt-4.1+, ALL gpt-5.x, codex-mini-latest, o1-pro, o3-mini/pro, o4-mini. Remove gpt-3.5, gpt-4, gpt-4o, chatgpt-4o.
           - Google: keep gemini-2.0+, 2.5+, 3.x. Include flash, pro, and -lite variants.
           - Remove date-stamped models (20240307, 20250219, etc.)

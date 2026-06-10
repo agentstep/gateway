@@ -79,6 +79,25 @@ On `sessions create`, the gateway:
 | Session | Created remotely | All events stored locally too — the UI reads from the local bus. |
 | API keys | Never synced | Resolved at request time; passed to Anthropic as the `x-api-key` header. |
 
+## Model caveats in sync-and-proxy mode
+
+Two things to know when running Mythos-class models (`claude-fable-5`,
+`claude-mythos-5`) through the hosted side:
+
+- **Data retention**: Fable 5 requires 30-day retention on the Anthropic
+  side and is not available to organizations configured for zero data
+  retention — those requests fail with `400 invalid_request_error`. This is
+  an Anthropic org setting, independent of the gateway's own local
+  zero-data-retention controls (which only govern what the gateway stores).
+- **Tokenizer**: Fable 5 tokenizes the same content to roughly 30% more
+  tokens than Opus-tier models. Session `max_tokens` quotas and budgets
+  calibrated against older models will trip correspondingly sooner — re-baseline
+  per-session limits when switching an agent to Fable 5.
+- **Refusal stop reason**: Fable-class safety classifiers can end a turn with
+  `stop_reason: "refusal"` (an HTTP 200, possibly with empty content). The
+  gateway surfaces this as a `session.status_idle` with
+  `stop_reason: {type: "refusal"}`, matching the hosted wire format.
+
 ## Required headers
 
 All calls to Anthropic include:

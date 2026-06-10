@@ -203,3 +203,46 @@ describe("translator", () => {
     expect(translator.getTurnResult()?.stopReason).toBe("custom_tool_call");
   });
 });
+
+describe("refusal stop reason (Fable 5 safety classifiers)", () => {
+  it("maps an assistant refusal to stopReason 'refusal' on turn result", () => {
+    const { translator } = run([
+      {
+        type: "assistant",
+        message: {
+          content: [],
+          stop_reason: "refusal",
+          usage: { input_tokens: 10, output_tokens: 0 },
+        },
+      },
+      { type: "result", subtype: "success", usage: { input_tokens: 10, output_tokens: 0 } },
+    ]);
+    expect(translator.getTurnResult()?.stopReason).toBe("refusal");
+  });
+
+  it("a normal end_turn assistant message keeps stopReason 'end_turn'", () => {
+    const { translator } = run([
+      {
+        type: "assistant",
+        message: {
+          content: [{ type: "text", text: "done" }],
+          stop_reason: "end_turn",
+          usage: { input_tokens: 10, output_tokens: 5 },
+        },
+      },
+      { type: "result", subtype: "success", usage: { input_tokens: 10, output_tokens: 5 } },
+    ]);
+    expect(translator.getTurnResult()?.stopReason).toBe("end_turn");
+  });
+
+  it("a refusal mid-stream followed by more assistant output is still end_turn", () => {
+    // Only the LAST assistant stop_reason counts — a retried/continued turn
+    // that ends normally must not be reported as refused.
+    const { translator } = run([
+      { type: "assistant", message: { content: [], stop_reason: "refusal" } },
+      { type: "assistant", message: { content: [{ type: "text", text: "ok" }], stop_reason: "end_turn" } },
+      { type: "result", subtype: "success" },
+    ]);
+    expect(translator.getTurnResult()?.stopReason).toBe("end_turn");
+  });
+});
