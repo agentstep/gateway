@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { routeWrap, jsonOk, paginatedOk } from "../../http";
+import { routeWrap, jsonOk, paginatedOk, parseLimit } from "../../http";
 import { getDb } from "../../db/client";
 import { getSession, getSessionRow, setOutcomeCriteria, bumpSessionStats, updateSessionMutable } from "../../db/sessions";
 import { listEvents, rowToManagedEvent } from "../../db/events";
@@ -807,7 +807,7 @@ export function handleListEvents(request: Request, sessionId: string): Promise<R
     if (!session) throw notFound(`session ${sessionId} not found`);
 
     const url = new URL(request.url);
-    const limit = Number(url.searchParams.get("limit") ?? "50");
+    const limit = parseLimit(url.searchParams.get("limit"), 50);
     const order = (url.searchParams.get("order") === "desc" ? "desc" : "asc") as "asc" | "desc";
     const afterSeq = Number(url.searchParams.get("after_seq") ?? url.searchParams.get("page") ?? "0");
 

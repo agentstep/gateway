@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { routeWrap, jsonOk, paginatedOk } from "../http";
+import { routeWrap, jsonOk, paginatedOk, parseLimit } from "../http";
 import { getDb } from "../db/client";
 import {
   createMemoryStore,
@@ -83,7 +83,7 @@ export function handleListMemoryStores(request: Request): Promise<Response> {
   return routeWrap(request, async ({ auth, request: req }) => {
     const url = new URL(req.url);
     const agentId = url.searchParams.get("agent_id") ?? undefined;
-    const requestedLimit = Number(url.searchParams.get("limit") || "100");
+    const requestedLimit = parseLimit(url.searchParams.get("limit"), 100);
     const data = listMemoryStores({
       agent_id: agentId,
       tenantFilter: tenantFilter(auth),
@@ -157,7 +157,7 @@ export function handleListMemories(request: Request, storeId: string): Promise<R
   return routeWrap(request, async ({ auth, request: req }) => {
     loadStoreForCaller(auth, storeId); // tenant guard
     const url = new URL(req.url);
-    const requestedLimit = Number(url.searchParams.get("limit") || "100");
+    const requestedLimit = parseLimit(url.searchParams.get("limit"), 100);
     const data = listMemories(storeId);
     return paginatedOk(data, requestedLimit);
   });
@@ -212,7 +212,7 @@ export function handleListMemoryVersions(request: Request, storeId: string): Pro
     loadStoreForCaller(auth, storeId); // tenant guard
     const url = new URL(req.url);
     const memoryId = url.searchParams.get("memory_id") ?? undefined;
-    const requestedLimit = Number(url.searchParams.get("limit") || "100");
+    const requestedLimit = parseLimit(url.searchParams.get("limit"), 100);
     const cursor = url.searchParams.get("cursor") ?? undefined;
     const data = listMemoryVersions(storeId, {
       memoryId,

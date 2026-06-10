@@ -11,7 +11,7 @@
  */
 import { z } from "zod";
 import { inflateRawSync } from "node:zlib";
-import { routeWrap, jsonOk, paginatedOk, decodeCursor } from "../http";
+import { routeWrap, jsonOk, paginatedOk, decodeCursor, parseLimit } from "../http";
 import { badRequest, notFound } from "../errors";
 import {
   createSkill,
@@ -254,10 +254,7 @@ export function handleListSkillVersions(
     if (!skill) throw notFound(`skill ${skillId} not found`);
 
     const url = new URL(req.url);
-    const limit = Math.min(
-      Math.max(Number(url.searchParams.get("limit") || "20"), 1),
-      100,
-    );
+    const limit = parseLimit(url.searchParams.get("limit"), 20, 100);
     const cursor = decodeCursor(url.searchParams.get("after_id"));
 
     const versions = listSkillVersions(skillId, { limit, cursor });
