@@ -173,4 +173,4 @@ npx @agentstep/gateway quickstart
 
 **Drop it in. Take control.**
 
-[GitHub](https://github.com/agentstep/gateway) · [Documentation](#) · [agentstep.com](https://agentstep.com)
+[GitHub](https://github.com/agentstep/gateway) · [Documentation](https://github.com/agentstep/gateway/tree/main/docs) · [agentstep.com](https://agentstep.com) · Apache-2.0

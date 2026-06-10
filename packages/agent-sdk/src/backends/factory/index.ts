@@ -5,9 +5,11 @@
  * (like opencode). The wrapper script captures stdin and re-passes it as
  * the trailing positional argv.
  *
- * Custom tool re-entry is NOT supported by factory — droid exec has no
- * equivalent of claude's --input-format stream-json. buildTurn rejects
- * toolResults.length > 0 with an invalid_request_error.
+ * Custom tool re-entry is not wired up yet: we drive droid through its
+ * one-shot exec mode. droid now ships `--input-format stream-json` /
+ * `stream-jsonrpc` for multi-turn stdin driving, which could support
+ * re-entry (future work). buildTurn rejects toolResults.length > 0 with
+ * an invalid_request_error.
  */
 import { ApiError } from "../../errors";
 import type { Backend, BuildTurnInput, BuildTurnResult } from "../types";

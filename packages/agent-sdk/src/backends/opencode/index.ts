@@ -3,9 +3,10 @@
  * containers. See wrapper-script.ts and setup.ts for the sandbox-side
  * install + invocation flow.
  *
- * Custom tool re-entry (the stream-json user frame path claude uses) is NOT
- * supported by opencode — `opencode run` has no equivalent input format.
- * buildTurn rejects `toolResults.length > 0` with an invalid_request_error.
+ * Custom tool re-entry is not wired up yet: we drive opencode through its
+ * one-shot `opencode run` mode, which has no mid-turn input. opencode's
+ * `serve` HTTP API could support it (future work). buildTurn rejects
+ * `toolResults.length > 0` with an invalid_request_error.
  */
 import { ApiError } from "../../errors";
 import type { Backend, BuildTurnInput, BuildTurnResult } from "../types";

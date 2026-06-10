@@ -780,6 +780,31 @@ export async function runTurn(
     emit("session.status_idle", { stop_reason: formatStopReason("interrupted") });
     updateSessionStatus(sessionId, "idle", "interrupted");
     setIdleSince(sessionId, nowMs());
+
+    // If an outcome loop was still running, surface a terminal evaluation
+    // event instead of leaving the outcome dangling (mirrors the hosted
+    // API's `interrupted` outcome result).
+    const criteria = getOutcomeCriteria(sessionId) as {
+      outcome_id?: string;
+      rubric?: string;
+      grader_iteration?: number;
+      status?: string;
+    } | null;
+    if (criteria?.rubric && criteria?.status === "running") {
+      emit("span.outcome_evaluation_end", {
+        outcome_id: criteria.outcome_id ?? null,
+        result: "interrupted",
+        explanation: "Session was interrupted before the outcome was satisfied.",
+        iteration: criteria.grader_iteration ?? 0,
+        usage: { input_tokens: 0, output_tokens: 0 },
+      });
+      setOutcomeCriteria(sessionId, {
+        ...criteria,
+        status: "interrupted",
+        completed_at: new Date(nowMs()).toISOString(),
+      });
+    }
+
     scheduleDrain(sessionId);
     return;
   }
@@ -968,11 +993,21 @@ export async function runTurn(
 
         emit("span.outcome_evaluation_start", { outcome_id: outcomeId, iteration });
 
-        const evaluation = await runGraderEvaluation(
-          criteria.rubric,
-          lastAgentText,
-          agent.model.id,
-        );
+        // Heartbeat while the grader call is in flight, matching the hosted
+        // API's span.outcome_evaluation_ongoing cadence for long evaluations.
+        const heartbeat = setInterval(() => {
+          emit("span.outcome_evaluation_ongoing", { outcome_id: outcomeId, iteration });
+        }, 10_000);
+        let evaluation: Awaited<ReturnType<typeof runGraderEvaluation>>;
+        try {
+          evaluation = await runGraderEvaluation(
+            criteria.rubric,
+            lastAgentText,
+            agent.model.id,
+          );
+        } finally {
+          clearInterval(heartbeat);
+        }
 
         // Track grader token usage in session stats
         if (evaluation.usage.input_tokens || evaluation.usage.output_tokens) {

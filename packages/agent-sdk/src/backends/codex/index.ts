@@ -4,9 +4,11 @@
  * The wrapper script + install flow mirror the opencode adapter's
  * sandbox-side patterns (see `wrapper-script.ts`).
  *
- * Custom tool re-entry is NOT supported by codex — codex exec has no
- * equivalent of claude's --input-format stream-json. buildTurn rejects
- * toolResults.length > 0 with an invalid_request_error.
+ * Custom tool re-entry is not wired up yet: we drive codex through its
+ * one-shot `codex exec` mode, which cannot accept input mid-turn. Codex's
+ * bidirectional `codex app-server` JSON-RPC protocol could support it
+ * (future work). buildTurn rejects toolResults.length > 0 with an
+ * invalid_request_error.
  */
 import { ApiError } from "../../errors";
 import type { Backend, BuildTurnInput, BuildTurnResult } from "../types";

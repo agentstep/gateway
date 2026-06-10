@@ -5,9 +5,11 @@
  * on stdin. The wrapper script reads env vars then pipes remaining stdin to
  * gemini.
  *
- * Custom tool re-entry is NOT supported by gemini — gemini has no equivalent
- * of claude's --input-format stream-json. buildTurn rejects
- * toolResults.length > 0 with an invalid_request_error.
+ * Custom tool re-entry is not wired up yet: we drive gemini through its
+ * one-shot `-p` headless mode, which cannot accept input mid-turn. Gemini's
+ * experimental ACP mode (bidirectional JSON-RPC) could support it once
+ * stable (future work). buildTurn rejects toolResults.length > 0 with an
+ * invalid_request_error.
  */
 import { ApiError } from "../../errors";
 import type { Backend, BuildTurnInput, BuildTurnResult } from "../types";
