@@ -82,6 +82,10 @@ const ToolSchema = z.union([
 
 const ModelConfigSchema = z.object({
   speed: z.enum(["standard", "fast"]).optional(),
+  // Anthropic-compatible endpoint override — claude engine only (validated
+  // below). http is allowed: the primary use case is a local/LAN endpoint
+  // (e.g. Ollama at http://host.docker.internal:11434).
+  anthropic_base_url: z.string().url().optional(),
 });
 
 /**
@@ -381,9 +385,17 @@ export function handleCreateAgent(request: Request): Promise<Response> {
     const modelId = parsed.data.model.id;
     const modelSpeed = "speed" in parsed.data.model ? parsed.data.model.speed : undefined;
 
-    // Validate model is supported by this engine
+    // Validate model is supported by this engine. A base-url override
+    // (claude engine only) opens the model list to whatever the custom
+    // endpoint serves.
+    const baseUrlOverride = !!parsed.data.model_config?.anthropic_base_url;
+    if (baseUrlOverride && backendName !== "claude") {
+      throw badRequest(
+        "model_config.anthropic_base_url is only supported on the claude engine",
+      );
+    }
     const { isValidModelForEngine, FALLBACK_MODELS } = await import("../../backends/models");
-    if (!isValidModelForEngine(backendName, modelId)) {
+    if (!isValidModelForEngine(backendName, modelId, { baseUrlOverride })) {
       throw badRequest(
         `Model "${modelId}" is not supported by the ${backendName} engine. ` +
         `Supported models: ${(FALLBACK_MODELS[backendName] ?? []).join(", ")}`,
