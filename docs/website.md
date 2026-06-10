@@ -1,8 +1,8 @@
 # AgentStep Gateway
 
-> ## Ship AI agents your security team will approve.
+> ## The drop-in replacement for Managed Agents. With full control.
 >
-> AgentStep Gateway is the open-source home for your AI agents. The same Managed Agents API the industry is standardizing on — running on your infrastructure, with your choice of model, and data that never leaves your hands.
+> AgentStep Gateway is an open-source, self-hosted implementation of the Claude Managed Agents API. Change one line — the `base_url` — and your agents keep working exactly as they do today. Everything else changes hands: the models, the infrastructure, and the data are now yours.
 
 ```bash
 npx @agentstep/gateway quickstart
@@ -23,7 +23,7 @@ In 2026, running an AI agent stopped being a research project. Anthropic's Claud
 
 Now comes the part where you bring agents to *your* work — the codebase under NDA, the customer data with residency rules, the model budget that changes quarter to quarter, the security review that asks "where exactly does the session history live?"
 
-AgentStep Gateway exists so the answer is simple: **it lives with you.**
+Until now the choice was binary: take the hosted platform as-is, or walk away from the API and build your own harness. AgentStep Gateway removes the choice. **It's a drop-in replacement — same SDK, same routes, same streaming events — that hands you full control of everything behind the API:**
 
 - **Your data stays home.** Sessions, conversation history, sandbox filesystems, and secrets are stored on your disk, under your existing security and compliance controls. Nothing is retained anywhere you don't operate.
 - **Your choice of mind.** The same agent definition can run on Claude, GPT, Gemini, or an open model on your own hardware. When your needs change, you change a model ID — not your architecture.
@@ -33,9 +33,9 @@ No fear, no lock-in lecture. The hosted platforms are excellent, and the gateway
 
 ---
 
-## See it work
+## "Drop-in" is a one-line claim. Here's the line.
 
-This is the moment most people get it — the official Anthropic SDK, unchanged, creating a **GPT** agent:
+The official Anthropic SDK, unchanged, creating a **GPT** agent:
 
 ```python
 import anthropic
@@ -53,7 +53,7 @@ agent = client.beta.agents.create(
 session = client.beta.sessions.create(agent=agent.id, environment_id=env.id)
 ```
 
-Same routes. Same payloads. Same streaming events. Only the `base_url` changed — and suddenly the model, the sandbox, and the data are decisions you own.
+Nothing about your code knows the platform changed. Agents, environments, sessions, events, vaults, files, memory — the full Managed Agents surface answers at your URL. What changed is who's in control: the model, the sandbox, and the data are now decisions you own.
 
 ---
 
@@ -171,6 +171,6 @@ Tracking the hosted betas is the core of the project, and the test suite is the 
 npx @agentstep/gateway quickstart
 ```
 
-**Agents you can ship. Infrastructure you can trust.**
+**Drop it in. Take control.**
 
 [GitHub](https://github.com/agentstep/gateway) · [Documentation](#) · [agentstep.com](https://agentstep.com)
