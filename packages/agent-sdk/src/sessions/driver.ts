@@ -281,6 +281,35 @@ async function runTurnInner(
     }
   }
 
+  // Register the abort controller BEFORE acquiring the sandbox. Acquire +
+  // engine-install can take tens of seconds; without an early registration an
+  // interrupt arriving during that window (or during a retry backoff) would be
+  // a silent no-op, because `interruptSession` looks the controller up in
+  // `inFlightRuns`. We check `controller.signal.aborted` after each long phase
+  // and divert to the interrupt path. `deregister` is guarded so it only
+  // removes OUR entry — a retry handoff installs a fresh controller, which this
+  // attempt's cleanup must never clobber.
+  const runtime = getRuntime();
+  const controller = new AbortController();
+  runtime.inFlightRuns.set(sessionId, { sessionId, controller, startedAt: nowMs() });
+  const deregister = (): void => {
+    if (runtime.inFlightRuns.get(sessionId)?.controller === controller) {
+      runtime.inFlightRuns.delete(sessionId);
+    }
+  };
+  let aborted = false;
+
+  // Acknowledge an interrupt that lands before the engine exec starts. No span
+  // was opened and no remote process exists yet, so we just emit the idle
+  // boundary and drain any queued input.
+  const finishInterruptedDuringSetup = (): void => {
+    emit("session.status_idle", { stop_reason: formatStopReason("interrupted") });
+    updateSessionStatus(sessionId, "idle", "interrupted");
+    setIdleSince(sessionId, nowMs());
+    deregister();
+    scheduleDrain(sessionId);
+  };
+
   // Acquire sandbox if needed. Retry once on transient 502 errors — the
   // lifecycle cleans up partial containers on failure, so a retry is safe.
   console.log(`[driver] ${sessionId} acquiring container...`);
@@ -338,6 +367,14 @@ async function runTurnInner(
     emit("session.error", { error: { type: "server_error", message: `container creation failed: ${msg}` } });
     emit("session.status_idle", { stop_reason: formatStopReason("error") });
     updateSessionStatus(sessionId, "idle", "error");
+    deregister();
+    return;
+  }
+
+  // Interrupt may have landed during acquire/install — the engine hasn't
+  // started, so acknowledge and stop before flipping to running.
+  if (controller.signal.aborted) {
+    finishInterruptedDuringSetup();
     return;
   }
 
@@ -421,6 +458,7 @@ async function runTurnInner(
     emit("session.error", { error: { type, message: msg } });
     emit("session.status_idle", { stop_reason: formatStopReason("error") });
     updateSessionStatus(sessionId, "idle", "error");
+    deregister();
     return;
   }
 
@@ -555,6 +593,7 @@ async function runTurnInner(
     });
     emit("session.status_idle", { stop_reason: formatStopReason("error") });
     updateSessionStatus(sessionId, "idle", "error");
+    deregister();
     return;
   }
 
@@ -610,13 +649,11 @@ async function runTurnInner(
     }
   }
 
-  const runtime = getRuntime();
-  const controller = new AbortController();
-  runtime.inFlightRuns.set(sessionId, {
-    sessionId,
-    controller,
-    startedAt: turnStartMs,
-  });
+  // controller + inFlightRuns were registered before acquire (see above), so an
+  // interrupt during setup is already honoured. Refresh startedAt to the actual
+  // exec start for accurate elapsed-time reporting.
+  const inFlight = runtime.inFlightRuns.get(sessionId);
+  if (inFlight) inFlight.startedAt = turnStartMs;
 
   let exec;
   try {
@@ -662,7 +699,7 @@ async function runTurnInner(
           secrets,
         });
       } catch (retryErr) {
-        runtime.inFlightRuns.delete(sessionId);
+        deregister();
         const msg = retryErr instanceof Error ? retryErr.message : String(retryErr);
         emit("span.model_request_end", { model: agent.model.id, model_usage: null, status: "error" });
         emit("session.error", { error: { type: "server_error", message: `exec failed after re-acquire: ${msg}` } });
@@ -671,7 +708,7 @@ async function runTurnInner(
         return;
       }
     } else {
-      runtime.inFlightRuns.delete(sessionId);
+      deregister();
       const msg = err instanceof Error ? err.message : String(err);
       // Close the open turn span before returning — see buildTurn catch above.
       emit("span.model_request_end", { model: agent.model.id, model_usage: null, status: "error" });
@@ -690,8 +727,12 @@ async function runTurnInner(
   // Docker doesn't add these framing bytes, so stripping is conditional.
   const CONTROL_CHARS = /[\x00-\x08\x0B\x0C\x0E-\x1F]/g;
   let buffer = "";
-  let aborted = false;
+  // `aborted` was declared at the top of the turn (before acquire).
   let toolCallsInTurn = 0;
+  // Retry is deferred until after the finally so the abort controller stays
+  // registered through the backoff (interrupt-during-backoff is then honoured).
+  let retryRequested = false;
+  let retryDelayMs = 0;
 
   // Permission confirmation: if the agent has confirmation_mode, start a
   // background poller that checks for /tmp/permission-bridge/pending every
@@ -823,39 +864,52 @@ async function runTurnInner(
       const retry = shouldRetry(sessionId, classified);
 
       if (retry) {
-        // Auto-retry: emit rescheduled event (with trace context), wait, then re-run
+        // Auto-retry: emit rescheduled now, then defer the wait + re-run until
+        // after the finally (so the abort controller stays registered through
+        // the backoff). Stop the sentinel pollers before the wait so they don't
+        // keep polling the dead sandbox; the finally clears them too but only
+        // after the deferred section returns.
         incrementRetry(sessionId);
         emit("session.error", { error: { type: "server_error", message: msg, classified } });
         emit("session.status_rescheduled", { retry_attempt: retry.attempt, retry_delay_ms: retry.delayMs });
-        runtime.inFlightRuns.delete(sessionId);
-        // Stop the sentinel pollers before sleeping — otherwise they keep
-        // polling the (possibly dead) sandbox throughout the backoff and can
-        // emit duplicate tool/permission events. The finally clears them too,
-        // but the finally doesn't run until after the recursive call returns.
         if (permissionPollTimer) clearInterval(permissionPollTimer);
         if (toolBridgePollTimer) clearInterval(toolBridgePollTimer);
-        await retryDelay(retry.delayMs);
-        // Re-run the turn (recursive call with original inputs + incremented depth)
-        return runTurn(sessionId, inputs, _depth + 1, parentTrace);
+        retryRequested = true;
+        retryDelayMs = retry.delayMs;
+      } else {
+        // Not retryable or exhausted — close the open turn span before returning.
+        // This path is reached when the NDJSON stream itself fails (translator
+        // throw, read error, or exhausted retries).
+        emit("span.model_request_end", { model: agent.model.id, model_usage: null, status: "error" });
+        const retryStatus = classified.retryable ? "exhausted" : "terminal";
+        emit("session.error", { error: buildErrorPayload(classified, retryStatus) });
+        emit("session.status_idle", { stop_reason: formatStopReason("error") });
+        updateSessionStatus(sessionId, "idle", "error");
+        deregister();
+        return;
       }
-
-      // Not retryable or exhausted — close the open turn span before returning.
-      // This path is reached when the NDJSON stream itself fails (translator
-      // throw, read error, or exhausted retries).
-      emit("span.model_request_end", { model: agent.model.id, model_usage: null, status: "error" });
-      const retryStatus = classified.retryable ? "exhausted" : "terminal";
-      emit("session.error", { error: buildErrorPayload(classified, retryStatus) });
-      emit("session.status_idle", { stop_reason: formatStopReason("error") });
-      updateSessionStatus(sessionId, "idle", "error");
-      runtime.inFlightRuns.delete(sessionId);
-      return;
     }
   } finally {
     if (permissionPollTimer) clearInterval(permissionPollTimer);
     if (toolBridgePollTimer) clearInterval(toolBridgePollTimer);
     getPendingToolBridgeCalls().delete(sessionId);
     customToolCallCounts.delete(sessionId);
-    runtime.inFlightRuns.delete(sessionId);
+    // Keep the controller registered through a retry backoff so an interrupt
+    // during the wait is honoured; the retry handoff below deregisters instead.
+    if (!retryRequested) deregister();
+  }
+
+  // Deferred retry backoff. Runs after the finally so the controller stays
+  // registered during the wait; an interrupt mid-backoff diverts to the
+  // interrupt path rather than launching the retry.
+  if (retryRequested) {
+    await retryDelay(retryDelayMs);
+    if (controller.signal.aborted) {
+      aborted = true;
+    } else {
+      deregister();
+      return runTurn(sessionId, inputs, _depth + 1, parentTrace);
+    }
   }
 
   if (aborted) {
@@ -876,6 +930,7 @@ async function runTurnInner(
     // racing the first on shared `--resume` state. Awaited so the next turn
     // (scheduleDrain or a racing POST) can't overlap it.
     await killTurnProcess(provider, sandboxName, secrets, agent.engine);
+    deregister();
     scheduleDrain(sessionId);
     return;
   }
