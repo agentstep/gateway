@@ -9,7 +9,7 @@ jobs:
   update:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Fetch and curate model catalog
         env:
@@ -39,7 +39,10 @@ jobs:
           print(f'Pre-filtered: {len(filtered)} models')
           "
 
-          # 3. Claude curates the final list via Anthropic API
+          # 3. Claude curates the final list via Anthropic API. The `|| echo`
+          # keeps an API failure (billing, outage, bad key) from killing the
+          # step under bash -e — the guard below falls back to the
+          # pre-filtered list whenever curated.json wasn't written.
           if [ -n "$ANTHROPIC_API_KEY" ]; then
             pip install anthropic -q
             python3 -c "
@@ -74,7 +77,7 @@ jobs:
           curated = {k: catalog[k] for k in kept}
           json.dump(curated, open('/tmp/curated.json', 'w'), indent=2)
           print(f'Curated: {len(curated)} models (from {len(catalog)})')
-          "
+          " || echo "Curation call failed — continuing with pre-filtered list"
 
             if [ -f /tmp/curated.json ] && python3 -c "import json; json.load(open('/tmp/curated.json'))" 2>/dev/null; then
               cp /tmp/curated.json packages/agent-sdk/src/lib/model-catalog.json
