@@ -32,8 +32,17 @@ type RuntimeState = {
    * `inFlightRuns` alone is set too late to stop a second POST that arrives
    * during acquire from launching a concurrent turn, so the events handler
    * marks the session here synchronously the instant it decides to run.
+   *
+   * The value is an ownership epoch (see {@link markTurnStarting}): a turn's
+   * cleanup may only clear the marker it set, never a successor's. runTurn's
+   * inner paths drain queued input (marking the session for the NEXT turn)
+   * before the wrapper's finally runs — an unconditional clear there would
+   * delete the successor's marker during its pre-registration window.
    */
-  startingTurns: Set<string>;
+  startingTurns: Map<string, number>;
+  /** Monotonic source for startingTurns epochs — never reused, so a stale
+   * clear can't collide with a later mark. */
+  nextTurnEpoch: number;
 };
 
 type GlobalState = typeof globalThis & {
@@ -46,20 +55,44 @@ export function getRuntime(): RuntimeState {
     g.__caRuntime = {
       inFlightRuns: new Map(),
       pendingUserInputs: new Map(),
-      startingTurns: new Set(),
+      startingTurns: new Map(),
+      nextTurnEpoch: 1,
     };
   }
   return g.__caRuntime;
 }
 
-/** Mark a session as having a turn scheduled (covers the acquire window). */
-export function markTurnStarting(sessionId: string): void {
-  getRuntime().startingTurns.add(sessionId);
+/**
+ * Mark a session as having a turn scheduled (covers the acquire window).
+ * Returns the marker's ownership epoch — pass it to {@link clearTurnStarting}
+ * so cleanup can't clobber a marker set later for a successor turn.
+ */
+export function markTurnStarting(sessionId: string): number {
+  const rt = getRuntime();
+  const epoch = rt.nextTurnEpoch++;
+  rt.startingTurns.set(sessionId, epoch);
+  return epoch;
 }
 
-/** Clear the scheduled-turn marker (called once the turn fully settles). */
-export function clearTurnStarting(sessionId: string): void {
-  getRuntime().startingTurns.delete(sessionId);
+/**
+ * Clear the scheduled-turn marker, but only if `epoch` still owns it.
+ * `undefined` means "no marker existed when this turn entered" — any marker
+ * present now belongs to a successor, so the call is a no-op.
+ */
+export function clearTurnStarting(sessionId: string, epoch: number | undefined): void {
+  const rt = getRuntime();
+  if (epoch !== undefined && rt.startingTurns.get(sessionId) === epoch) {
+    rt.startingTurns.delete(sessionId);
+  }
+}
+
+/**
+ * The epoch of the session's current scheduled-turn marker, if any. runTurn's
+ * wrapper snapshots this synchronously at entry — that marker (set by the
+ * scheduler that launched it) is the one its finally is allowed to clear.
+ */
+export function getTurnStartingEpoch(sessionId: string): number | undefined {
+  return getRuntime().startingTurns.get(sessionId);
 }
 
 /**

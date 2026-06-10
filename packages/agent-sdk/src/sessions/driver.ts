@@ -27,7 +27,7 @@
 import { appendEventsBatch, appendEvent } from "./bus";
 import { newTrace, childSpan, type TraceContext } from "./trace";
 import type { AppendInput } from "../db/events";
-import { getRuntime, drainPendingUserInputs, clearTurnStarting, markTurnStarting, type TurnInput } from "../state";
+import { getRuntime, drainPendingUserInputs, clearTurnStarting, markTurnStarting, getTurnStartingEpoch, type TurnInput } from "../state";
 import { getSession, setBackendSessionId, updateSessionStatus, updateSessionMutable, bumpSessionStats, setIdleSince, getSessionRow, getOutcomeCriteria, setOutcomeCriteria, setSessionSandbox } from "../db/sessions";
 import { getAgent } from "../db/agents";
 import { getEnvironment } from "../db/environments";
@@ -91,6 +91,14 @@ export async function runTurn(
   _depth = 0,
   parentTrace?: TraceContext,
 ): Promise<void> {
+  // Snapshot the scheduled-turn marker's epoch synchronously at entry — the
+  // scheduler that launched this turn marked the session just before calling
+  // us, and that marker is the only one our finally may clear. The inner
+  // paths drain queued input (marking the session again for the NEXT turn)
+  // before the finally runs; an unconditional clear would delete the
+  // successor's marker while it is still pre-registration, re-opening the
+  // concurrent-turn race this marker exists to close.
+  const markerEpoch = getTurnStartingEpoch(sessionId);
   try {
     await runTurnInner(sessionId, inputs, _depth, parentTrace);
   } catch (err) {
@@ -116,7 +124,7 @@ export async function runTurn(
       console.error(`[driver] failed to mark ${sessionId} idle after crash:`, e2);
     }
   } finally {
-    clearTurnStarting(sessionId);
+    clearTurnStarting(sessionId, markerEpoch);
     scheduleDrain(sessionId);
   }
 }
@@ -578,8 +586,11 @@ async function runTurnInner(
   // intact — a raw newline inside a value would otherwise terminate the env
   // block early and spill every remaining var (other secrets included) into
   // the prompt. The key name must still be a valid shell identifier since the
-  // wrapper `export`s it directly. (Wrapper and driver ship together, so the
-  // encode/decode contract can't drift across a release.)
+  // wrapper `export`s it directly. The wrapper decodes with a printf-x
+  // sentinel so trailing newlines survive too (command substitution would
+  // otherwise strip them — see wrapper-env-framing.test.ts). (Wrapper and
+  // driver ship together, so the encode/decode contract can't drift across
+  // a release.)
   const badKey = Object.keys(turnBuild.env).find(
     (k) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(k),
   );

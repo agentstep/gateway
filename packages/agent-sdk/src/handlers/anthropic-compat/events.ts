@@ -744,7 +744,8 @@ export function handlePostEvents(request: Request, sessionId: string): Promise<R
         // next) sees the turn as in-flight and queues instead of launching a
         // concurrent run. Cleared by runTurn's finally (inline path) or
         // explicitly below (work-queue path, where status="running" guards).
-        markTurnStarting(sessionId);
+        // The epoch scopes the clear to THIS mark — see clearTurnStarting.
+        const markerEpoch = markTurnStarting(sessionId);
         const env = getEnvironment(row.environment_id);
         // Decide: inline execution vs work queue.
         // Use work queue ONLY for self_hosted envs when no inline executor
@@ -775,11 +776,15 @@ export function handlePostEvents(request: Request, sessionId: string): Promise<R
           });
           // Work queued for a remote worker — no inline runTurn will run, so
           // clear the marker here (status="running" now guards re-entry).
-          clearTurnStarting(sessionId);
+          clearTurnStarting(sessionId, markerEpoch);
         } else {
           // Inline execution — gateway serve has a provider available
           void enqueueTurn(row.environment_id, () => runTurn(sessionId, appended.pendingForTurn)).catch(
             (err: unknown) => {
+              // runTurn never ran (e.g. queue full), so its finally can't
+              // clear the marker — clear here or the session is stuck
+              // "active" forever and every later input queues without draining.
+              clearTurnStarting(sessionId, markerEpoch);
               console.error(`[events] enqueueTurn failed:`, err);
             },
           );
