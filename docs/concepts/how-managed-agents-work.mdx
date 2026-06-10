@@ -1,0 +1,142 @@
+---
+title: How Managed Agents Work
+description: What actually happens behind one interactions.create() call — the sandbox, the execution loop, and the event log.
+---
+
+You can go from zero to a working agent in five lines. One API call, and the
+response comes back with finished files, charts, and a summary:
+
+```python
+from google import genai
+
+client = genai.Client(
+    api_key="your-gateway-api-key",
+    http_options={"base_url": "http://localhost:4000/google"},
+)
+
+interaction = client.interactions.create(
+    model="gemini-2.5-flash",
+    input="Analyze the latest lego set data and create a PDF report with charts",
+    environment="remote",
+)
+
+print(interaction.output_text)
+```
+
+What most people miss: this is **not a single model call that returns text**.
+Behind that one call, a sandbox boots, skills get loaded, and the model enters
+a loop where it reasons, picks tools, executes code, reads the output, and
+repeats until the task is done.
+
+This page walks through that loop as the gateway implements it. The same flow
+runs whether you call the [Google Interactions surface](/guides/google-compatibility)
+(`/google/v1beta/interactions`) or the Anthropic Managed Agents surface
+(`/anthropic/v1/sessions`) — both translate to the same internal primitives.
+
+## The execution loop, step by step
+
+```
+You (HTTP)  →  Gateway (orchestrator)  →  Engine CLI (reasoning)  →  Sandbox (Linux container)
+```
+
+| Step | What happens | Where in the gateway |
+|---|---|---|
+| 1. **Request** | Your prompt hits the API over HTTPS. The gateway authenticates it, persists a `user.message` event, and enqueues a turn. | Handler + global turn queue (concurrency limits per gateway and per environment) |
+| 2. **Boot sandbox** | A Linux container is lazy-acquired from the environment's provider on the session's first turn. Warm pools skip the cold start. | Container lifecycle, [environment config](/build-agents/environments) |
+| 3. **Mount sources** | Packages install, the networking policy applies, vault secrets resolve into the process env, and [memory stores](/run-sessions/memory) mount at `/mnt/memory/`. | Resource provisioning |
+| 4. **Discover skills** | The agent's [skills](/build-agents/skills) are written into the container as `SKILL.md` bundles, ready for the engine to discover. | Skill installation at session start |
+| 5. **Reason** | The engine CLI (Claude Code, Gemini, Codex, …) starts inside the sandbox. The backend builds its `argv`, env, and stdin; the model plans and picks a tool. | `backend.buildTurn()` |
+| 6. **Tool call** | The engine emits a tool call — run a command, edit a file, search the web — as a line of NDJSON on stdout. | Exec stream |
+| 7. **Execute** | The tool runs inside the isolated container, not on your machine and not on the gateway host. | Sandbox provider |
+| 8. **Return results** | The gateway's translator converts the raw NDJSON into typed events and batch-appends them to the session's append-only log. Clients see them live over SSE. | Translator + [event bus](/run-sessions/events) |
+| 9. **Loop** | The model reads the tool output and goes back to step 5 — reasoning, calling tools, executing — until the task is complete. | Stream loop |
+| 10. **Final response** | The turn ends with a `session.status_idle` event carrying a stop reason: `end_turn`, `error`, `interrupted`, or `custom_tool_call`. Usage and cost are persisted to the session. | Turn driver |
+
+The key property of this design: the gateway never re-implements the agent
+loop. The engine CLI owns reasoning and tool selection; the gateway owns
+orchestration — sandbox lifecycle, the event log, concurrency, retries, and
+usage accounting.
+
+## Inside the sandbox
+
+Each session gets an isolated Linux container from the environment's sandbox
+provider (Docker, Sprites, E2B, Fly, …). Inside it, the agent can install
+packages, run scripts, read and write files, and — subject to the
+environment's networking policy — browse the web.
+
+Sandboxes persist across turns. On the Interactions surface, the first call
+returns an `environment_id`; pass it back to keep files and state intact, and
+pass `previous_interaction_id` to keep conversation history:
+
+```python
+# Turn 1: sandbox is created
+i1 = client.interactions.create(
+    model="gemini-2.5-flash",
+    input="Install pandas and create analysis.py",
+    environment="remote",
+)
+
+# Turn 2: same sandbox, files persist
+i2 = client.interactions.create(
+    model="gemini-2.5-flash",
+    input="Run analysis.py on the Q1 data",
+    environment=i1.environment_id,
+    previous_interaction_id=i1.id,
+)
+```
+
+On the Anthropic surface the same two axes are explicit resources: the
+**environment** holds sandbox state, the **session** holds conversation
+history. Containers are released after the environment's `idle_timeout_ms`
+(default 1 hour) and re-acquired transparently on the next turn.
+
+## From prompt to production agent
+
+The execution loop is identical whether you are experimenting or running in
+production. The difference is how much configuration you provide upfront.
+
+**Ad-hoc call** — send an `input` with `environment: "remote"` and let the
+gateway pick defaults. Good for exploration.
+
+**Add instructions and skills** — set a system prompt and attach skills so
+behavior is consistent across calls:
+
+```json
+{
+  "name": "data-analyst",
+  "model": "gemini-2.5-flash",
+  "system_prompt": "You are a data analyst. Export results as PDF.",
+  "skills": [
+    {
+      "name": "slides",
+      "source": "internal",
+      "content": "---\nname: slides\n---\n# Slide Maker\nCreate HTML decks."
+    }
+  ]
+}
+```
+
+**Save as a managed agent** — once the setup is stable, persist it with
+`POST /anthropic/v1/agents` (or `client.agents.create()` on the Google
+surface). Agents are immutable versioned snapshots; each session forks a
+fresh sandbox from the agent's environment configuration.
+
+**Invoke by ID** — reference the agent on every call. Same loop, no config to
+repeat:
+
+```python
+result = client.interactions.create(
+    agent="data-analyst",
+    input="Analyze Q1 revenue data and create a slide deck.",
+    environment="remote",
+)
+print(result.output_text)
+```
+
+## Further reading
+
+- [Cloud Environment Setup](/build-agents/environments) — providers, networking, warm pools, lifecycle
+- [Skills](/build-agents/skills) — packaging reusable instructions
+- [Events](/run-sessions/events) — the append-only log and SSE stream
+- [Google Interactions API](/guides/google-compatibility) — full endpoint reference
+- Philipp Schmid's [How Gemini Managed Agents Works under the Hood](https://www.philschmid.de/how-managed-agents-work) — the hosted-API walkthrough this page parallels
