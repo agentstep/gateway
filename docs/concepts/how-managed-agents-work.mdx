@@ -57,6 +57,30 @@ loop. The engine CLI owns reasoning and tool selection; the gateway owns
 orchestration — sandbox lifecycle, the event log, concurrency, retries, and
 usage accounting.
 
+### Architecture trade-off: coupled vs. decoupled harness
+
+Anthropic's hosted Managed Agents ["decouples the brain from the hands"](https://claude.com/blog/building-with-claude-managed-agents):
+the harness that calls the model runs separately from the sandbox where code
+executes, connected only by the session's event log. That split lets the
+model start reasoning before any container exists, lets tool-free sessions
+skip the container entirely, and keeps credentials out of the sandbox — a
+proxy substitutes secrets at egress, so prompt-injected code can't read them
+from its own environment.
+
+The gateway makes the opposite trade: the engine CLI (its harness included)
+runs **inside** the sandbox. That is what makes six interchangeable engines
+possible — third-party harnesses are monolithic and can't be split from the
+outside — but it means the first turn pays container startup before the
+model can think (mitigated by [warm pools](/build-agents/environments)), and
+vault secrets are injected into the container environment where generated
+code can in principle read them. Scope vault credentials to the minimum the
+agent needs, and constrain the blast radius with the environment-level
+networking policy.
+
+What the two architectures share is the part that matters for durability:
+the event log lives **outside** the agent process in both. Sessions survive
+interruption, resume cleanly, and remain fully reconstructable either way.
+
 ## Inside the sandbox
 
 Each session gets an isolated Linux container from the environment's sandbox
