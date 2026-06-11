@@ -13,6 +13,7 @@ import { syncDb, closeDb } from "./db/client";
 type GlobalShutdown = typeof globalThis & {
   __caShutdownInstalled?: boolean;
   __caSweeperHandle?: NodeJS.Timeout;
+  __caDeploymentSchedulerHandle?: NodeJS.Timeout;
 };
 const g = globalThis as GlobalShutdown;
 
@@ -76,6 +77,10 @@ async function shutdown(signal: string): Promise<void> {
   if (g.__caSweeperHandle) {
     clearInterval(g.__caSweeperHandle);
     g.__caSweeperHandle = undefined;
+  }
+  if (g.__caDeploymentSchedulerHandle) {
+    clearInterval(g.__caDeploymentSchedulerHandle);
+    g.__caDeploymentSchedulerHandle = undefined;
   }
 
   for (const run of rt.inFlightRuns.values()) {

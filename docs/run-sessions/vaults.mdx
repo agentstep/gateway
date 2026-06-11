@@ -69,6 +69,48 @@ PUT /v1/vaults/vault_01.../entries/DATABASE_URL
 
 Calling `PUT` on an existing key overwrites it. The stored value is always encrypted before it reaches the database.
 
+## Structured credentials
+
+Alongside plain entries, vaults hold **credentials** — typed auth records compatible with the Anthropic Managed Agents API:
+
+```http
+POST /anthropic/v1/vaults/:id/credentials
+```
+
+Three `auth.type` values are supported:
+
+| Type | Keyed by | Use for |
+|---|---|---|
+| `static_bearer` | `mcp_server_url` | MCP servers that accept a fixed bearer token |
+| `mcp_oauth` | `mcp_server_url` | MCP servers using OAuth 2.0, with optional automatic refresh |
+| `environment_variable` | `secret_name` | CLIs, SDKs, and direct API calls that authenticate through an env var |
+
+### Environment variable credentials
+
+```json
+{
+  "display_name": "Notion API key for sandbox",
+  "auth": {
+    "type": "environment_variable",
+    "secret_name": "NOTION_API_KEY",
+    "secret_value": "sk-your-secret-here",
+    "networking": {
+      "type": "limited",
+      "allowed_hosts": ["api.notion.com"]
+    }
+  }
+}
+```
+
+The secret is injected into the session container as `NOTION_API_KEY` at turn start. `secret_value` is write-only — it is encrypted at rest and never returned by the API. Rules:
+
+- `secret_name` must be a valid env var name and is rejected if it collides with reserved keys (`PATH`, `LD_PRELOAD`, …).
+- `secret_name` is **unique among active credentials** in a vault (duplicate returns `409`) and **immutable** after creation — archive the credential and create a new one to change it.
+- `secret_value` and `networking` can be rotated via `POST /anthropic/v1/vaults/:id/credentials/:credId`.
+- Archived credentials are not injected, and archiving frees the `secret_name` for a replacement.
+
+**Semantics note:** Anthropic's hosted sandboxes substitute an opaque placeholder at network egress so the agent never sees the secret. The gateway injects the **real value** into the container environment. The per-credential `networking` policy is stored and surfaced for compatibility, but outbound enforcement is delegated to the [environment-level networking policy](/build-agents/environments) — list the same hosts there.
+
 ## Encryption at rest
 
 Vault values are encrypted with **AES-256-GCM** using a 32-byte key loaded from the `VAULT_ENCRYPTION_KEY` environment variable. On first run, if no key is set, the gateway auto-generates one and writes it to `.env`.

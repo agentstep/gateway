@@ -116,6 +116,14 @@ import {
   handleArchiveCredential,
   handleDeleteCredential,
   handleMcpOauthValidate,
+  handleCreateDeployment,
+  handleListDeployments,
+  handleGetDeployment,
+  handlePauseDeployment,
+  handleUnpauseDeployment,
+  handleArchiveDeployment,
+  handleRunDeployment,
+  handleListDeploymentRuns,
   handleUpdateMemoryStore,
   handleRedactMemoryVersion,
   handleDreamMemoryStore,
@@ -500,6 +508,16 @@ app.post("/anthropic/v1/user_profiles/:id", (c) => handleUpdateUserProfile(c.req
 app.post("/anthropic/v1/user_profiles/:id/enrollment_url", (c) => handleEnrollmentUrl(c.req.raw, c.req.param("id")));
 app.get("/anthropic/v1/oauth/callback", (c) => handleOAuthCallback(c.req.raw));
 app.post("/anthropic/v1/vaults/:id/credentials/:credId/mcp_oauth_validate", (c) => handleMcpOauthValidate(c.req.raw, c.req.param("id"), c.req.param("credId")));
+
+// Scheduled deployments (Anthropic-compatible)
+app.post("/anthropic/v1/deployments", (c) => handleCreateDeployment(c.req.raw));
+app.get("/anthropic/v1/deployments", (c) => handleListDeployments(c.req.raw));
+app.get("/anthropic/v1/deployments/:id", (c) => handleGetDeployment(c.req.raw, c.req.param("id")));
+app.post("/anthropic/v1/deployments/:id/pause", (c) => handlePauseDeployment(c.req.raw, c.req.param("id")));
+app.post("/anthropic/v1/deployments/:id/unpause", (c) => handleUnpauseDeployment(c.req.raw, c.req.param("id")));
+app.post("/anthropic/v1/deployments/:id/archive", (c) => handleArchiveDeployment(c.req.raw, c.req.param("id")));
+app.post("/anthropic/v1/deployments/:id/run", (c) => handleRunDeployment(c.req.raw, c.req.param("id")));
+app.get("/anthropic/v1/deployment_runs", (c) => handleListDeploymentRuns(c.req.raw));
 
 // ── Google Interactions API compat ───────────────────────────────────────────
 // Auth header translation: x-goog-api-key -> x-api-key

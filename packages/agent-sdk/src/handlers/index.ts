@@ -5,6 +5,7 @@ export { handlePostEvents, handleListEvents } from "./anthropic-compat/events";
 export { handleSessionStream, prepareSessionStream } from "./anthropic-compat/stream";
 export { handleCreateVault, handleListVaults, handleGetVault, handleUpdateVault, handleArchiveVault, handleDeleteVault, handleListEntries, handleGetEntry, handlePutEntry, handleDeleteEntry } from "./anthropic-compat/vaults";
 export { handleCreateCredential, handleListCredentials, handleGetCredential, handleUpdateCredential, handleArchiveCredential, handleDeleteCredential, handleMcpOauthValidate } from "./anthropic-compat/credentials";
+export { handleCreateDeployment, handleListDeployments, handleGetDeployment, handlePauseDeployment, handleUnpauseDeployment, handleArchiveDeployment, handleRunDeployment, handleListDeploymentRuns } from "./anthropic-compat/deployments";
 export { handleBatch } from "./batch";
 export { handleListThreads, handleGetThread, handleArchiveThread, handleListThreadEvents, handleStreamThreadEvents } from "./anthropic-compat/threads";
 export { handleCreateMemoryStore, handleListMemoryStores, handleGetMemoryStore, handleUpdateMemoryStore, handleDeleteMemoryStore, handleCreateMemory, handleListMemories, handleGetMemory, handleUpdateMemory, handleDeleteMemory, handleListMemoryVersions, handleGetMemoryVersion, handleRedactMemoryVersion, handleArchiveMemoryStore, handleDreamMemoryStore } from "./memory";

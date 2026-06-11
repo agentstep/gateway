@@ -45,6 +45,21 @@ Pre-release hardening pass. Intermediate 0.5.x releases are tracked on
 - Idle sweeper no longer orphans live SSE subscribers for sessions it didn't
   evict; the event-stream backlog now pages past 500 events.
 
+### Added
+
+- **Scheduled deployments** — run an agent's sessions on a cron schedule
+  (`POST /anthropic/v1/deployments`), matching the Anthropic Managed Agents
+  deployments surface: POSIX cron + IANA timezone with literal wall-clock
+  DST semantics, pause/unpause/archive lifecycle, manual `/run` trigger,
+  and per-attempt `deployment_runs` records (`?has_error=true` filter).
+  The scheduler ticks in-process — no external scheduler to host.
+- **Environment-variable vault credentials** — new
+  `auth.type: "environment_variable"` on vault credentials (`secret_name`,
+  write-only `secret_value`, optional per-credential `networking` policy).
+  The secret injects into the sandbox under its declared name;
+  `secret_name` is unique per vault among active credentials and immutable
+  after creation.
+
 ## [0.4.12] — 2026-04-25
 
 ### Added

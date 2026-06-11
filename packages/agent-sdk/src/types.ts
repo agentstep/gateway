@@ -441,6 +441,8 @@ export interface VaultCredentialRow {
   mcp_server_url: string | null;
   expires_at: string | null;
   refresh_config_encrypted: string | null;
+  secret_name: string | null;
+  networking_json: string | null;
   archived_at: number | null;
   created_at: number;
   updated_at: number;
@@ -459,12 +461,27 @@ export interface VaultCredentialAuthMcpOauth {
   expires_at: string | null;
 }
 
+/** Per-credential networking policy for environment_variable credentials. */
+export type CredentialNetworking =
+  | { type: "limited"; allowed_hosts: string[] }
+  | { type: "unrestricted" };
+
+/** Public auth shape for environment_variable credentials (secrets stripped). */
+export interface VaultCredentialAuthEnvironmentVariable {
+  type: "environment_variable";
+  secret_name: string;
+  networking: CredentialNetworking | null;
+}
+
 export interface VaultCredential {
   type: "vault_credential";
   id: string;
   vault_id: string;
   display_name: string;
-  auth: VaultCredentialAuthStaticBearer | VaultCredentialAuthMcpOauth;
+  auth:
+    | VaultCredentialAuthStaticBearer
+    | VaultCredentialAuthMcpOauth
+    | VaultCredentialAuthEnvironmentVariable;
   created_at: string;
   updated_at: string;
   archived_at: string | null;

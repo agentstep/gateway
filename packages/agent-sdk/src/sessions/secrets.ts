@@ -48,6 +48,16 @@ export function loadSessionSecrets(vaultIds: string[], userProfileId?: string | 
     for (const cred of listCredentialsWithTokens(vid)) {
       if (credentialAllowlist && !credentialAllowlist.has(`${vid}:${cred.id}`)) continue;
 
+      // environment_variable credentials inject under their declared
+      // secret_name. Archived ones are skipped so a replacement credential
+      // with the same name wins unambiguously.
+      if (cred.auth.type === "environment_variable") {
+        if (!cred.archived_at && cred.auth.secret_name) {
+          secrets.push({ key: cred.auth.secret_name, value: cred.token });
+        }
+        continue;
+      }
+
       if (cred.auth.mcp_server_url) {
         // Derive a server name from the URL: extract hostname, strip common prefixes
         const serverName = deriveServerName(cred.auth.mcp_server_url);

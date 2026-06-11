@@ -8,6 +8,11 @@
  * Supported auth types:
  *   - static_bearer: simple token-based auth
  *   - mcp_oauth: OAuth 2.0 for MCP servers with optional refresh config
+ *   - environment_variable: named env var injected into the sandbox.
+ *     Unlike Anthropic's hosted sandboxes (egress substitution), the
+ *     gateway injects the real value into the container environment;
+ *     `networking` is stored and surfaced but enforcement is delegated
+ *     to the environment-level networking policy.
  */
 import { z } from "zod";
 import { routeWrap, jsonOk, paginatedOk, parseLimit } from "../../http";
@@ -20,8 +25,10 @@ import {
   updateCredential,
   deleteCredential,
   archiveCredential,
+  findActiveCredentialBySecretName,
 } from "../../db/credentials";
 import type { OAuthRefreshConfig } from "../../db/credentials";
+import { BLOCKED_ENV_KEYS } from "../../providers/resolve-secrets";
 import { badRequest, notFound, conflict } from "../../errors";
 
 // ---------------------------------------------------------------------------
@@ -55,9 +62,23 @@ const McpOauthAuthSchema = z.object({
   refresh: OAuthRefreshSchema.optional(),
 });
 
+const CredentialNetworkingSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("limited"), allowed_hosts: z.array(z.string().min(1)).max(100) }),
+  z.object({ type: z.literal("unrestricted") }),
+]);
+
+const ENV_VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+const EnvironmentVariableAuthSchema = z.object({
+  type: z.literal("environment_variable"),
+  secret_name: z.string().min(1).max(200).regex(ENV_VAR_NAME_RE, "secret_name must be a valid environment variable name"),
+  secret_value: z.string().min(1),
+  networking: CredentialNetworkingSchema.optional(),
+});
+
 const CreateCredentialSchema = z.object({
   display_name: z.string().min(1).max(200),
-  auth: z.discriminatedUnion("type", [StaticBearerAuthSchema, McpOauthAuthSchema]),
+  auth: z.discriminatedUnion("type", [StaticBearerAuthSchema, McpOauthAuthSchema, EnvironmentVariableAuthSchema]),
   metadata: z.record(z.string()).optional(),
 });
 
@@ -76,12 +97,15 @@ const UpdateMcpOauthAuthSchema = z.object({
 
 /** Generic auth update schema -- used for initial parsing. We refine by existing credential type. */
 const UpdateAuthSchema = z.object({
-  type: z.enum(["static_bearer", "mcp_oauth"]).optional(),
+  type: z.enum(["static_bearer", "mcp_oauth", "environment_variable"]).optional(),
   token: z.string().min(1).optional(),
   mcp_server_url: z.string().url().nullish(),
   access_token: z.string().min(1).optional(),
   expires_at: z.string().nullish(),
   refresh: OAuthRefreshSchema.optional(),
+  secret_name: z.string().optional(),
+  secret_value: z.string().min(1).optional(),
+  networking: CredentialNetworkingSchema.nullish(),
 }).optional();
 
 const UpdateCredentialSchema = z.object({
@@ -107,6 +131,27 @@ export function handleCreateCredential(
     const { auth: authData } = parsed.data;
 
     try {
+      if (authData.type === "environment_variable") {
+        if (BLOCKED_ENV_KEYS.has(authData.secret_name)) {
+          throw badRequest(`secret_name "${authData.secret_name}" is a reserved environment variable`);
+        }
+        // secret_name must be unique among active credentials in the vault
+        if (findActiveCredentialBySecretName(vaultId, authData.secret_name)) {
+          throw conflict(
+            `An active credential with secret_name "${authData.secret_name}" already exists in this vault`,
+          );
+        }
+        const cred = createCredential({
+          vault_id: vaultId,
+          display_name: parsed.data.display_name,
+          auth_type: "environment_variable",
+          token: authData.secret_value,
+          secret_name: authData.secret_name,
+          networking: authData.networking ?? null,
+        });
+        return jsonOk(cred, 201);
+      }
+
       if (authData.type === "mcp_oauth") {
         const refreshConfig: OAuthRefreshConfig | null = authData.refresh
           ? {
@@ -199,6 +244,24 @@ export function handleUpdateCredential(
 
     try {
       const authData = parsed.data.auth;
+
+      if (existing.auth.type === "environment_variable") {
+        if (authData?.type && authData.type !== "environment_variable") {
+          throw badRequest("credential auth type cannot be changed; archive and create a new credential");
+        }
+        // secret_name is immutable after creation (matches upstream semantics)
+        if (authData?.secret_name !== undefined && authData.secret_name !== existing.auth.secret_name) {
+          throw badRequest("secret_name is immutable; archive the credential and create a new one");
+        }
+        const updated = updateCredential(credentialId, {
+          display_name: parsed.data.display_name,
+          token: authData?.secret_value,
+          networking: authData?.networking === undefined ? undefined : authData.networking,
+        });
+        if (!updated) throw notFound(`credential not found: ${credentialId}`);
+        return jsonOk(updated);
+      }
+
       // Use existing credential's auth type to interpret update fields
       const isMcpOauth = existing.auth.type === "mcp_oauth" ||
         authData?.type === "mcp_oauth";

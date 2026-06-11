@@ -1,18 +1,20 @@
 /**
  * Vault credentials: Anthropic-compatible structured auth stored per vault.
  *
- * Supports two auth types:
+ * Supports three auth types:
  *   - static_bearer: simple token-based auth
  *   - mcp_oauth: OAuth 2.0 for MCP servers with optional refresh config
+ *   - environment_variable: a named env var injected into the sandbox
  *
- * Secret fields (token, refresh_token, client_secret) are AES-256-GCM
- * encrypted at rest using the same machinery as vault entries.
+ * Secret fields (token, refresh_token, client_secret, secret_value) are
+ * AES-256-GCM encrypted at rest using the same machinery as vault entries.
+ * environment_variable secrets reuse the auth_token_encrypted column.
  */
 import { getDb } from "./client";
 import { newId } from "../util/ids";
 import { nowMs, toIso } from "../util/clock";
 import { encryptValue, decryptValue } from "./vault-crypto";
-import type { VaultCredential, VaultCredentialRow } from "../types";
+import type { CredentialNetworking, VaultCredential, VaultCredentialRow } from "../types";
 
 /** The refresh config stored encrypted alongside the access_token. */
 export interface OAuthRefreshConfig {
@@ -28,6 +30,24 @@ export interface OAuthRefreshConfig {
 
 function hydrate(row: VaultCredentialRow): VaultCredential {
   const archivedAt = row.archived_at ? toIso(row.archived_at) : null;
+  if (row.auth_type === "environment_variable") {
+    return {
+      type: "vault_credential" as const,
+      id: row.id,
+      vault_id: row.vault_id,
+      display_name: row.display_name,
+      auth: {
+        type: "environment_variable" as const,
+        secret_name: row.secret_name ?? "",
+        networking: row.networking_json
+          ? (JSON.parse(row.networking_json) as CredentialNetworking)
+          : null,
+      },
+      created_at: toIso(row.created_at),
+      updated_at: toIso(row.updated_at),
+      archived_at: archivedAt,
+    };
+  }
   if (row.auth_type === "mcp_oauth") {
     return {
       type: "vault_credential" as const,
@@ -68,6 +88,8 @@ export function createCredential(input: {
   mcp_server_url?: string | null;
   expires_at?: string | null;
   refresh_config?: OAuthRefreshConfig | null;
+  secret_name?: string | null;
+  networking?: CredentialNetworking | null;
 }): VaultCredential {
   const db = getDb();
   const id = newId("cred");
@@ -77,10 +99,19 @@ export function createCredential(input: {
     ? encryptValue(JSON.stringify(input.refresh_config))
     : null;
   db.prepare(
-    `INSERT INTO vault_credentials (id, vault_id, display_name, auth_type, auth_token_encrypted, mcp_server_url, expires_at, refresh_config_encrypted, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(id, input.vault_id, input.display_name, input.auth_type, encrypted, input.mcp_server_url ?? null, input.expires_at ?? null, refreshEncrypted, now, now);
+    `INSERT INTO vault_credentials (id, vault_id, display_name, auth_type, auth_token_encrypted, mcp_server_url, expires_at, refresh_config_encrypted, secret_name, networking_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(id, input.vault_id, input.display_name, input.auth_type, encrypted, input.mcp_server_url ?? null, input.expires_at ?? null, refreshEncrypted, input.secret_name ?? null, input.networking ? JSON.stringify(input.networking) : null, now, now);
   return getCredential(id)!;
+}
+
+/** Find an active (non-archived) environment_variable credential by secret_name. */
+export function findActiveCredentialBySecretName(vaultId: string, secretName: string): VaultCredential | null {
+  const db = getDb();
+  const row = db.prepare(
+    `SELECT * FROM vault_credentials WHERE vault_id = ? AND secret_name = ? AND archived_at IS NULL`,
+  ).get(vaultId, secretName) as VaultCredentialRow | undefined;
+  return row ? hydrate(row) : null;
 }
 
 export function getCredential(id: string): VaultCredential | null {
@@ -120,6 +151,7 @@ export function updateCredential(id: string, input: {
   mcp_server_url?: string | null;
   expires_at?: string | null;
   refresh_config?: OAuthRefreshConfig | null;
+  networking?: CredentialNetworking | null;
 }): VaultCredential | null {
   const db = getDb();
   const existing = db.prepare(`SELECT * FROM vault_credentials WHERE id = ?`).get(id) as VaultCredentialRow | undefined;
@@ -135,6 +167,10 @@ export function updateCredential(id: string, input: {
   if (input.refresh_config !== undefined) {
     parts.push("refresh_config_encrypted = ?");
     args.push(input.refresh_config ? encryptValue(JSON.stringify(input.refresh_config)) : null);
+  }
+  if (input.networking !== undefined) {
+    parts.push("networking_json = ?");
+    args.push(input.networking ? JSON.stringify(input.networking) : null);
   }
   db.prepare(`UPDATE vault_credentials SET ${parts.join(", ")} WHERE id = ?`).run(...args, id);
   return getCredential(id);

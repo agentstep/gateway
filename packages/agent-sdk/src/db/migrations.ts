@@ -759,6 +759,21 @@ export function runMigrations(db: InstanceType<typeof Database>): void {
     if (!names.has("archived_at")) {
       db.exec("ALTER TABLE vault_credentials ADD COLUMN archived_at INTEGER");
     }
+    // environment_variable credentials: env var name + per-credential
+    // networking policy (non-secret JSON: {type, allowed_hosts?})
+    if (!names.has("secret_name")) {
+      db.exec("ALTER TABLE vault_credentials ADD COLUMN secret_name TEXT");
+    }
+    if (!names.has("networking_json")) {
+      db.exec("ALTER TABLE vault_credentials ADD COLUMN networking_json TEXT");
+    }
+    // secret_name must be unique among ACTIVE credentials in a vault;
+    // archiving frees the name for a replacement credential.
+    db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_vault_credentials_secret_name
+      ON vault_credentials(vault_id, secret_name)
+      WHERE secret_name IS NOT NULL AND archived_at IS NULL
+    `);
   }
 
   // Skills (standalone, DB-stored with versioning)
@@ -900,4 +915,48 @@ export function runMigrations(db: InstanceType<typeof Database>): void {
   try {
     db.exec(`ALTER TABLE agent_versions ADD COLUMN permission_policy_json TEXT`);
   } catch { /* column already exists */ }
+
+  // Scheduled deployments: run sessions on a cron schedule
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS deployments (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      environment_id TEXT NOT NULL,
+      initial_events_json TEXT NOT NULL,
+      cron_expression TEXT NOT NULL,
+      timezone TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      paused_reason_json TEXT,
+      vault_ids_json TEXT,
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      last_run_at INTEGER,
+      next_run_at INTEGER,
+      tenant_id TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      archived_at INTEGER
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_deployments_due ON deployments(status, next_run_at)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_deployments_tenant ON deployments(tenant_id)`);
+
+  // Deployment runs: one record per trigger attempt (scheduled or manual)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS deployment_runs (
+      id TEXT PRIMARY KEY,
+      deployment_id TEXT NOT NULL,
+      trigger_type TEXT NOT NULL,
+      scheduled_at INTEGER,
+      session_id TEXT,
+      error_type TEXT,
+      error_message TEXT,
+      agent_id TEXT NOT NULL,
+      agent_version INTEGER NOT NULL,
+      tenant_id TEXT,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (deployment_id) REFERENCES deployments(id) ON DELETE CASCADE
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_deployment_runs_deployment ON deployment_runs(deployment_id, created_at)`);
 }

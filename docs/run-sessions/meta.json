@@ -3,6 +3,7 @@
   "pages": [
     "sessions",
     "events",
+    "scheduled-deployments",
     "vaults",
     "user-profiles",
     "memory",

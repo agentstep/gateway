@@ -1,0 +1,115 @@
+---
+title: Scheduled Deployments
+description: Run an agent's sessions on a recurring cron schedule and inspect the run history.
+---
+
+A **scheduled deployment** kicks off [sessions](/run-sessions/sessions) autonomously on a cron schedule — no scheduler of your own to build or host. You pin the session configuration (agent, environment, initial message, vaults) once; the gateway's in-process scheduler fires it on cadence and records every attempt.
+
+The API matches the Anthropic Managed Agents deployments surface, so the Anthropic SDKs and `ant` CLI work unchanged against `/anthropic/v1/deployments`.
+
+## Create a deployment
+
+```http
+POST /anthropic/v1/deployments
+```
+
+```json
+{
+  "name": "Weekly compliance scan",
+  "agent": "agent_01abc",
+  "environment_id": "env_01xyz",
+  "initial_events": [
+    {
+      "type": "user.message",
+      "content": [{ "type": "text", "text": "Run the weekly compliance scan." }]
+    }
+  ],
+  "schedule": {
+    "type": "cron",
+    "expression": "0 20 * * 5",
+    "timezone": "America/New_York"
+  },
+  "vault_ids": ["vault_01..."]
+}
+```
+
+The response echoes the schedule with the next fire times, so you can confirm the expression does what you meant:
+
+```json
+{
+  "type": "deployment",
+  "id": "depl_01...",
+  "status": "active",
+  "paused_reason": null,
+  "schedule": {
+    "type": "cron",
+    "expression": "0 20 * * 5",
+    "timezone": "America/New_York",
+    "last_run_at": null,
+    "upcoming_runs_at": [
+      "2026-06-13T00:00:00.000Z",
+      "2026-06-20T00:00:00.000Z",
+      "2026-06-27T00:00:00.000Z"
+    ]
+  }
+}
+```
+
+### Cron and timezone semantics
+
+- **Expression:** standard POSIX cron (`minute hour day-of-month month day-of-week`) with lists, ranges, and steps. Minute granularity. When both day-of-month and day-of-week are restricted, a time matches when *either* matches (POSIX OR semantics).
+- **Timezone:** an IANA identifier (for example `"America/Los_Angeles"`).
+- **DST:** literal wall-clock matching — `"0 20 * * *"` in `America/New_York` fires at 8:00 PM local whether EST or EDT is in effect. Wall-clock times skipped by spring-forward are not triggered; times repeated by fall-back fire twice. Schedule outside the 1–3 AM local window, or use UTC, when missed or duplicate executions are unacceptable.
+
+Malformed expressions, unknown timezones, and schedules with no upcoming occurrence are rejected at create time with a `400`.
+
+## Deployment runs
+
+Each trigger attempt — scheduled or manual — writes a **deployment run** record, so failures are trackable independent of the session lifecycle:
+
+```http
+GET /anthropic/v1/deployment_runs?deployment_id=depl_01...
+GET /anthropic/v1/deployment_runs?deployment_id=depl_01...&has_error=true
+```
+
+A successful run carries the created `session_id`; a failed run carries an `error`:
+
+```json
+{
+  "type": "deployment_run",
+  "id": "drun_01...",
+  "deployment_id": "depl_01...",
+  "trigger_context": { "type": "schedule", "scheduled_at": "2026-06-13T00:00:00.000Z" },
+  "session_id": null,
+  "error": {
+    "type": "environment_archived_error",
+    "message": "environment `env_01xyz` is archived"
+  },
+  "agent": { "type": "agent", "id": "agent_01abc", "version": 3 },
+  "created_at": "2026-06-13T00:00:01.000Z"
+}
+```
+
+Error types: `environment_archived_error` (environment archived or deleted) and `session_creation_error` (session insert failed). If the deployment's **agent** has been archived or deleted, the deployment itself is automatically archived and no run is recorded.
+
+## Lifecycle
+
+| Operation | Endpoint | Effect |
+|---|---|---|
+| Pause | `POST /anthropic/v1/deployments/:id/pause` | Suppresses scheduled triggers; sets `paused_reason: {"type": "manual"}`. Running sessions continue; manual runs still allowed. |
+| Unpause | `POST /anthropic/v1/deployments/:id/unpause` | Resumes from the next occurrence. Missed triggers are not backfilled. |
+| Archive | `POST /anthropic/v1/deployments/:id/archive` | Terminal — the schedule stops and the deployment can no longer be paused or run. |
+| Manual run | `POST /anthropic/v1/deployments/:id/run` | Creates a session immediately and writes a run with `trigger_context.type: "manual"`. Useful for testing before committing to the schedule. |
+
+List deployments with `GET /anthropic/v1/deployments` (archived excluded unless `include_archived=true`).
+
+## How triggering works
+
+The scheduler runs inside the gateway process and ticks every 20 seconds. Each deployment stores a precomputed `next_run_at`; when it passes, the gateway:
+
+1. Advances `next_run_at` to the following occurrence (so a crash mid-trigger can never double-fire)
+2. Creates a session from the pinned config — latest agent version, the deployment's environment and `vault_ids`, `metadata.deployment_id` set for traceability
+3. Appends the `initial_events` as `user.message` events and enqueues the first turn under the same global and per-environment concurrency limits as user-initiated turns
+4. Records the deployment run
+
+If the gateway was down across one or more occurrences, the deployment fires once on startup (occurrences are not backfilled). Follow the resulting session through the [event stream](/run-sessions/events) as usual.

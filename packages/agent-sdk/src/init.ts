@@ -37,6 +37,7 @@ import type { SessionRow } from "./types";
 type GlobalInit = typeof globalThis & {
   __caInitPromise?: Promise<void>;
   __caSweeperHandle?: NodeJS.Timeout;
+  __caDeploymentSchedulerHandle?: NodeJS.Timeout;
 };
 const g = globalThis as GlobalInit;
 
@@ -160,6 +161,17 @@ async function doInit(): Promise<void> {
     g.__caSweeperHandle = setInterval(() => {
       void runSweep();
     }, intervalMs);
+  }
+
+  // 5. Install the deployment scheduler (cron-triggered sessions).
+  // Schedules have minute granularity; a 20s tick keeps fire-time skew
+  // well under the 10s jitter the hosted API documents.
+  if (!g.__caDeploymentSchedulerHandle) {
+    g.__caDeploymentSchedulerHandle = setInterval(() => {
+      import("./sessions/deployments")
+        .then((m) => m.runDeploymentSchedulerTick())
+        .catch((err) => console.error("[init] deployment scheduler tick failed:", err));
+    }, 20_000);
   }
 }
 
