@@ -47,15 +47,22 @@ export interface Transport {
 /**
  * Error thrown by both transports on a non-2xx response. `message` is the
  * server's error message; `errorType` is the error envelope's `type` field.
+ * (Distinct from the engine-side `ApiError` in `src/errors.ts`, which is
+ * what handlers throw — this is what API consumers catch.)
  */
-export class GatewayApiError extends Error {
+export class ApiClientError extends Error {
   readonly status: number;
   readonly errorType: string;
 
   constructor(message: string, status: number, errorType = "api_error") {
     super(message);
-    this.name = "GatewayApiError";
+    this.name = "ApiClientError";
     this.status = status;
     this.errorType = errorType;
   }
 }
+
+/** @deprecated Renamed — use `ApiClientError`. */
+export const GatewayApiError = ApiClientError;
+/** @deprecated Renamed — use `ApiClientError`. */
+export type GatewayApiError = ApiClientError;

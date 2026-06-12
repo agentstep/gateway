@@ -31,8 +31,8 @@ docker build -t gateway . && docker run -p 4000:4000 gateway  # standalone
 
 TypeScript monorepo under `@agentstep/*` scope. Four packages:
 
-- **`@agentstep/agent-sdk`** (`packages/agent-sdk`) — framework-agnostic engine. All business logic lives here. Handlers accept `Request` → return `Response`. Also ships the programmatic client (`src/client/`, exported as `@agentstep/agent-sdk/client`): `createGateway()` returns a typed `GatewayClient` over an in-process transport (handler dispatch) or HTTP transport (`{ baseUrl, apiKey }`). `SessionHandle` offers `for await (const ev of session.send("..."))` turn iteration and awaitable `session.run("...") → TurnResult`. Composable call middleware via `createGateway({ middleware: [withRetry(), withLogging()] })`; typed event guards (`isAgentMessage`, `isSessionIdle`, `eventText`, ...) in `client/events.ts`.
-- **`@agentstep/gateway`** (`packages/gateway`) — CLI tool. Bundles everything via esbuild into a single `dist/gateway.js`. `resolveBackend()` wraps the SDK's `createGateway()` client for both local and remote mode.
+- **`@agentstep/agent-sdk`** (`packages/agent-sdk`) — framework-agnostic engine. All business logic lives here. Handlers accept `Request` → return `Response`. Also ships the programmatic client (`src/client/`, exported as `@agentstep/agent-sdk/client`): `createClient()` returns a typed `AgentStepClient` over an in-process transport (handler dispatch) or HTTP transport (`{ baseUrl, apiKey }`). `SessionHandle` offers `for await (const ev of session.send("..."))` turn iteration and awaitable `session.run("...") → TurnResult`. Composable call middleware via `createClient({ middleware: [withRetry(), withLogging()] })`; typed event guards (`isAgentMessage`, `isSessionIdle`, `eventText`, ...) in `client/events.ts`.
+- **`@agentstep/gateway`** (`packages/gateway`) — CLI tool. Bundles everything via esbuild into a single `dist/gateway.js`. `resolveBackend()` wraps the SDK's `createClient()` client for both local and remote mode.
 - **`@agentstep/gateway-ui`** (`packages/gateway-ui`) — React + shadcn/ui web app. Builds to single HTML via Vite + vite-plugin-singlefile, then inlined into the CLI bundle.
 - **`@agentstep/gateway-hono`** (`packages/gateway-hono`) — Hono server adapter (powers `gateway serve`).
 
@@ -76,7 +76,7 @@ The turn driver (`packages/agent-sdk/src/sessions/driver.ts`) orchestrates every
 
 ### HTTP pattern
 
-All handlers use `routeWrap()` from `http.ts` which handles init-on-first-request, auth, and error envelopes. Hono, Fastify, Next.js adapters, and the CLI's LocalBackend all call these same handler functions.
+All handlers use `routeWrap()` from `http.ts` which handles init-on-first-request, auth, and error envelopes. Hono, Fastify, Next.js adapters, and the client's `LocalTransport` all call these same handler functions.
 
 ### API namespace
 
@@ -110,7 +110,7 @@ libsql (SQLite) with WAL mode. Schema is idempotent (`CREATE TABLE IF NOT EXISTS
 1,400+ tests across 50+ test files:
 - `packages/agent-sdk/test/api-comprehensive.test.ts` (~200) — full API surface + settings masking
 - `packages/agent-sdk/test/cli-local-backend.test.ts` — CLI handler-based flow
-- `packages/agent-sdk/test/client.test.ts` — programmatic client (`createGateway`) + SessionHandle turn iteration
+- `packages/agent-sdk/test/client.test.ts` — programmatic client (`createClient`) + SessionHandle turn iteration
 - `packages/agent-sdk/test/translator-*.test.ts` — all backend translators + error handling
 - `packages/agent-sdk/test/anthropic-sync.test.ts` — sync-and-proxy flow + headers
 - `packages/agent-sdk/test/vault-crypto.test.ts` — AES-GCM round-trip, bad key handling

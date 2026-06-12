@@ -2,7 +2,7 @@
  * Composable client middleware — every non-streaming API call flows
  * through the middleware chain before reaching the transport:
  *
- *   const gw = createGateway({
+ *   const client = createClient({
  *     middleware: [withRetry({ maxRetries: 3 }), withLogging()],
  *   });
  *
@@ -11,7 +11,7 @@
  * bypass the chain (the HTTP transport already owns stream reconnect).
  */
 import type { ApiCall, StreamCall, Transport } from "./types";
-import { GatewayApiError } from "./types";
+import { ApiClientError } from "./types";
 import type { ManagedEvent } from "../types";
 
 export type ClientMiddleware = (
@@ -40,16 +40,16 @@ export interface RetryOptions {
   maxRetries?: number;
   /** First backoff delay; doubles per attempt (default 500ms). */
   baseDelayMs?: number;
-  /** Decide retryability. Default: 429/5xx GatewayApiErrors and network errors. */
+  /** Decide retryability. Default: 429/5xx ApiClientErrors and network errors. */
   retryOn?: (err: unknown) => boolean;
 }
 
 function defaultRetryOn(err: unknown): boolean {
-  if (err instanceof GatewayApiError) {
+  if (err instanceof ApiClientError) {
     return err.status === 429 || err.status >= 500;
   }
   // Non-API errors (network failures, timeouts) are worth retrying.
-  return err instanceof Error && !(err instanceof GatewayApiError);
+  return err instanceof Error && !(err instanceof ApiClientError);
 }
 
 /** Retry failed calls with exponential backoff. Mutating calls are safe to
@@ -87,11 +87,11 @@ export function withLogging(opts: LoggingOptions = {}): ClientMiddleware {
     const started = Date.now();
     try {
       const result = await next(call);
-      log(`[gateway] ${call.method} ${call.path} ok (${Date.now() - started}ms)`);
+      log(`[agentstep] ${call.method} ${call.path} ok (${Date.now() - started}ms)`);
       return result;
     } catch (err) {
-      const status = err instanceof GatewayApiError ? ` ${err.status}` : "";
-      log(`[gateway] ${call.method} ${call.path} failed${status} (${Date.now() - started}ms)`);
+      const status = err instanceof ApiClientError ? ` ${err.status}` : "";
+      log(`[agentstep] ${call.method} ${call.path} failed${status} (${Date.now() - started}ms)`);
       throw err;
     }
   };

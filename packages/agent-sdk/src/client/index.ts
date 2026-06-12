@@ -1,18 +1,22 @@
 /**
- * Programmatic gateway client — the SDK's "real library" surface.
+ * Programmatic client — the SDK's "real library" surface.
  *
- *   import { createGateway } from "@agentstep/agent-sdk/client";
+ *   import { createClient } from "@agentstep/agent-sdk/client";
  *
- *   const gw = createGateway();                            // in-process
- *   const gw = createGateway({ baseUrl, apiKey });         // remote server
+ *   const client = createClient();                         // in-process engine
+ *   const client = createClient({ baseUrl, apiKey });      // remote gateway server
  *
- *   const agent = await gw.agents.create({ name: "dev", model: "claude-sonnet-4-6" });
- *   const session = await gw.sessions.start({ agent: agent.id, environment_id });
+ *   const agent = await client.agents.create({ name: "dev", model: "claude-sonnet-4-6" });
+ *   const session = await client.sessions.start({ agent: agent.id, environment_id });
  *   for await (const event of session.send("Refactor the auth module")) { ... }
  *
  * Both modes expose the identical typed surface. In-process calls go
  * through the same handler functions as HTTP traffic (auth, validation,
  * audit included) — the client never touches the DB layer directly.
+ *
+ * Naming: "gateway" is the deployed server/CLI product. This module is the
+ * client for it (remote mode) or for the embedded engine (local mode), so
+ * its names carry the brand, not the topology.
  */
 import type {
   Agent,
@@ -26,14 +30,14 @@ import type {
   VaultEntry,
 } from "../types";
 import type { ApiCall, Page, Transport } from "./types";
-import { GatewayApiError } from "./types";
+import { ApiClientError, GatewayApiError } from "./types";
 import { HttpTransport, type HttpTransportOptions } from "./http-transport";
 import { LocalTransport, type LocalTransportOptions } from "./local-transport";
 import { applyMiddleware, type ClientMiddleware } from "./middleware";
 import { SessionHandle, type SendOptions, type TurnResult, type UserContentBlock } from "./session";
 import { buildQuery } from "./wire";
 
-export { GatewayApiError, SessionHandle };
+export { ApiClientError, GatewayApiError, SessionHandle };
 export type { ApiCall, Page, SendOptions, Transport, TurnResult, UserContentBlock };
 export type { HttpTransportOptions, LocalTransportOptions };
 
@@ -95,7 +99,7 @@ export interface ListOptions {
   include_archived?: boolean;
 }
 
-export type GatewayOptions = (
+export type ClientOptions = (
   | (HttpTransportOptions & { apiKey: string })
   | LocalTransportOptions
 ) & {
@@ -103,20 +107,26 @@ export type GatewayOptions = (
   middleware?: ClientMiddleware[];
 };
 
+/** @deprecated Renamed — use `ClientOptions`. */
+export type GatewayOptions = ClientOptions;
+
 /**
- * Create a gateway client. With `baseUrl` it talks to a remote gateway over
- * HTTP; without, it runs against the in-process engine (local SQLite DB),
- * calling the same handler functions the HTTP adapters mount.
+ * Create a client. With `baseUrl` it talks to a deployed gateway server
+ * over HTTP; without, it runs against the in-process engine (local SQLite
+ * DB), calling the same handler functions the HTTP adapters mount.
  */
-export function createGateway(options: GatewayOptions = {}): GatewayClient {
+export function createClient(options: ClientOptions = {}): AgentStepClient {
   const transport =
     "baseUrl" in options && options.baseUrl
       ? new HttpTransport(options)
       : new LocalTransport(options);
-  return new GatewayClient(applyMiddleware(transport, options.middleware ?? []));
+  return new AgentStepClient(applyMiddleware(transport, options.middleware ?? []));
 }
 
-export class GatewayClient {
+/** @deprecated Renamed — use `createClient`. */
+export const createGateway = createClient;
+
+export class AgentStepClient {
   constructor(readonly transport: Transport) {}
 
   private call<T>(c: ApiCall): Promise<T> {
@@ -387,3 +397,8 @@ export class GatewayClient {
     },
   };
 }
+
+/** @deprecated Renamed — use `AgentStepClient`. */
+export const GatewayClient = AgentStepClient;
+/** @deprecated Renamed — use `AgentStepClient`. */
+export type GatewayClient = AgentStepClient;

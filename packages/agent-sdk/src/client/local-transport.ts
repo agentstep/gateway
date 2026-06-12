@@ -108,7 +108,7 @@ export class LocalTransport implements Transport {
     }
 
     throw new Error(
-      "No API key available for the local gateway client. Pass { apiKey } to createGateway(), set SEED_API_KEY, or let the server generate one on first run.",
+      "No API key available for the local client. Pass { apiKey } to createClient(), set SEED_API_KEY, or let the server generate one on first run.",
     );
   }
 }

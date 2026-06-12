@@ -3,7 +3,7 @@
  * response parsing with error envelope unwrapping, and SSE body parsing.
  */
 import type { ManagedEvent } from "../types";
-import { GatewayApiError } from "./types";
+import { ApiClientError } from "./types";
 
 /** Build a query string ("" or "?k=v&..."), skipping undefined values. */
 export function buildQuery(
@@ -20,7 +20,7 @@ export function buildQuery(
 
 /**
  * Parse a handler/fetch Response: unwrap the error envelope into a
- * `GatewayApiError` on non-2xx, return undefined on 204, JSON otherwise.
+ * `ApiClientError` on non-2xx, return undefined on 204, JSON otherwise.
  */
 export async function parseJsonResponse<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -30,17 +30,17 @@ export async function parseJsonResponse<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export async function toApiError(res: Response): Promise<GatewayApiError> {
+export async function toApiError(res: Response): Promise<ApiClientError> {
   const text = await res.text().catch(() => "");
   try {
     const parsed = JSON.parse(text) as { error?: { type?: string; message?: string } };
     if (parsed?.error?.message) {
-      return new GatewayApiError(parsed.error.message, res.status, parsed.error.type ?? "api_error");
+      return new ApiClientError(parsed.error.message, res.status, parsed.error.type ?? "api_error");
     }
   } catch {
     /* not a JSON envelope — fall through */
   }
-  return new GatewayApiError(text || `HTTP ${res.status}`, res.status);
+  return new ApiClientError(text || `HTTP ${res.status}`, res.status);
 }
 
 /**

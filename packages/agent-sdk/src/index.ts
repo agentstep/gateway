@@ -23,11 +23,16 @@ export {
 export { FALLBACK_MODELS, inferEngineFromModel, isValidModelForEngine } from "./backends/models";
 
 // Programmatic client — typed, transport-agnostic facade over the same
-// handler functions the HTTP adapters mount. `createGateway()` runs
-// in-process; `createGateway({ baseUrl, apiKey })` talks to a remote server.
+// handler functions the HTTP adapters mount. `createClient()` runs
+// in-process; `createClient({ baseUrl, apiKey })` talks to a deployed
+// gateway server. (createGateway/GatewayClient/GatewayApiError remain as
+// deprecated aliases.)
 export {
+  createClient,
   createGateway,
+  AgentStepClient,
   GatewayClient,
+  ApiClientError,
   GatewayApiError,
   SessionHandle,
   withRetry,
@@ -41,6 +46,7 @@ export {
   isSessionIdle,
   isSessionRunning,
   type ClientMiddleware,
+  type ClientOptions,
   type GatewayOptions,
   type Page,
   type SendOptions,
