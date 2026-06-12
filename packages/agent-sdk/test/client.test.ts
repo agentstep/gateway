@@ -335,6 +335,44 @@ describe("SessionHandle — turn iteration", () => {
     expect(result.error).toBeNull();
     expect(result.events.map((e) => e.type)).toEqual(["agent.message", "session.status_idle"]);
   }, 15_000);
+
+  it("defineOutcome() settles on a terminal grader verdict, not on needs_revision", async () => {
+    const { gw, sessionId } = await makeIdleSession();
+    const { appendEvent } = await import("../src/sessions/bus");
+    const handle = gw.sessions.open(sessionId);
+
+    const outcome = handle.defineOutcome({
+      description: "produce a summary",
+      rubric: { type: "text", content: "- contains a summary" },
+      max_iterations: 3,
+    });
+
+    await new Promise((r) => setTimeout(r, 150));
+    // Iteration 0: grader asks for revision — the loop must continue.
+    appendEvent(sessionId, {
+      type: "span.outcome_evaluation_start",
+      payload: { outcome_id: "outc_t1", iteration: 0 },
+      origin: "server",
+    });
+    appendEvent(sessionId, {
+      type: "span.outcome_evaluation_end",
+      payload: { outcome_id: "outc_t1", result: "needs_revision", explanation: "too short", iteration: 0, usage: { input_tokens: 1, output_tokens: 1 } },
+      origin: "server",
+    });
+    // Iteration 1: satisfied — terminal.
+    appendEvent(sessionId, {
+      type: "span.outcome_evaluation_end",
+      payload: { outcome_id: "outc_t1", result: "satisfied", explanation: "all criteria met", iteration: 1, usage: { input_tokens: 1, output_tokens: 1 } },
+      origin: "server",
+    });
+
+    const result = await outcome;
+    expect(result.result).toBe("satisfied");
+    expect(result.explanation).toBe("all criteria met");
+    expect(result.iterations).toBe(2);
+    expect(result.error).toBeNull();
+    expect(result.events.filter((e) => e.type.startsWith("span.outcome_evaluation")).length).toBe(3);
+  }, 15_000);
 });
 
 // ---------------------------------------------------------------------------
@@ -401,9 +439,9 @@ describe("typed event guards", () => {
     const { isAgentMessage, isSessionIdle, isSessionError, eventText } = await import("../src/client/events");
     const base = { id: "evt_1", seq: 1, session_id: "s", processed_at: null };
 
-    const msg = { ...base, type: "agent.message", content: [{ type: "text", text: "a" }, { type: "text", text: "b" }] };
-    const idle = { ...base, type: "session.status_idle", stop_reason: { type: "end_turn" } };
-    const err = { ...base, type: "session.error", error: { type: "server_error", message: "boom" } };
+    const msg = { ...base, type: "agent.message" as const, content: [{ type: "text", text: "a" }, { type: "text", text: "b" }] };
+    const idle = { ...base, type: "session.status_idle" as const, stop_reason: { type: "end_turn" } };
+    const err = { ...base, type: "session.error" as const, error: { type: "server_error", message: "boom" } };
 
     expect(isAgentMessage(msg)).toBe(true);
     expect(eventText(msg)).toBe("ab");

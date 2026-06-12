@@ -10,7 +10,7 @@
  * descriptor that works on both transports, so the resource surface is
  * defined exactly once.
  */
-import type { ManagedEvent } from "../types";
+import type { GatewayEvent } from "../events/registry";
 
 /** Standard list envelope returned by paginated endpoints. */
 export interface Page<T> {
@@ -41,7 +41,7 @@ export interface StreamCall extends ApiCall {
 
 export interface Transport {
   call<T>(c: ApiCall): Promise<T>;
-  stream(c: StreamCall): AsyncGenerator<ManagedEvent, void, unknown>;
+  stream(c: StreamCall): AsyncGenerator<GatewayEvent, void, unknown>;
 }
 
 /**

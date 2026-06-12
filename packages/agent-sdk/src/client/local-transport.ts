@@ -10,7 +10,7 @@
  * (mirrors what the CLI has always done).
  */
 import type { ApiCall, StreamCall, Transport } from "./types";
-import type { ManagedEvent } from "../types";
+import type { GatewayEvent } from "../events/registry";
 import { parseJsonResponse, parseSseResponse, toApiError } from "./wire";
 
 type HandlerFn = (req: Request, ...ids: string[]) => Promise<Response>;
@@ -32,7 +32,7 @@ export class LocalTransport implements Transport {
     return parseJsonResponse<T>(res);
   }
 
-  async *stream(c: StreamCall): AsyncGenerator<ManagedEvent, void, unknown> {
+  async *stream(c: StreamCall): AsyncGenerator<GatewayEvent, void, unknown> {
     const headers: Record<string, string> = { Accept: "text/event-stream" };
     if (c.lastEventId != null) headers["Last-Event-ID"] = c.lastEventId;
     const res = await this.dispatch(c, headers);

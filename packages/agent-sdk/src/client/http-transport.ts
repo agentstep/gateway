@@ -4,7 +4,7 @@
  * seen seq so no events are dropped across connection failures.
  */
 import type { ApiCall, StreamCall, Transport } from "./types";
-import type { ManagedEvent } from "../types";
+import type { GatewayEvent } from "../events/registry";
 import { parseJsonResponse, parseSseResponse, toApiError } from "./wire";
 
 export interface HttpTransportOptions {
@@ -43,7 +43,7 @@ export class HttpTransport implements Transport {
     return parseJsonResponse<T>(res);
   }
 
-  async *stream(c: StreamCall): AsyncGenerator<ManagedEvent, void, unknown> {
+  async *stream(c: StreamCall): AsyncGenerator<GatewayEvent, void, unknown> {
     let lastSeq = c.lastEventId != null ? Number(c.lastEventId) : undefined;
     let backoff = 1000;
     let retries = 0;
@@ -72,7 +72,7 @@ export class HttpTransport implements Transport {
     }
   }
 
-  private async *streamOnce(c: StreamCall, afterSeq?: number): AsyncGenerator<ManagedEvent, void, unknown> {
+  private async *streamOnce(c: StreamCall, afterSeq?: number): AsyncGenerator<GatewayEvent, void, unknown> {
     // Rewrite after_seq in the path so reconnects resume from the last seq.
     const u = new URL(c.path, "http://placeholder");
     if (afterSeq != null) u.searchParams.set("after_seq", String(afterSeq));

@@ -12,7 +12,7 @@
  */
 import type { ApiCall, StreamCall, Transport } from "./types";
 import { ApiClientError } from "./types";
-import type { ManagedEvent } from "../types";
+import type { GatewayEvent } from "../events/registry";
 
 export type ClientMiddleware = (
   call: ApiCall,
@@ -31,7 +31,7 @@ export function applyMiddleware(transport: Transport, middleware: ClientMiddlewa
 
   return {
     call: <T>(c: ApiCall) => chain(c) as Promise<T>,
-    stream: (c: StreamCall): AsyncGenerator<ManagedEvent, void, unknown> => transport.stream(c),
+    stream: (c: StreamCall): AsyncGenerator<GatewayEvent, void, unknown> => transport.stream(c),
   };
 }
 

@@ -29,6 +29,10 @@
       "types": "./dist/client/index.d.ts",
       "import": "./dist/client/index.js"
     },
+    "./events": {
+      "types": "./dist/events/index.d.ts",
+      "import": "./dist/events/index.js"
+    },
     "./queue": {
       "types": "./dist/queue/index.d.ts",
       "import": "./dist/queue/index.js"

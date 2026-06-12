@@ -2,7 +2,7 @@
  * Wire helpers shared by both transports: query-string building, JSON
  * response parsing with error envelope unwrapping, and SSE body parsing.
  */
-import type { ManagedEvent } from "../types";
+import type { GatewayEvent } from "../events/registry";
 import { ApiClientError } from "./types";
 
 /** Build a query string ("" or "?k=v&..."), skipping undefined values. */
@@ -44,24 +44,24 @@ export async function toApiError(res: Response): Promise<ApiClientError> {
 }
 
 /**
- * Parse an SSE Response body into ManagedEvents. Handles multi-line `data:`
+ * Parse an SSE Response body into GatewayEvents. Handles multi-line `data:`
  * fields, filters `ping` keepalives, and cancels the reader when the
  * consumer stops iterating.
  */
-export async function* parseSseResponse(res: Response): AsyncGenerator<ManagedEvent, void, unknown> {
+export async function* parseSseResponse(res: Response): AsyncGenerator<GatewayEvent, void, unknown> {
   if (!res.body) return;
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   let currentData = "";
 
-  const flush = (): ManagedEvent | null => {
+  const flush = (): GatewayEvent | null => {
     if (!currentData) return null;
     const data = currentData;
     currentData = "";
     try {
-      const parsed = JSON.parse(data) as ManagedEvent;
-      if (parsed.type !== "ping") return parsed;
+      const parsed = JSON.parse(data) as GatewayEvent;
+      if ((parsed as { type?: string }).type !== "ping") return parsed;
     } catch {
       /* skip malformed frame */
     }

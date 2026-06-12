@@ -34,21 +34,40 @@ export {
   withRetry,
   withLogging,
   eventText,
+  isAgentCustomToolUse,
   isAgentMessage,
   isAgentThinking,
   isAgentToolResult,
   isAgentToolUse,
+  isOutcomeEvaluationEnd,
   isSessionError,
   isSessionIdle,
   isSessionRunning,
   type ClientMiddleware,
   type ClientOptions,
+  type DefineOutcomeInput,
+  type OutcomeResult,
   type Page,
   type SendOptions,
   type Transport,
   type TurnResult,
   type UserContentBlock,
 } from "./client/index";
+
+// Event schema registry — the engine-defined event union. `switch
+// (ev.type)` narrows; everything downstream (client guards, SSE, webhooks,
+// OpenAPI) derives from this.
+export {
+  EVENT_PAYLOADS,
+  KNOWN_EVENT_TYPES,
+  isKnownEventType,
+  validateEventPayload,
+  type EventBase,
+  type EventOf,
+  type GatewayEvent,
+  type KnownEventType,
+  type UnknownEvent,
+} from "./events/registry";
 
 // HTTP helpers
 export { routeWrap, jsonOk, type RouteContext } from "./http";

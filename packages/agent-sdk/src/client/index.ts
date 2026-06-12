@@ -22,7 +22,6 @@ import type {
   Agent,
   EngineName,
   Environment,
-  ManagedEvent,
   Memory,
   MemoryStore,
   Session,
@@ -30,39 +29,66 @@ import type {
   Vault,
   VaultEntry,
 } from "../types";
+import type { GatewayEvent } from "../events/registry";
 import type { ApiCall, Page, Transport } from "./types";
 import { ApiClientError } from "./types";
 import { HttpTransport, type HttpTransportOptions } from "./http-transport";
 import { LocalTransport, type LocalTransportOptions } from "./local-transport";
 import { applyMiddleware, type ClientMiddleware } from "./middleware";
-import { SessionHandle, type SendOptions, type TurnResult, type UserContentBlock } from "./session";
+import {
+  SessionHandle,
+  type DefineOutcomeInput,
+  type OutcomeResult,
+  type SendOptions,
+  type TurnResult,
+  type UserContentBlock,
+} from "./session";
 import { buildQuery } from "./wire";
 
 export { ApiClientError, SessionHandle };
-export type { ApiCall, Page, SendOptions, Transport, TurnResult, UserContentBlock };
+export type {
+  ApiCall,
+  DefineOutcomeInput,
+  OutcomeResult,
+  Page,
+  SendOptions,
+  Transport,
+  TurnResult,
+  UserContentBlock,
+};
 export type { HttpTransportOptions, LocalTransportOptions };
 
 // Middleware
 export { withLogging, withRetry, type ClientMiddleware } from "./middleware";
 export type { LoggingOptions, RetryOptions } from "./middleware";
 
-// Typed event views + guards
+// Event registry (engine-defined union) + consumer guards
+export {
+  KNOWN_EVENT_TYPES,
+  isKnownEventType,
+  validateEventPayload,
+} from "../events/registry";
+export type { EventOf, GatewayEvent, KnownEventType, UnknownEvent } from "../events/registry";
 export {
   eventText,
+  isAgentCustomToolUse,
   isAgentMessage,
   isAgentThinking,
   isAgentToolResult,
   isAgentToolUse,
+  isOutcomeEvaluationEnd,
   isSessionError,
   isSessionIdle,
   isSessionRunning,
 } from "./events";
 export type {
+  AgentCustomToolUseEvent,
   AgentMessageEvent,
   AgentThinkingEvent,
   AgentToolResultEvent,
   AgentToolUseEvent,
   ContentBlock,
+  OutcomeEvaluationEndEvent,
   SessionErrorEvent,
   SessionStatusIdleEvent,
   SessionStatusRunningEvent,
@@ -242,13 +268,13 @@ export class AgentStepClient {
   };
 
   events = {
-    send: (sessionId: string, events: Array<Record<string, unknown>>): Promise<{ data: ManagedEvent[] }> =>
+    send: (sessionId: string, events: Array<Record<string, unknown>>): Promise<{ data: GatewayEvent[] }> =>
       this.sessions.open(sessionId).post(events),
     list: (
       sessionId: string,
       opts?: { limit?: number; order?: string; after_seq?: number },
-    ): Promise<Page<ManagedEvent>> => this.sessions.open(sessionId).events(opts),
-    stream: (sessionId: string, afterSeq?: number): AsyncGenerator<ManagedEvent, void, unknown> =>
+    ): Promise<Page<GatewayEvent>> => this.sessions.open(sessionId).events(opts),
+    stream: (sessionId: string, afterSeq?: number): AsyncGenerator<GatewayEvent, void, unknown> =>
       this.sessions.open(sessionId).stream(afterSeq),
   };
 
