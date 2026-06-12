@@ -144,6 +144,7 @@ import {
   handleGetGoogleAgent,
   handleDeleteGoogleAgent,
   handleGetEnvironmentFiles,
+  handleSessionChat,
   handleCreateDeployment,
   handleListDeployments,
   handleGetDeployment,
@@ -403,6 +404,9 @@ app.get("/anthropic/v1/vaults/:id/entries", (c) => handleListEntries(c.req.raw, 
 app.get("/anthropic/v1/vaults/:id/entries/:key", (c) => handleGetEntry(c.req.raw, c.req.param("id"), c.req.param("key")));
 app.put("/anthropic/v1/vaults/:id/entries/:key", (c) => handlePutEntry(c.req.raw, c.req.param("id"), c.req.param("key")));
 app.delete("/anthropic/v1/vaults/:id/entries/:key", (c) => handleDeleteEntry(c.req.raw, c.req.param("id"), c.req.param("key")));
+
+// ── Chat stream (UI message stream over a session turn) ─────────────────
+app.post("/v1/sessions/:id/chat", (c) => handleSessionChat(c.req.raw, c.req.param("id")));
 
 // ── Deployments (scheduled sessions) ─────────────────────────────────────
 app.post("/v1/deployments", (c) => handleCreateDeployment(c.req.raw));

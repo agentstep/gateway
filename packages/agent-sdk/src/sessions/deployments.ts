@@ -21,14 +21,12 @@ import {
   type DeploymentRunRow,
 } from "../db/deployments";
 import { getAgent } from "../db/agents";
-import { getEnvironment, getEnvironmentRow } from "../db/environments";
-import { createSession, getSessionRow, updateSessionStatus } from "../db/sessions";
+import { getEnvironment } from "../db/environments";
+import { createSession } from "../db/sessions";
 import { appendEvent } from "./bus";
 import { getActor } from "./actor";
-import { getConfig } from "../config";
-import { enqueueTurn } from "../queue";
-import { runTurn } from "./driver";
-import { markTurnStarting, clearTurnStarting, type TurnInput } from "../state";
+import { startTurn } from "./kickoff";
+import type { TurnInput } from "../state";
 import { nowMs } from "../util/clock";
 import { cronMatches, parseCron, zonedMinuteKey, zonedParts } from "../util/cron";
 
@@ -100,38 +98,7 @@ export async function fireDeployment(
       return collected;
     });
 
-    if (inputs.length > 0) {
-      const row = getSessionRow(session.id);
-      if (row) {
-        // Same inline-vs-work-queue decision as the events handler.
-        const markerEpoch = markTurnStarting(session.id);
-        const canExecuteInline = !!getConfig().defaultProvider || !!env.config?.provider;
-
-        if (env.config?.type === "self_hosted" && !canExecuteInline) {
-          const { createWorkItem } = await import("../db/work");
-          const envRow = getEnvironmentRow(deployment.environment_id);
-          createWorkItem(deployment.environment_id, session.id, {
-            inputsJson: JSON.stringify(inputs),
-            tenantId: envRow?.tenant_id ?? undefined,
-          });
-          updateSessionStatus(session.id, "running");
-          appendEvent(session.id, {
-            type: "session.status_running",
-            payload: {},
-            origin: "server",
-            processedAt: nowMs(),
-          });
-          clearTurnStarting(session.id, markerEpoch);
-        } else {
-          void enqueueTurn(deployment.environment_id, () => runTurn(session.id, inputs)).catch(
-            (err: unknown) => {
-              clearTurnStarting(session.id, markerEpoch);
-              console.error(`[deployments] enqueueTurn failed for ${deployment.id}:`, err);
-            },
-          );
-        }
-      }
-    }
+    await startTurn(session.id, deployment.environment_id, inputs);
 
     return {
       run: createDeploymentRun({

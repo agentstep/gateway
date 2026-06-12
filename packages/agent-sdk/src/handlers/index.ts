@@ -40,3 +40,4 @@ export {
   handleRunDeployment,
   handleListDeploymentRuns,
 } from "./deployments";
+export { handleSessionChat } from "./chat-stream";
