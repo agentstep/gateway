@@ -12,9 +12,26 @@ providers.
 > Gateway server when you want it deployed — one resource model, one event
 > schema, any harness, your infrastructure.
 
-**Method.** Strangler-fig, not rewrite. Public surfaces (HTTP API, the
-programmatic client, event shapes) stay frozen while layers move beneath
-them. Every phase ships independently and is test-guarded.
+**Compatibility contract.** The SDK's TypeScript API is **not** subject to
+backward compatibility — exports, signatures, package layout, and internal
+architecture may break freely between releases. What must stay stable is
+the **wire protocol**:
+
+- `/anthropic/v1/*` — Managed Agents-compatible shapes (requests,
+  responses, event payloads, SSE framing, error envelopes)
+- `/google/v1beta/*` — Google-compat shapes
+- `/v1/*` — gateway-native API
+- Webhook payloads and signatures; the work-queue protocol
+
+The compat test suites (`ma-compat`, `sdk-compat`, `api-comprehensive`)
+are the contract; they must pass unchanged through every phase. Everything
+not covered by them is fair game to redesign without shims or deprecation
+cycles.
+
+**Method.** Phased, not big-bang — every phase ships independently and is
+test-guarded — but with no obligation to preserve the library surface
+between phases. No deprecated aliases, no compat shims: when a name or
+shape improves, the old one is deleted in the same commit.
 
 ---
 
@@ -30,8 +47,8 @@ them. Every phase ships independently and is test-guarded.
   guards (`isAgentMessage`, `eventText`, ...), `ApiClientError`.
 - CLI collapsed onto the public client (deleted ~850 lines of duplicated
   `any`-typed surface); four latent CLI bugs fixed that typing exposed.
-- Brand-accurate naming (`createClient` / `AgentStepClient`), deprecated
-  aliases retained.
+- Brand-accurate naming (`createClient` / `AgentStepClient`); no legacy
+  aliases — the TS surface breaks freely per the compatibility contract.
 
 Already strong and underappreciated in our surface: **outcomes**
 (`user.define_outcome` + `sessions/grader.ts` iterate→grade→revise loop with
@@ -73,8 +90,9 @@ fabricated `Request` objects in-process, while auth/validation/audit
 semantics stay identical because they live in the services.
 
 Order of extraction (by traffic and risk): sessions/events → agents →
-environments → vaults → the rest. Each resource is one PR; handlers and
-client tests must pass unchanged after each.
+environments → vaults → the rest. Each resource is one PR; the wire-level
+compat suites must pass unchanged after each — handler *signatures* and
+client *types* may change freely.
 
 *Acceptance:* `LocalTransport` contains zero `new Request(...)`; handler
 files contain zero DB imports. *Size: L (the center of gravity).*
@@ -200,10 +218,11 @@ a grader verdict. *Size: M. 4.2 depends on 1.3.*
   event stream into the de-facto chat-frontend stream protocol, derived
   from the 1.1 registry; optional `@agentstep/react` hooks package.
   Lets any existing chat UI point at any harness through the gateway.
-- **5.3 Packaging (S).** Decide the package rename
-  (`@agentstep/agent-sdk` → `@agentstep/sdk`) before the client is widely
-  adopted; subpath exports `/client`, `/events`, `/services`; a docs
-  quickstart built around the ten-line embed script.
+- **5.3 Packaging (S).** The package rename
+  (`@agentstep/agent-sdk` → `@agentstep/sdk`) is unblocked by the
+  compatibility contract and cheapest done early; subpath exports
+  `/client`, `/events`, `/services`; a docs quickstart built around the
+  ten-line embed script.
 
 ---
 
@@ -232,8 +251,10 @@ self-contained, so it can run as a parallel track.
 - **CLI bundle size** — the single-file esbuild bundle must not balloon;
   registry and services are tree-shakeable, verify per phase.
 - **Hosted-product coupling** — the separate product repo consumes
-  handlers directly; keep handlers' signatures stable until it migrates
-  to services (coordinate before deleting anything).
+  handlers directly. Its *wire* behavior is protected by the contract,
+  but TS signature changes need a coordinated bump (it's our repo, so
+  this is scheduling, not a constraint — flag each phase's breaking
+  changes in the release notes it pins against).
 - **Egress proxy portability** — eleven providers won't all support proxy
   env vars identically; ship provider-gated with docker first and a
   documented fallback (current env-var injection) elsewhere.

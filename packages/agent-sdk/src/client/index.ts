@@ -31,14 +31,14 @@ import type {
   VaultEntry,
 } from "../types";
 import type { ApiCall, Page, Transport } from "./types";
-import { ApiClientError, GatewayApiError } from "./types";
+import { ApiClientError } from "./types";
 import { HttpTransport, type HttpTransportOptions } from "./http-transport";
 import { LocalTransport, type LocalTransportOptions } from "./local-transport";
 import { applyMiddleware, type ClientMiddleware } from "./middleware";
 import { SessionHandle, type SendOptions, type TurnResult, type UserContentBlock } from "./session";
 import { buildQuery } from "./wire";
 
-export { ApiClientError, GatewayApiError, SessionHandle };
+export { ApiClientError, SessionHandle };
 export type { ApiCall, Page, SendOptions, Transport, TurnResult, UserContentBlock };
 export type { HttpTransportOptions, LocalTransportOptions };
 
@@ -114,9 +114,6 @@ export type ClientOptions = (
   middleware?: ClientMiddleware[];
 };
 
-/** @deprecated Renamed — use `ClientOptions`. */
-export type GatewayOptions = ClientOptions;
-
 /**
  * Create a client. With `baseUrl` it talks to a deployed gateway server
  * over HTTP; without, it runs against the in-process engine (local SQLite
@@ -129,9 +126,6 @@ export function createClient(options: ClientOptions = {}): AgentStepClient {
       : new LocalTransport(options);
   return new AgentStepClient(applyMiddleware(transport, options.middleware ?? []));
 }
-
-/** @deprecated Renamed — use `createClient`. */
-export const createGateway = createClient;
 
 export class AgentStepClient {
   constructor(readonly transport: Transport) {}
@@ -404,8 +398,3 @@ export class AgentStepClient {
     },
   };
 }
-
-/** @deprecated Renamed — use `AgentStepClient`. */
-export const GatewayClient = AgentStepClient;
-/** @deprecated Renamed — use `AgentStepClient`. */
-export type GatewayClient = AgentStepClient;

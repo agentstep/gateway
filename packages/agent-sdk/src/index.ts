@@ -25,15 +25,11 @@ export { FALLBACK_MODELS, inferEngineFromModel, isValidModelForEngine } from "./
 // Programmatic client — typed, transport-agnostic facade over the same
 // handler functions the HTTP adapters mount. `createClient()` runs
 // in-process; `createClient({ baseUrl, apiKey })` talks to a deployed
-// gateway server. (createGateway/GatewayClient/GatewayApiError remain as
-// deprecated aliases.)
+// gateway server.
 export {
   createClient,
-  createGateway,
   AgentStepClient,
-  GatewayClient,
   ApiClientError,
-  GatewayApiError,
   SessionHandle,
   withRetry,
   withLogging,
@@ -47,7 +43,6 @@ export {
   isSessionRunning,
   type ClientMiddleware,
   type ClientOptions,
-  type GatewayOptions,
   type Page,
   type SendOptions,
   type Transport,

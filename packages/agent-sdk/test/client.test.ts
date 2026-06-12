@@ -413,12 +413,3 @@ describe("typed event guards", () => {
     expect(eventText(idle)).toBe("");
   });
 });
-
-describe("deprecated aliases", () => {
-  it("createGateway / GatewayClient / GatewayApiError still resolve to the new names", async () => {
-    const mod = await import("../src/client/index");
-    expect(mod.createGateway).toBe(mod.createClient);
-    expect(mod.GatewayClient).toBe(mod.AgentStepClient);
-    expect(mod.GatewayApiError).toBe(mod.ApiClientError);
-  });
-});

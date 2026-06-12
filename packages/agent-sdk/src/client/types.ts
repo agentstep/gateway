@@ -62,7 +62,3 @@ export class ApiClientError extends Error {
   }
 }
 
-/** @deprecated Renamed — use `ApiClientError`. */
-export const GatewayApiError = ApiClientError;
-/** @deprecated Renamed — use `ApiClientError`. */
-export type GatewayApiError = ApiClientError;
