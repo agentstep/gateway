@@ -2,7 +2,7 @@
   "license": "Apache-2.0",
   "name": "@agentstep/agent-sdk",
   "version": "0.5.43",
-  "description": "Core engine for AgentStep Gateway \u2014 backends, sandbox providers, session orchestration, and vault encryption.",
+  "description": "Core engine for AgentStep Gateway — backends, sandbox providers, session orchestration, and vault encryption.",
   "keywords": [
     "anthropic",
     "managed-agents",
@@ -57,7 +57,11 @@
       "types": "./dist/handlers/index.d.ts",
       "import": "./dist/handlers/index.js"
     },
-    "./*": "./dist/*.js"
+    "./*": "./dist/*.js",
+    "./services": {
+      "types": "./dist/services/index.d.ts",
+      "import": "./dist/services/index.js"
+    }
   },
   "homepage": "https://www.agentstep.com",
   "bugs": {
