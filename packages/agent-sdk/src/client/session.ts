@@ -13,6 +13,7 @@
  */
 import type { ManagedEvent, Session } from "../types";
 import type { Page, StreamCall, Transport } from "./types";
+import { eventText, isAgentMessage, isSessionError, isSessionIdle } from "./events";
 import { buildQuery } from "./wire";
 
 /** Content block for user messages — `{ type: "text", text }` plus passthrough. */
@@ -25,6 +26,18 @@ export interface SendOptions {
 
 /** Event types that end a `send()` iteration. */
 const TURN_END_TYPES = new Set(["session.status_idle", "session.status_terminated"]);
+
+/** Settled result of one turn — the awaitable counterpart to `send()`. */
+export interface TurnResult {
+  /** Concatenated text of the turn's agent.message events. */
+  text: string;
+  /** Every event the turn produced, in order. */
+  events: ManagedEvent[];
+  /** stop_reason type from the terminal status event (e.g. "end_turn"), or null. */
+  stopReason: string | null;
+  /** The session.error payload if the turn errored, else null. */
+  error: { type: string; message: string } | null;
+}
 
 export class SessionHandle {
   constructor(
@@ -90,6 +103,22 @@ export class SessionHandle {
       yield evt;
       if (TURN_END_TYPES.has(evt.type)) return;
     }
+  }
+
+  /**
+   * Send a user message and wait for the turn to settle. Collects what
+   * `send()` streams into a `TurnResult` — use this when you want the
+   * outcome, `send()` when you want to render progress.
+   */
+  async run(input: string | UserContentBlock[], opts?: SendOptions): Promise<TurnResult> {
+    const result: TurnResult = { text: "", events: [], stopReason: null, error: null };
+    for await (const evt of this.send(input, opts)) {
+      result.events.push(evt);
+      if (isAgentMessage(evt)) result.text += eventText(evt);
+      else if (isSessionError(evt)) result.error = evt.error;
+      else if (isSessionIdle(evt)) result.stopReason = evt.stop_reason?.type ?? null;
+    }
+    return result;
   }
 
   /**

@@ -29,12 +29,41 @@ import type { ApiCall, Page, Transport } from "./types";
 import { GatewayApiError } from "./types";
 import { HttpTransport, type HttpTransportOptions } from "./http-transport";
 import { LocalTransport, type LocalTransportOptions } from "./local-transport";
-import { SessionHandle, type SendOptions, type UserContentBlock } from "./session";
+import { applyMiddleware, type ClientMiddleware } from "./middleware";
+import { SessionHandle, type SendOptions, type TurnResult, type UserContentBlock } from "./session";
 import { buildQuery } from "./wire";
 
 export { GatewayApiError, SessionHandle };
-export type { ApiCall, Page, SendOptions, Transport, UserContentBlock };
+export type { ApiCall, Page, SendOptions, Transport, TurnResult, UserContentBlock };
 export type { HttpTransportOptions, LocalTransportOptions };
+
+// Middleware
+export { withLogging, withRetry, type ClientMiddleware } from "./middleware";
+export type { LoggingOptions, RetryOptions } from "./middleware";
+
+// Typed event views + guards
+export {
+  eventText,
+  isAgentMessage,
+  isAgentThinking,
+  isAgentToolResult,
+  isAgentToolUse,
+  isSessionError,
+  isSessionIdle,
+  isSessionRunning,
+} from "./events";
+export type {
+  AgentMessageEvent,
+  AgentThinkingEvent,
+  AgentToolResultEvent,
+  AgentToolUseEvent,
+  ContentBlock,
+  SessionErrorEvent,
+  SessionStatusIdleEvent,
+  SessionStatusRunningEvent,
+  TextBlock,
+  ThinkingBlock,
+} from "./events";
 
 /** A resource deletion acknowledgement. */
 export interface Deleted {
@@ -66,9 +95,13 @@ export interface ListOptions {
   include_archived?: boolean;
 }
 
-export type GatewayOptions =
+export type GatewayOptions = (
   | (HttpTransportOptions & { apiKey: string })
-  | LocalTransportOptions;
+  | LocalTransportOptions
+) & {
+  /** Composable call middleware, outermost first (e.g. `[withRetry(), withLogging()]`). */
+  middleware?: ClientMiddleware[];
+};
 
 /**
  * Create a gateway client. With `baseUrl` it talks to a remote gateway over
@@ -80,7 +113,7 @@ export function createGateway(options: GatewayOptions = {}): GatewayClient {
     "baseUrl" in options && options.baseUrl
       ? new HttpTransport(options)
       : new LocalTransport(options);
-  return new GatewayClient(transport);
+  return new GatewayClient(applyMiddleware(transport, options.middleware ?? []));
 }
 
 export class GatewayClient {

@@ -19,6 +19,10 @@ function freshDbEnv(): void {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "client-test-"));
   process.env.DATABASE_PATH = path.join(dir, "test.db");
   process.env.DEFAULT_PROVIDER = "docker";
+  // Keep the turn queue from ever dequeuing: posted user.messages enqueue a
+  // turn, but the driver never runs, so the turn tests below are fully
+  // deterministic — synthetic bus events are the only events.
+  process.env.CONCURRENCY = "0";
   const g = globalThis as typeof globalThis & {
     __caDb?: unknown;
     __caDrizzle?: unknown;
@@ -263,10 +267,14 @@ describe("SessionHandle — turn iteration", () => {
       }
     })();
 
-    // The driver may race us with its own status events (provider is
-    // unavailable in tests); appending a synthetic idle guarantees the
-    // turn terminates either way.
-    await new Promise((r) => setTimeout(r, 300));
+    // CONCURRENCY=0 keeps the driver out — these synthetic events are the
+    // only ones the turn can see.
+    await new Promise((r) => setTimeout(r, 150));
+    appendEvent(sessionId, {
+      type: "agent.message",
+      payload: { content: [{ type: "text", text: "done" }] },
+      origin: "server",
+    });
     appendEvent(sessionId, {
       type: "session.status_idle",
       payload: { stop_reason: { type: "end_turn" } },
@@ -274,13 +282,114 @@ describe("SessionHandle — turn iteration", () => {
     });
 
     await turn;
-    expect(received.length).toBeGreaterThanOrEqual(1);
-    expect(received.at(-1)).toMatch(/^session\.status_(idle|terminated)$/);
     // The posted user.message is not replayed back to the sender.
-    expect(received).not.toContain("user.message");
+    expect(received).toEqual(["agent.message", "session.status_idle"]);
 
     // The message itself is durably in the log.
     const events = await handle.events({ order: "asc" });
     expect(events.data.some((e) => e.type === "user.message")).toBe(true);
   }, 15_000);
+
+  it("run() settles into a TurnResult with text and stop reason", async () => {
+    const { gw, sessionId } = await makeIdleSession();
+    const { appendEvent } = await import("../src/sessions/bus");
+    const handle = gw.sessions.open(sessionId);
+
+    const turn = handle.run("summarize");
+
+    await new Promise((r) => setTimeout(r, 150));
+    appendEvent(sessionId, {
+      type: "agent.message",
+      payload: { content: [{ type: "text", text: "the summary" }] },
+      origin: "server",
+    });
+    appendEvent(sessionId, {
+      type: "session.status_idle",
+      payload: { stop_reason: { type: "end_turn" } },
+      origin: "server",
+    });
+
+    const result = await turn;
+    expect(result.text).toBe("the summary");
+    expect(result.stopReason).toBe("end_turn");
+    expect(result.error).toBeNull();
+    expect(result.events.map((e) => e.type)).toEqual(["agent.message", "session.status_idle"]);
+  }, 15_000);
+});
+
+// ---------------------------------------------------------------------------
+// Middleware + typed events
+// ---------------------------------------------------------------------------
+
+describe("client middleware", () => {
+  it("withRetry retries 5xx and succeeds; passes 4xx through untouched", async () => {
+    const { GatewayClient, GatewayApiError, withRetry } = await import("../src/client/index");
+    const { applyMiddleware } = await import("../src/client/middleware");
+
+    let calls = 0;
+    const flaky = {
+      call: async <T>(): Promise<T> => {
+        calls++;
+        if (calls < 3) throw new GatewayApiError("busy", 503, "server_busy");
+        return { ok: true } as T;
+      },
+      // eslint-disable-next-line require-yield
+      stream: async function* () {},
+    };
+
+    const gw = new GatewayClient(applyMiddleware(flaky as never, [withRetry({ baseDelayMs: 1 })]));
+    const res = await gw.skills.stats();
+    expect(res).toEqual({ ok: true });
+    expect(calls).toBe(3);
+
+    // 4xx must not be retried.
+    let notFoundCalls = 0;
+    const notFound = {
+      call: async (): Promise<never> => {
+        notFoundCalls++;
+        throw new GatewayApiError("nope", 404, "not_found");
+      },
+      // eslint-disable-next-line require-yield
+      stream: async function* () {},
+    };
+    const gw2 = new GatewayClient(applyMiddleware(notFound as never, [withRetry({ baseDelayMs: 1 })]));
+    await expect(gw2.skills.stats()).rejects.toMatchObject({ status: 404 });
+    expect(notFoundCalls).toBe(1);
+  });
+
+  it("withLogging observes calls without altering results", async () => {
+    const { GatewayClient, withLogging } = await import("../src/client/index");
+    const { applyMiddleware } = await import("../src/client/middleware");
+
+    const lines: string[] = [];
+    const fake = {
+      call: async <T>(): Promise<T> => ({ ok: true }) as T,
+      // eslint-disable-next-line require-yield
+      stream: async function* () {},
+    };
+    const gw = new GatewayClient(
+      applyMiddleware(fake as never, [withLogging({ log: (l) => lines.push(l) })]),
+    );
+    await gw.skills.stats();
+    expect(lines.length).toBe(1);
+    expect(lines[0]).toContain("GET /v1/skills/stats ok");
+  });
+});
+
+describe("typed event guards", () => {
+  it("narrow events and extract text", async () => {
+    const { isAgentMessage, isSessionIdle, isSessionError, eventText } = await import("../src/client/events");
+    const base = { id: "evt_1", seq: 1, session_id: "s", processed_at: null };
+
+    const msg = { ...base, type: "agent.message", content: [{ type: "text", text: "a" }, { type: "text", text: "b" }] };
+    const idle = { ...base, type: "session.status_idle", stop_reason: { type: "end_turn" } };
+    const err = { ...base, type: "session.error", error: { type: "server_error", message: "boom" } };
+
+    expect(isAgentMessage(msg)).toBe(true);
+    expect(eventText(msg)).toBe("ab");
+    expect(isSessionIdle(idle) && idle.stop_reason.type).toBe("end_turn");
+    expect(isSessionError(err) && err.error.message).toBe("boom");
+    expect(isAgentMessage(idle)).toBe(false);
+    expect(eventText(idle)).toBe("");
+  });
 });
