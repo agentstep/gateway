@@ -107,6 +107,16 @@ export type {
 // State
 export { pushPendingUserInput, type TurnInput } from "./state";
 
+// Turn pipeline — programmable hooks over turn preparation. Registered
+// middleware runs after the built-in decorators on every turn; it may
+// mutate {argv, env, stdin} or throw to abort the turn before exec.
+export {
+  registerTurnMiddleware,
+  applyTurnDecorators,
+  type TurnContext,
+  type TurnMiddleware,
+} from "./sessions/turn-pipeline";
+
 // DB
 export { getDb, closeDb } from "./db/client";
 export { getDrizzle } from "./db/drizzle";
