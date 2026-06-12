@@ -102,6 +102,38 @@ export interface Deleted {
   type: string;
 }
 
+export interface Deployment {
+  type: "deployment";
+  id: string;
+  name: string;
+  agent: { type: "agent"; id: string; version: number | null };
+  environment_id: string;
+  initial_events: unknown[];
+  schedule: {
+    type: "cron";
+    expression: string;
+    timezone: string;
+    last_fired_minute: string | null;
+    upcoming_runs_at?: string[];
+  };
+  status: string;
+  paused_reason: unknown | null;
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
+}
+
+export interface DeploymentRun {
+  type: "deployment_run";
+  id: string;
+  deployment_id: string;
+  trigger_context: { type: "schedule"; scheduled_at: string | null } | { type: "manual" };
+  session_id: string | null;
+  error: { type: string; message: string } | null;
+  agent: { type: "agent"; id: string; version: number | null } | null;
+  created_at: string;
+}
+
 export interface CreateAgentInput {
   name: string;
   /** Bare model id (`claude-sonnet-4-6`) or `{ id, speed }`. */
@@ -375,6 +407,48 @@ export class AgentStepClient {
           ids: [storeId, memId],
         }),
     },
+  };
+
+  deployments = {
+    /** Create a cron-scheduled deployment — each firing creates a session. */
+    create: (input: {
+      name: string;
+      agent: string | { id: string; version?: number };
+      environment_id: string;
+      initial_events: Array<{ type: "user.message"; content: Array<{ type: "text"; text: string }> }>;
+      schedule: { type: "cron"; expression: string; timezone?: string };
+      vault_ids?: string[];
+      metadata?: Record<string, string>;
+      title?: string;
+    }): Promise<Deployment> =>
+      this.call({ handler: "handleCreateDeployment", method: "POST", path: "/v1/deployments", body: input }),
+    list: (opts?: { include_archived?: boolean }): Promise<Page<Deployment>> =>
+      this.call({
+        handler: "handleListDeployments",
+        method: "GET",
+        path: `/v1/deployments${buildQuery({ include_archived: opts?.include_archived })}`,
+      }),
+    get: (id: string): Promise<Deployment> =>
+      this.call({ handler: "handleGetDeployment", method: "GET", path: `/v1/deployments/${id}`, ids: [id] }),
+    pause: (id: string): Promise<Deployment> =>
+      this.call({ handler: "handlePauseDeployment", method: "POST", path: `/v1/deployments/${id}/pause`, ids: [id] }),
+    unpause: (id: string): Promise<Deployment> =>
+      this.call({ handler: "handleUnpauseDeployment", method: "POST", path: `/v1/deployments/${id}/unpause`, ids: [id] }),
+    archive: (id: string): Promise<Deployment> =>
+      this.call({ handler: "handleArchiveDeployment", method: "POST", path: `/v1/deployments/${id}/archive`, ids: [id] }),
+    /** Trigger a run immediately (works while paused; not while archived). */
+    run: (id: string): Promise<DeploymentRun> =>
+      this.call({ handler: "handleRunDeployment", method: "POST", path: `/v1/deployments/${id}/run`, ids: [id] }),
+    runs: (deploymentId: string, opts?: { has_error?: boolean; limit?: number }): Promise<Page<DeploymentRun>> =>
+      this.call({
+        handler: "handleListDeploymentRuns",
+        method: "GET",
+        path: `/v1/deployment_runs${buildQuery({
+          deployment_id: deploymentId,
+          has_error: opts?.has_error,
+          limit: opts?.limit,
+        })}`,
+      }),
   };
 
   batch = {

@@ -30,3 +30,13 @@ export { handleListWork, handleGetWork, handleUpdateWork, handlePollWork, handle
 export { handleCreateUserProfile, handleListUserProfiles, handleGetUserProfile, handleUpdateUserProfile } from "./anthropic-compat/user-profiles";
 export { handleEnrollmentUrl, handleOAuthCallback } from "./anthropic-compat/enrollment";
 export { handleCreateInteraction, handleGetInteraction, handleDeleteInteraction, handleCancelInteraction, handleCreateGoogleAgent, handleListGoogleAgents, handleGetGoogleAgent, handleDeleteGoogleAgent, handleGetEnvironmentFiles } from "./google-compat";
+export {
+  handleCreateDeployment,
+  handleListDeployments,
+  handleGetDeployment,
+  handlePauseDeployment,
+  handleUnpauseDeployment,
+  handleArchiveDeployment,
+  handleRunDeployment,
+  handleListDeploymentRuns,
+} from "./deployments";

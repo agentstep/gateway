@@ -144,6 +144,14 @@ import {
   handleGetGoogleAgent,
   handleDeleteGoogleAgent,
   handleGetEnvironmentFiles,
+  handleCreateDeployment,
+  handleListDeployments,
+  handleGetDeployment,
+  handlePauseDeployment,
+  handleUnpauseDeployment,
+  handleArchiveDeployment,
+  handleRunDeployment,
+  handleListDeploymentRuns,
 } from "@agentstep/agent-sdk/handlers";
 
 import { cors } from "hono/cors";
@@ -395,6 +403,16 @@ app.get("/anthropic/v1/vaults/:id/entries", (c) => handleListEntries(c.req.raw, 
 app.get("/anthropic/v1/vaults/:id/entries/:key", (c) => handleGetEntry(c.req.raw, c.req.param("id"), c.req.param("key")));
 app.put("/anthropic/v1/vaults/:id/entries/:key", (c) => handlePutEntry(c.req.raw, c.req.param("id"), c.req.param("key")));
 app.delete("/anthropic/v1/vaults/:id/entries/:key", (c) => handleDeleteEntry(c.req.raw, c.req.param("id"), c.req.param("key")));
+
+// ── Deployments (scheduled sessions) ─────────────────────────────────────
+app.post("/v1/deployments", (c) => handleCreateDeployment(c.req.raw));
+app.get("/v1/deployments", (c) => handleListDeployments(c.req.raw));
+app.get("/v1/deployment_runs", (c) => handleListDeploymentRuns(c.req.raw));
+app.post("/v1/deployments/:id/pause", (c) => handlePauseDeployment(c.req.raw, c.req.param("id")));
+app.post("/v1/deployments/:id/unpause", (c) => handleUnpauseDeployment(c.req.raw, c.req.param("id")));
+app.post("/v1/deployments/:id/archive", (c) => handleArchiveDeployment(c.req.raw, c.req.param("id")));
+app.post("/v1/deployments/:id/run", (c) => handleRunDeployment(c.req.raw, c.req.param("id")));
+app.get("/v1/deployments/:id", (c) => handleGetDeployment(c.req.raw, c.req.param("id")));
 
 // ── Memory Stores ────────────────────────────────────────────────────────
 app.post("/v1/memory_stores", (c) => handleCreateMemoryStore(c.req.raw));

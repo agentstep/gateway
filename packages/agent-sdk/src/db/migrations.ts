@@ -900,4 +900,42 @@ export function runMigrations(db: InstanceType<typeof Database>): void {
   try {
     db.exec(`ALTER TABLE agent_versions ADD COLUMN permission_policy_json TEXT`);
   } catch { /* column already exists */ }
+
+  // Scheduled deployments: cron-fired sessions with per-firing run records.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS deployments (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      agent_version INTEGER,
+      environment_id TEXT NOT NULL,
+      initial_events_json TEXT NOT NULL,
+      schedule_expression TEXT NOT NULL,
+      schedule_timezone TEXT NOT NULL DEFAULT 'UTC',
+      session_config_json TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      paused_reason_json TEXT,
+      last_fired_minute TEXT,
+      tenant_id TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      archived_at INTEGER
+    )
+  `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS deployment_runs (
+      id TEXT PRIMARY KEY,
+      deployment_id TEXT NOT NULL,
+      trigger_type TEXT NOT NULL,
+      scheduled_at INTEGER,
+      session_id TEXT,
+      error_type TEXT,
+      error_message TEXT,
+      agent_id TEXT,
+      agent_version INTEGER,
+      tenant_id TEXT,
+      created_at INTEGER NOT NULL
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_deployment_runs_deployment ON deployment_runs(deployment_id, created_at DESC)`);
 }
