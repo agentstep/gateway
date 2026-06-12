@@ -35,6 +35,23 @@ shape improves, the old one is deleted in the same commit.
 
 ---
 
+## Status
+
+| Phase | State |
+|---|---|
+| 0 — typed client, turn ergonomics, middleware, naming | ✅ shipped |
+| 1.1 — event schema registry (`GatewayEvent`, drift guard) | ✅ shipped |
+| 1.2 — service core extraction | ⏳ next up (start: sessions/events; `sessions/kickoff.ts` is the first extracted piece) |
+| 1.3 — explicit runtime | ⏳ after 1.2 |
+| 2.1/2.2 — turn pipeline + `registerTurnMiddleware` hooks | ✅ shipped (executor interface 2.3 pending) |
+| 3 — egress credential substitution | ⏳ MCP creds already gateway-side; proxy pending |
+| 4.1 — outcomes on the client (`defineOutcome` → `OutcomeResult`) | ✅ shipped |
+| 4.2 — scheduled deployments + runs + scheduler | ✅ shipped |
+| 4.3 — threads parity | ⏳ |
+| 5.1 — lite execution tier | ⏳ needs 2.3 |
+| 5.2 — chat/UI message stream endpoint | ✅ shipped |
+| 5.3 — packaging rename | ⏳ decision pending |
+
 ## Where we stand (Phase 0 — shipped)
 
 - Typed programmatic client (`src/client/`): `createClient()` over two

@@ -74,6 +74,14 @@ The turn driver (`packages/agent-sdk/src/sessions/driver.ts`) orchestrates every
 
 **Config cascade** (`config/index.ts`): env vars → settings DB table → defaults. Cached 30s. Use `PUT /v1/settings` or `writeSetting()` to persist.
 
+**Event schema registry** (`events/registry.ts`): zod payload schema per event type; everything derives from it — the `GatewayEvent` discriminated union (`switch (ev.type)` narrows), client guards, `validateEventPayload()`. Translator drift is caught by `test/event-registry.test.ts`.
+
+**Turn pipeline** (`sessions/turn-pipeline.ts`): the driver's decoration stages as named middleware (vault env, key remaps, local-model wiring, ...). `registerTurnMiddleware(fn)` adds programmable hooks that can mutate `{argv, env, stdin}` or throw to abort the turn pre-exec. Shared turn kickoff in `sessions/kickoff.ts`.
+
+**Scheduled deployments** (`db/deployments.ts`, `sessions/deployments.ts`, `handlers/deployments.ts`): `/v1/deployments` runs an agent on a cron cadence (zero-dep matcher in `util/cron.ts`, IANA wall-clock); each firing writes a `deployment_run` with the session id or a typed error. Scheduler tick installed in `init.ts`.
+
+**Chat stream** (`handlers/chat-stream.ts`): `POST /v1/sessions/:id/chat` accepts `{messages: [...]}` and streams the turn as UI message SSE frames — standard chat frontends drive any harness with zero translation.
+
 ### HTTP pattern
 
 All handlers use `routeWrap()` from `http.ts` which handles init-on-first-request, auth, and error envelopes. Hono, Fastify, Next.js adapters, and the client's `LocalTransport` all call these same handler functions.
