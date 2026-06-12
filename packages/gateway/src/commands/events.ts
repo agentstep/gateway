@@ -43,7 +43,7 @@ export function registerEventCommands(parent: Command): void {
       if (fmt === "json") {
         printJSON(res);
       } else {
-        for (const evt of res.events) {
+        for (const evt of res.data) {
           console.log(`Sent event: ${evt.type} (seq ${evt.seq})`);
         }
       }

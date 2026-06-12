@@ -12,7 +12,8 @@ export interface AgentBackend {
   create(input: { name: string; model: string; system?: string; backend?: string; confirmation_mode?: boolean }): Promise<any>;
   list(opts?: { limit?: number; order?: string; include_archived?: boolean }): Promise<Paginated<any>>;
   get(id: string, version?: number): Promise<any>;
-  update(id: string, input: Record<string, unknown>): Promise<any>;
+  /** Optimistic concurrency: `version` must match the current agent version. */
+  update(id: string, input: { version: number; [key: string]: unknown }): Promise<any>;
   delete(id: string): Promise<{ id: string; type: string }>;
   archive(id: string): Promise<any>;
   versions(id: string, opts?: { limit?: number }): Promise<Paginated<any>>;
@@ -37,7 +38,7 @@ export interface SessionBackend {
 }
 
 export interface EventBackend {
-  send(sessionId: string, events: Array<Record<string, unknown>>): Promise<{ events: any[] }>;
+  send(sessionId: string, events: Array<Record<string, unknown>>): Promise<{ data: any[] }>;
   list(sessionId: string, opts?: { limit?: number; order?: string; after_seq?: number }): Promise<Paginated<any>>;
   stream(sessionId: string, afterSeq?: number): AsyncIterable<any>;
 }
@@ -59,7 +60,7 @@ export interface VaultBackend {
 
 export interface MemoryBackend {
   stores: {
-    create(input: { name: string; description?: string }): Promise<any>;
+    create(input: { name: string; agent_id: string; description?: string }): Promise<any>;
     list(): Promise<{ data: any[] }>;
     get(id: string): Promise<any>;
     delete(id: string): Promise<{ id: string; type: string }>;

@@ -31,14 +31,14 @@ docker build -t gateway . && docker run -p 4000:4000 gateway  # standalone
 
 TypeScript monorepo under `@agentstep/*` scope. Four packages:
 
-- **`@agentstep/agent-sdk`** (`packages/agent-sdk`) — framework-agnostic engine. All business logic lives here. Handlers accept `Request` → return `Response`.
-- **`@agentstep/gateway`** (`packages/gateway`) — CLI tool. Bundles everything via esbuild into a single `dist/gateway.js`. The `LocalBackend` routes all operations through agent-sdk handler functions (same code path as the web app).
+- **`@agentstep/agent-sdk`** (`packages/agent-sdk`) — framework-agnostic engine. All business logic lives here. Handlers accept `Request` → return `Response`. Also ships the programmatic client (`src/client/`, exported as `@agentstep/agent-sdk/client`): `createGateway()` returns a typed `GatewayClient` over an in-process transport (handler dispatch) or HTTP transport (`{ baseUrl, apiKey }`), plus `SessionHandle` with `for await (const ev of session.send("..."))` turn iteration.
+- **`@agentstep/gateway`** (`packages/gateway`) — CLI tool. Bundles everything via esbuild into a single `dist/gateway.js`. `resolveBackend()` wraps the SDK's `createGateway()` client for both local and remote mode.
 - **`@agentstep/gateway-ui`** (`packages/gateway-ui`) — React + shadcn/ui web app. Builds to single HTML via Vite + vite-plugin-singlefile, then inlined into the CLI bundle.
 - **`@agentstep/gateway-hono`** (`packages/gateway-hono`) — Hono server adapter (powers `gateway serve`).
 
 `gateway-hono` is a thin route adapter. The hosted product (agentstep.com) uses `@agentstep/agent-sdk` directly via its own Next.js routes (in the separate `agentstep-product` repo).
 
-**Critical: Both CLI and web app use the same handler functions.** The CLI's `LocalBackend` constructs `Request` objects and calls handlers — never imports DB functions directly.
+**Critical: CLI, web app, and programmatic client all use the same handler functions.** The client's `LocalTransport` constructs `Request` objects and calls handlers by export name — never imports DB functions directly. Auth, validation, and audit apply identically in-process and over HTTP.
 
 ### UI build pipeline
 
@@ -110,6 +110,7 @@ libsql (SQLite) with WAL mode. Schema is idempotent (`CREATE TABLE IF NOT EXISTS
 1,400+ tests across 50+ test files:
 - `packages/agent-sdk/test/api-comprehensive.test.ts` (~200) — full API surface + settings masking
 - `packages/agent-sdk/test/cli-local-backend.test.ts` — CLI handler-based flow
+- `packages/agent-sdk/test/client.test.ts` — programmatic client (`createGateway`) + SessionHandle turn iteration
 - `packages/agent-sdk/test/translator-*.test.ts` — all backend translators + error handling
 - `packages/agent-sdk/test/anthropic-sync.test.ts` — sync-and-proxy flow + headers
 - `packages/agent-sdk/test/vault-crypto.test.ts` — AES-GCM round-trip, bad key handling

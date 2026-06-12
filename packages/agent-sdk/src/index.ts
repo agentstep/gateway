@@ -22,6 +22,21 @@ export {
 } from "./registry";
 export { FALLBACK_MODELS, inferEngineFromModel, isValidModelForEngine } from "./backends/models";
 
+// Programmatic client — typed, transport-agnostic facade over the same
+// handler functions the HTTP adapters mount. `createGateway()` runs
+// in-process; `createGateway({ baseUrl, apiKey })` talks to a remote server.
+export {
+  createGateway,
+  GatewayClient,
+  GatewayApiError,
+  SessionHandle,
+  type GatewayOptions,
+  type Page,
+  type SendOptions,
+  type Transport,
+  type UserContentBlock,
+} from "./client/index";
+
 // HTTP helpers
 export { routeWrap, jsonOk, type RouteContext } from "./http";
 
