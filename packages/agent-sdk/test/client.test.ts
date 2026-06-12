@@ -108,6 +108,26 @@ describe("createClient() — local transport resource surface", () => {
     expect(archived.archived_at).toBeTruthy();
   });
 
+  it("agents: engine selected explicitly or inferred from model prefix", async () => {
+    await bootDb();
+    const gw = await makeClient();
+
+    // Explicit engine wins.
+    const explicit = await gw.agents.create({
+      name: "ExplicitEngine",
+      model: "gemini-2.0-flash",
+      engine: "gemini",
+    });
+    expect(explicit.engine).toBe("gemini");
+
+    // Omitted engine → inferred from the model prefix.
+    const inferred = await gw.agents.create({ name: "InferredEngine", model: "gemini-2.0-flash" });
+    expect(inferred.engine).toBe("gemini");
+
+    const claude = await gw.agents.create({ name: "InferredClaude", model: "claude-sonnet-4-6" });
+    expect(claude.engine).toBe("claude");
+  });
+
   it("unwraps the error envelope into ApiClientError with status", async () => {
     await bootDb();
     const gw = await makeClient();

@@ -9,7 +9,7 @@ export interface Paginated<T> {
 }
 
 export interface AgentBackend {
-  create(input: { name: string; model: string; system?: string; backend?: string; confirmation_mode?: boolean }): Promise<any>;
+  create(input: { name: string; model: string; system?: string; engine?: string; confirmation_mode?: boolean }): Promise<any>;
   list(opts?: { limit?: number; order?: string; include_archived?: boolean }): Promise<Paginated<any>>;
   get(id: string, version?: number): Promise<any>;
   /** Optimistic concurrency: `version` must match the current agent version. */

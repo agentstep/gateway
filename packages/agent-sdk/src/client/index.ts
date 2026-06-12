@@ -20,6 +20,7 @@
  */
 import type {
   Agent,
+  EngineName,
   Environment,
   ManagedEvent,
   Memory,
@@ -79,8 +80,14 @@ export interface CreateAgentInput {
   name: string;
   /** Bare model id (`claude-sonnet-4-6`) or `{ id, speed }`. */
   model: string | { id: string; speed?: "standard" | "fast" };
+  /**
+   * Which harness runs this agent's turns (claude, opencode, codex,
+   * gemini, factory, pi). Inferred from the model prefix when omitted
+   * (`gemini-*` → gemini, `gpt-*` → codex, `claude-*` → claude).
+   * Fixed at creation — updates reject engine changes.
+   */
+  engine?: EngineName;
   system?: string;
-  backend?: string;
   confirmation_mode?: boolean;
   [key: string]: unknown;
 }
