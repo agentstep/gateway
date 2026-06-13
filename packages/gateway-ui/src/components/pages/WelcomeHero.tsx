@@ -65,10 +65,12 @@ export function WelcomeHero({ apiKey }: Props) {
 
           <div className="flex flex-col gap-3">
             <h1 className="text-3xl sm:text-4xl font-semibold tracking-tight text-foreground leading-tight">
-              Run AI agents in sandboxed environments.
+              Not every token deserves a frontier model.
             </h1>
             <p className="text-base text-muted-foreground">
-              Start a session below, or use the API.
+              AgentStep is the gateway that routes agent work to the right model —
+              frontier for the planning, open models for the rest — across any backend
+              and sandbox. One API, real cost visibility, no vendor lock-in.
             </p>
           </div>
 
