@@ -18,6 +18,10 @@ WORKDIR /home/node/app
 # at the project root, which is *outside* the VOLUME — every restart
 # would regenerate the key and orphan all previously-encrypted entries.
 ENV VAULT_ENCRYPTION_KEY_FILE=/home/node/app/data/.vault-key
+# Create the data dir as `node` BEFORE declaring the volume. If the mountpoint
+# is created by the VOLUME instruction it can be root-owned, and the gateway
+# (running as `node`) would then fail to write the DB / vault key on first run.
+RUN mkdir -p /home/node/app/data
 VOLUME ["/home/node/app/data"]
 
 # Install the CLI into a private prefix owned by `node`, avoiding the

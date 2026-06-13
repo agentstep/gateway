@@ -40,7 +40,7 @@ export interface TurnUsage {
 }
 
 export interface TurnResult {
-  stopReason: "end_turn" | "max_turns" | "error" | "custom_tool_call";
+  stopReason: "end_turn" | "max_turns" | "error" | "custom_tool_call" | "refusal";
   usage: TurnUsage;
   num_turns: number;
 }

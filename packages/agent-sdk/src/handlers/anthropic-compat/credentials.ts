@@ -10,7 +10,7 @@
  *   - mcp_oauth: OAuth 2.0 for MCP servers with optional refresh config
  */
 import { z } from "zod";
-import { routeWrap, jsonOk, paginatedOk } from "../../http";
+import { routeWrap, jsonOk, paginatedOk, parseLimit } from "../../http";
 import { loadVaultForCaller } from "./vaults";
 import {
   createCredential,
@@ -158,7 +158,7 @@ export function handleListCredentials(
   return routeWrap(request, async ({ auth, request: req }) => {
     loadVaultForCaller(auth, vaultId); // tenant guard
     const url = new URL(req.url);
-    const requestedLimit = Number(url.searchParams.get("limit") || "100");
+    const requestedLimit = parseLimit(url.searchParams.get("limit"), 100);
     const data = listCredentials(vaultId);
     return paginatedOk(data, requestedLimit);
   });

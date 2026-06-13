@@ -68,7 +68,7 @@ Save this as a file in your repo (e.g., `skills/curator/SKILL.md`).
 
 ```bash
 # Create the curator agent with web search enabled
-curl http://localhost:4000/v1/agents \
+curl http://localhost:4000/anthropic/v1/agents \
   -H "x-api-key: $GATEWAY_KEY" \
   -H "anthropic-version: 2023-06-01" \
   -H "anthropic-beta: managed-agents-2026-04-01" \
@@ -100,7 +100,7 @@ The agent needs to clone the repo, make changes, and push a branch:
 
 ```bash
 # Create the environment
-curl http://localhost:4000/v1/environments \
+curl http://localhost:4000/anthropic/v1/environments \
   -H "x-api-key: $GATEWAY_KEY" \
   -H "anthropic-version: 2023-06-01" \
   -H "anthropic-beta: managed-agents-2026-04-01" \
@@ -184,7 +184,7 @@ jobs:
           VAULT_ID: ${{ secrets.CURATOR_VAULT_ID }}
         run: |
           # Create session and send curation task
-          SESSION_ID=$(curl -s "$GATEWAY_URL/v1/sessions" \
+          SESSION_ID=$(curl -s "$GATEWAY_URL/anthropic/v1/sessions" \
             -H "x-api-key: $GATEWAY_KEY" \
             -H "anthropic-version: 2023-06-01" \
             -H "anthropic-beta: managed-agents-2026-04-01" \
@@ -194,7 +194,7 @@ jobs:
               \"vault_ids\": [\"$VAULT_ID\"]
             }" | jq -r '.id')
 
-          curl -s "$GATEWAY_URL/v1/sessions/$SESSION_ID/events" \
+          curl -s "$GATEWAY_URL/anthropic/v1/sessions/$SESSION_ID/events" \
             -H "x-api-key: $GATEWAY_KEY" \
             -H "anthropic-version: 2023-06-01" \
             -H "anthropic-beta: managed-agents-2026-04-01" \
@@ -205,7 +205,7 @@ jobs:
 
           # Wait for session to complete (poll status)
           while true; do
-            STATUS=$(curl -s "$GATEWAY_URL/v1/sessions/$SESSION_ID" \
+            STATUS=$(curl -s "$GATEWAY_URL/anthropic/v1/sessions/$SESSION_ID" \
               -H "x-api-key: $GATEWAY_KEY" \
               -H "anthropic-version: 2023-06-01" \
               -H "anthropic-beta: managed-agents-2026-04-01" \

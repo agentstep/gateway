@@ -19,10 +19,15 @@ export function registerMemoryCommands(parent: Command): void {
 
   mem.command("create")
     .requiredOption("--name <name>", "Store name")
+    .requiredOption("--agent <id>", "Agent the store belongs to")
     .option("--description <desc>", "Description")
     .action(async (opts) => {
       const b = await initBackend();
-      const store = await b.memory.stores.create({ name: opts.name, description: opts.description });
+      const store = await b.memory.stores.create({
+        name: opts.name,
+        agent_id: opts.agent,
+        description: opts.description,
+      });
       formatOutput(getFormat(), store, storeCols);
     });
 

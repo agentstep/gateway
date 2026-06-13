@@ -11,11 +11,15 @@
 
 export const FALLBACK_MODELS: Record<string, string[]> = {
   claude: [
+    "claude-fable-5",
+    "claude-opus-4-8",
     "claude-sonnet-4-6",
     "claude-opus-4-6",
     "claude-haiku-4-5",
   ],
   opencode: [
+    "anthropic/claude-fable-5",
+    "anthropic/claude-opus-4-8",
     "anthropic/claude-sonnet-4-6",
     "anthropic/claude-opus-4-6",
     "openai/gpt-5.4",
@@ -37,12 +41,16 @@ export const FALLBACK_MODELS: Record<string, string[]> = {
     "gemini-2.0-pro",
   ],
   factory: [
+    "claude-fable-5",
+    "claude-opus-4-8",
     "claude-sonnet-4-6",
     "claude-opus-4-6",
     "gpt-5.4",
     "gemini-3.1-pro-preview",
   ],
   pi: [
+    "anthropic/claude-fable-5",
+    "anthropic/claude-opus-4-8",
     "anthropic/claude-sonnet-4-6",
     "anthropic/claude-opus-4-6",
     "openai/gpt-5.4",

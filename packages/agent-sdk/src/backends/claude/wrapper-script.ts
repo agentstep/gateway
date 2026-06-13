@@ -12,7 +12,7 @@ import type { ContainerProvider } from "../../providers/types";
 // Use /tmp/ for wrapper scripts — it exists on all container runtimes
 export const CLAUDE_WRAPPER_PATH = "/tmp/.claude-wrapper";
 
-const SANDBOX_WRAPPER_SCRIPT = `#!/bin/sh
+export const SANDBOX_WRAPPER_SCRIPT = `#!/bin/sh
 export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 # V8 bytecode cache: Node.js caches compiled JS to disk.
 # First run builds cache (~55s). Subsequent runs skip V8 compilation (~8s startup).
@@ -43,11 +43,17 @@ if [ -S "$SPRITE_SOCK" ]; then
   trap 'curl -sf --unix-socket "$SPRITE_SOCK" -H "Host: sprite" -X DELETE http://sprite/v1/tasks/agent-turn >/dev/null 2>&1; [ -n "$HEARTBEAT_PID" ] && kill $HEARTBEAT_PID 2>/dev/null' EXIT
 fi
 # Read env vars from stdin until blank line, save remaining stdin to temp file.
+# Values are base64-encoded by the driver so secrets containing newlines
+# (PEM/SSH keys) survive the line-based framing; decode each one here.
+# The printf-x sentinel keeps trailing newlines that $() would strip.
+# Record our PID so the gateway can stop this turn's process group on
+# interrupt (sprites HTTP exec has no kill API). Best-effort — inert if it fails.
+echo $$ > /tmp/.agent-turn.pid 2>/dev/null || true
 # Use a dotted prefix so container-file-sync skips these wrapper-internal
 # files (the ENV_FILE contains plaintext credentials and must never reach
 # the gateway's file store).
 PROMPT_FILE=$(mktemp /tmp/.claude-cw.XXXXXXXXXX)
-while IFS= read -r line; do [ -z "$line" ] && break; export "$line"; done
+while IFS= read -r line; do [ -z "$line" ] && break; __k=\${line%%=*}; __v=$(printf "%s" "\${line#*=}" | base64 -d; printf x); export "$__k=\${__v%x}"; done
 cat > "$PROMPT_FILE"
 # Run as non-root if possible (claude requires non-root for bypassPermissions)
 if [ "$(id -u)" = "0" ]; then

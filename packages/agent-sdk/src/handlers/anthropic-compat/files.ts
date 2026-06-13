@@ -7,10 +7,10 @@
  * GET  /v1/files/:id/content — download file content
  * DELETE /v1/files/:id    — delete file
  */
-import { routeWrap, jsonOk } from "../../http";
+import { routeWrap, jsonOk, parseLimit } from "../../http";
 import { getDb } from "../../db/client";
 import { createFile, getFile, getFileRecord, listFiles, deleteFileRecord, updateFileStoragePath } from "../../db/files";
-import { storeFile, readFile, deleteFile, getMaxFileSize } from "../../files/storage";
+import { storeFile, readFile, deleteFile, getMaxFileSize, sanitizeFilename } from "../../files/storage";
 import { badRequest, notFound } from "../../errors";
 import { assertResourceTenant } from "../../auth/scope";
 import type { AuthContext } from "../../types";
@@ -63,6 +63,10 @@ export function handleUploadFile(request: Request): Promise<Response> {
       data = Buffer.from(ab);
     }
 
+    // Reduce the untrusted name to a single safe path component up front so
+    // the DB record and on-disk name agree (storeFile re-checks defensively).
+    filename = sanitizeFilename(filename);
+
     if (data.length === 0) {
       throw badRequest("Empty file");
     }
@@ -102,7 +106,7 @@ export function handleUploadFile(request: Request): Promise<Response> {
 export function handleListFiles(request: Request): Promise<Response> {
   return routeWrap(request, async ({ auth, request: req }) => {
     const url = new URL(req.url);
-    const limit = Number(url.searchParams.get("limit") || "100");
+    const limit = parseLimit(url.searchParams.get("limit"));
     const scope_id = url.searchParams.get("scope_id") || undefined;
     const after_id = url.searchParams.get("after_id") || undefined;
     const before_id = url.searchParams.get("before_id") || undefined;

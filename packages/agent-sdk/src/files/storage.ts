@@ -14,11 +14,41 @@ function ensureDir(dir: string): void {
   fs.mkdirSync(dir, { recursive: true });
 }
 
+/**
+ * Reduce a client-supplied filename to a single safe path component.
+ *
+ * The name arrives from untrusted sources (multipart `file.name`, the
+ * `?filename=` query param, or the `x-filename` header). Without this,
+ * `path.join(dir, "../../../etc/whatever")` collapses the `..` segments
+ * and escapes the storage directory — an arbitrary host-file write. We
+ * keep only the basename, strip control chars / quotes (which would also
+ * break the download `Content-Disposition` header), and refuse anything
+ * that still looks like traversal.
+ */
+export function sanitizeFilename(filename: string): string {
+  // basename drops any directory portion on both POSIX and Windows-style input.
+  let name = path.basename(filename.replace(/\\/g, "/"));
+  // Strip ASCII control characters (0x00-0x1f) and double quotes — the
+  // latter would otherwise break the download `Content-Disposition` header.
+  // eslint-disable-next-line no-control-regex
+  name = name.replace(/[\x00-\x1f"]/g, "").trim();
+  if (!name || name === "." || name === ".." || name.includes("/")) {
+    return "upload";
+  }
+  return name;
+}
+
 /** Store a file on disk. Returns the storage path relative to cwd. */
 export function storeFile(fileId: string, filename: string, data: Buffer): string {
   const dir = path.join(FILES_DIR, fileId);
   ensureDir(dir);
-  const filePath = path.join(dir, filename);
+  // Defense in depth: callers should sanitize, but never trust the name here.
+  const safeName = sanitizeFilename(filename);
+  const filePath = path.join(dir, safeName);
+  // Final guard: the resolved path must stay inside the file's own directory.
+  if (path.resolve(filePath) !== path.join(path.resolve(dir), safeName)) {
+    throw new Error("invalid filename");
+  }
   fs.writeFileSync(filePath, data);
   return path.relative(process.cwd(), filePath);
 }

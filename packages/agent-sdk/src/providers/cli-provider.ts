@@ -126,6 +126,9 @@ export function createCliProvider(cfg: CliProviderConfig): ContainerProvider {
         stderr += buf.toString();
       });
 
+      // Swallow EPIPE: if the child exits before consuming stdin, writing to
+      // its stdin emits an 'error' event that would otherwise crash the process.
+      proc.stdin?.on("error", () => {});
       if (opts?.stdin) {
         proc.stdin?.write(opts.stdin);
       }
@@ -183,6 +186,7 @@ export function createCliProvider(cfg: CliProviderConfig): ContainerProvider {
         stderr += buf.toString();
       });
 
+      proc.stdin?.on("error", () => {});
       if (stdin) {
         proc.stdin?.write(stdin);
       }
@@ -235,7 +239,9 @@ export function createCliProvider(cfg: CliProviderConfig): ContainerProvider {
       stderrBuf += chunk.toString();
     });
 
-    // Pipe stdin
+    // Pipe stdin. Swallow EPIPE — if the child dies before reading stdin the
+    // write emits an unhandled 'error' that would crash the process.
+    proc.stdin?.on("error", () => {});
     if (opts.stdin) {
       proc.stdin?.write(opts.stdin);
     }
@@ -255,8 +261,12 @@ export function createCliProvider(cfg: CliProviderConfig): ContainerProvider {
     // Track escalation timer so we can clear it on exit
     let escalationTimer: NodeJS.Timeout | null = null;
 
+    // Timeout
+    let timer: NodeJS.Timeout | null = null;
+
     proc.on("close", (code) => {
       if (escalationTimer) clearTimeout(escalationTimer);
+      if (timer) clearTimeout(timer);
       if (process.env.DEBUG_NDJSON && code !== 0 && stderrBuf) {
         console.log(`[exec] exit ${code}, stderr: ${stderrBuf.slice(0, 500)}`);
       }
@@ -264,11 +274,10 @@ export function createCliProvider(cfg: CliProviderConfig): ContainerProvider {
     });
     proc.on("error", (err) => {
       if (escalationTimer) clearTimeout(escalationTimer);
+      if (timer) clearTimeout(timer);
       exitReject(err);
     });
 
-    // Timeout
-    let timer: NodeJS.Timeout | null = null;
     if (opts.timeoutMs) {
       timer = setTimeout(() => {
         proc.kill("SIGKILL");
@@ -277,10 +286,10 @@ export function createCliProvider(cfg: CliProviderConfig): ContainerProvider {
         );
       }, opts.timeoutMs);
     }
-    // Clean up timer on exit
-    exit.finally(() => {
-      if (timer) clearTimeout(timer);
-    });
+    // Keep `exit` handled so a timeout/spawn-error rejection that nobody is
+    // awaiting (the driver may have already finished reading stdout) doesn't
+    // become an unhandledRejection and crash the process.
+    void exit.catch(() => {});
 
     // Link caller's abort signal
     if (opts.signal) {

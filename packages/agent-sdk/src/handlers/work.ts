@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { routeWrap, jsonOk, paginatedOk, decodeCursor } from "../http";
+import { routeWrap, jsonOk, paginatedOk, decodeCursor, parseLimit } from "../http";
 import { getEnvironment } from "../db/environments";
 import {
   getWorkItem,
@@ -28,7 +28,7 @@ export function handleListWork(request: Request, envId: string): Promise<Respons
   return routeWrap(request, async ({ request: req }) => {
     assertSelfHostedEnv(envId);
     const url = new URL(req.url);
-    const requestedLimit = Number(url.searchParams.get("limit") || "20");
+    const requestedLimit = parseLimit(url.searchParams.get("limit"), 20);
     const cursor = decodeCursor(url.searchParams.get("after_id") ?? url.searchParams.get("page"));
     const state = (url.searchParams.get("state") as WorkState) ?? undefined;
 

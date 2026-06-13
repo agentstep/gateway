@@ -23,6 +23,9 @@ export interface FakeTurn {
   onStdin?: (body: string) => void;
   /** Invoked with the argv the driver passed in (wrapper path + backend args). */
   onArgv?: (argv: string[]) => void;
+  /** Keep the stream open until the driver's abort signal fires, then error
+   * it — mimics sprites' HTTP exec, whose read loop throws on interrupt. */
+  hangUntilAbort?: boolean;
 }
 
 const queue: FakeTurn[] = [];
@@ -50,8 +53,21 @@ export async function startExec(
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
-      controller.enqueue(encoder.encode(body));
-      controller.close();
+      if (turn.ndjson.length > 0) controller.enqueue(encoder.encode(body));
+      if (!turn.hangUntilAbort) {
+        controller.close();
+        return;
+      }
+      // Hold the stream open; error it when the driver aborts (sprites-style).
+      const fail = (): void => {
+        try {
+          controller.error(new Error("fake-exec: aborted"));
+        } catch {
+          /* already closed */
+        }
+      };
+      if (opts.signal?.aborted) fail();
+      else opts.signal?.addEventListener("abort", fail, { once: true });
     },
   });
 

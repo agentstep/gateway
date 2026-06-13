@@ -12,9 +12,11 @@
  *   returns an empty stdin body.
  * - System prompt is wrapped into the user prompt via the shared
  *   wrapPromptWithSystem helper.
- * - Custom tool re-entry is NOT supported in v1 — pi has no equivalent
- *   of claude's --input-format stream-json. buildTurn rejects
- *   toolResults.length > 0 with an invalid_request_error.
+ * - Custom tool re-entry is not wired up yet: we drive pi through its
+ *   one-shot `--mode json`, which cannot accept input mid-turn. pi's
+ *   `--mode rpc` (JSONL over stdin/stdout) could support it (future
+ *   work). buildTurn rejects toolResults.length > 0 with an
+ *   invalid_request_error.
  */
 import { ApiError } from "../../errors";
 import type { Backend, BuildTurnInput, BuildTurnResult } from "../types";

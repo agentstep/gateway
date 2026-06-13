@@ -39,6 +39,68 @@ interface PendingEnrollment {
 
 const pendingEnrollments = new Map<string, PendingEnrollment>();
 
+/** Escape a string for safe interpolation into HTML text/attribute context. */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/**
+ * Reject OAuth endpoints that point at private/loopback/link-local hosts.
+ *
+ * Both `authorize_url` and `token_endpoint` are caller-supplied and the
+ * gateway makes a server-side POST to the token endpoint — without this an
+ * authenticated user could coerce the gateway into hitting internal
+ * services (SSRF). We require https and block IP literals in private
+ * ranges plus the obvious internal hostnames. (DNS-rebinding is not fully
+ * covered by a literal check; operators behind sensitive internal networks
+ * should additionally egress-filter the gateway.)
+ */
+function assertPublicHttpsUrl(raw: string, label: string): void {
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    throw badRequest(`${label} is not a valid URL`);
+  }
+  if (u.protocol !== "https:") {
+    throw badRequest(`${label} must use https`);
+  }
+  const host = u.hostname.toLowerCase();
+  const blockedNames = new Set([
+    "localhost",
+    "localhost.localdomain",
+    "metadata",
+    "metadata.google.internal",
+  ]);
+  if (blockedNames.has(host) || host.endsWith(".localhost") || host.endsWith(".internal")) {
+    throw badRequest(`${label} resolves to a disallowed host`);
+  }
+  // IPv4 literal in a private/loopback/link-local range, or any IPv6 literal
+  // (loopback ::1, ULA fc00::/7, link-local fe80::/10, and mapped addrs).
+  const v4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    const isPrivate =
+      a === 10 ||
+      a === 127 ||
+      a === 0 ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 100 && b >= 64 && b <= 127);
+    if (isPrivate) throw badRequest(`${label} resolves to a disallowed host`);
+  }
+  if (host.includes(":") || host.startsWith("[")) {
+    // IPv6 literal — block wholesale; public OAuth endpoints use hostnames.
+    throw badRequest(`${label} resolves to a disallowed host`);
+  }
+}
+
 // Clean up enrollments older than 10 minutes
 setInterval(() => {
   const cutoff = Date.now() - 10 * 60_000;
@@ -87,6 +149,11 @@ export function handleEnrollmentUrl(
     }
 
     const data = parsed.data;
+
+    // SSRF guard: the gateway will POST to token_endpoint server-side, so
+    // both caller-supplied endpoints must be public https hosts.
+    assertPublicHttpsUrl(data.authorize_url, "authorize_url");
+    assertPublicHttpsUrl(data.token_endpoint, "token_endpoint");
 
     // If updating an existing credential, verify it exists
     if (data.credential_id) {
@@ -161,8 +228,8 @@ export async function handleOAuthCallback(request: Request): Promise<Response> {
 
     if (error) {
       return new Response(
-        `<html><body><h2>Authorization failed</h2><p>${error}</p></body></html>`,
-        { status: 400, headers: { "Content-Type": "text/html" } },
+        `<html><body><h2>Authorization failed</h2><p>${escapeHtml(error)}</p></body></html>`,
+        { status: 400, headers: { "Content-Type": "text/html", "Content-Security-Policy": "default-src 'none'" } },
       );
     }
 
@@ -204,8 +271,8 @@ export async function handleOAuthCallback(request: Request): Promise<Response> {
     if (!tokenRes.ok) {
       const errText = await tokenRes.text().catch(() => "");
       return new Response(
-        `<html><body><h2>Token exchange failed</h2><p>${tokenRes.status}: ${errText.slice(0, 200)}</p></body></html>`,
-        { status: 502, headers: { "Content-Type": "text/html" } },
+        `<html><body><h2>Token exchange failed</h2><p>${tokenRes.status}: ${escapeHtml(errText.slice(0, 200))}</p></body></html>`,
+        { status: 502, headers: { "Content-Type": "text/html", "Content-Security-Policy": "default-src 'none'" } },
       );
     }
 
@@ -274,14 +341,14 @@ export async function handleOAuthCallback(request: Request): Promise<Response> {
     }
 
     return new Response(
-      `<html><body><h2>Enrollment complete</h2><p>Credential ${credentialId} has been linked to your profile. You can close this window.</p></body></html>`,
-      { status: 200, headers: { "Content-Type": "text/html" } },
+      `<html><body><h2>Enrollment complete</h2><p>Credential ${escapeHtml(credentialId)} has been linked to your profile. You can close this window.</p></body></html>`,
+      { status: 200, headers: { "Content-Type": "text/html", "Content-Security-Policy": "default-src 'none'" } },
     );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return new Response(
-      `<html><body><h2>Enrollment error</h2><p>${msg}</p></body></html>`,
-      { status: 500, headers: { "Content-Type": "text/html" } },
+      `<html><body><h2>Enrollment error</h2><p>${escapeHtml(msg)}</p></body></html>`,
+      { status: 500, headers: { "Content-Type": "text/html", "Content-Security-Policy": "default-src 'none'" } },
     );
   }
 }

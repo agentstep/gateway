@@ -12,7 +12,7 @@
  *                                — trigger OTLP export for the trace,
  *                                 bypassing the auto-export hook.
  */
-import { routeWrap, jsonOk } from "../http";
+import { routeWrap, jsonOk, parseLimit } from "../http";
 import { listEventsByTrace, rowToManagedEvent } from "../db/events";
 import { listTraces } from "../db/traces";
 import { exportTrace } from "../observability/otlp";
@@ -232,7 +232,7 @@ export function handleGetTrace(
     }
 
     const url = new URL(request.url);
-    const limit = Number(url.searchParams.get("limit") ?? "2000");
+    const limit = parseLimit(url.searchParams.get("limit"), 2000, 5000);
     const events = listEventsByTrace(traceId, limit);
     if (events.length === 0) {
       throw notFound(`trace ${traceId} not found`);
@@ -257,7 +257,7 @@ export function handleListTraces(request: Request): Promise<Response> {
   return routeWrap(request, async () => {
     const url = new URL(request.url);
     const sessionId = url.searchParams.get("session_id") ?? undefined;
-    const limit = Math.min(Math.max(Number(url.searchParams.get("limit") ?? "20"), 1), 100);
+    const limit = parseLimit(url.searchParams.get("limit"), 20, 100);
 
     const rows = listTraces({ sessionId, limit });
 

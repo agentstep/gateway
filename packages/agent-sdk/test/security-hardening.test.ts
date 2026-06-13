@@ -1,0 +1,160 @@
+// @ts-nocheck — test file with loose typing on handler responses
+/**
+ * Regression tests for the pre-release security-hardening pass:
+ *   - settings endpoints require a global admin
+ *   - upload filename sanitization (path-traversal guard)
+ *   - pagination limit clamping (NaN / unbounded)
+ *   - OAuth callback HTML escaping (reflected XSS)
+ */
+import { describe, it, expect, beforeEach } from "vitest";
+import path from "node:path";
+import fs from "node:fs";
+import os from "node:os";
+import { execFileSync } from "node:child_process";
+
+function freshDbEnv(): void {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ca-sec-test-"));
+  process.env.DATABASE_PATH = path.join(dir, "test.db");
+  process.env.DEFAULT_PROVIDER = "docker";
+  const g = globalThis as Record<string, unknown>;
+  for (const k of [
+    "__caDb", "__caDrizzle", "__caInitialized", "__caInitPromise",
+    "__caBusEmitters", "__caConfigCache", "__caRuntime", "__caActors",
+  ]) delete g[k];
+  if (g.__caSweeperHandle) {
+    clearInterval(g.__caSweeperHandle as NodeJS.Timeout);
+    delete g.__caSweeperHandle;
+  }
+}
+
+async function bootDb(): Promise<void> {
+  const { getDb } = await import("../src/db/client");
+  getDb();
+  const { createApiKey } = await import("../src/db/api_keys");
+  // Global admin (null tenant + admin).
+  createApiKey({ name: "admin", permissions: ["*"], rawKey: "ck_admin_12345" });
+  // Non-admin, tenant-scoped key.
+  createApiKey({
+    name: "scoped",
+    permissions: { admin: false, scope: { agents: ["*"], environments: ["*"], vaults: ["*"] } },
+    tenantId: "tenant_default",
+    rawKey: "ck_scoped_12345",
+  });
+}
+
+function req(url: string, opts: { method?: string; body?: unknown; apiKey?: string } = {}): Request {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (opts.apiKey) headers["x-api-key"] = opts.apiKey;
+  return new Request(`http://localhost${url}`, {
+    method: opts.method ?? (opts.body !== undefined ? "POST" : "GET"),
+    headers,
+    body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+  });
+}
+
+describe("settings require global admin", () => {
+  beforeEach(() => freshDbEnv());
+
+  it("PUT /v1/settings rejects a non-admin tenant key with 403", async () => {
+    await bootDb();
+    const { handlePutSetting } = await import("../src/handlers/settings");
+    const res = await handlePutSetting(
+      req("/v1/settings", { method: "PUT", apiKey: "ck_scoped_12345", body: { key: "anthropic_api_key", value: "sk-ant-evil" } }),
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("GET /v1/settings/:key rejects a non-admin tenant key with 403", async () => {
+    await bootDb();
+    const { handleGetSetting } = await import("../src/handlers/settings");
+    const res = await handleGetSetting(
+      req("/v1/settings/anthropic_api_key", { apiKey: "ck_scoped_12345" }),
+      "anthropic_api_key",
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("PUT /v1/settings allows a global admin", async () => {
+    await bootDb();
+    const { handlePutSetting } = await import("../src/handlers/settings");
+    const res = await handlePutSetting(
+      req("/v1/settings", { method: "PUT", apiKey: "ck_admin_12345", body: { key: "sprite_token", value: "sk_ok" } }),
+    );
+    expect(res.status).toBe(200);
+  });
+});
+
+describe("upload filename sanitization", () => {
+  it("strips traversal sequences to a single safe component", async () => {
+    const { sanitizeFilename } = await import("../src/files/storage");
+    expect(sanitizeFilename("../../../../etc/passwd")).toBe("passwd");
+    expect(sanitizeFilename("..\\..\\windows\\system32\\cfg")).toBe("cfg");
+    expect(sanitizeFilename("report.pdf")).toBe("report.pdf");
+    expect(sanitizeFilename("..")).toBe("upload");
+    expect(sanitizeFilename("")).toBe("upload");
+    // Quotes (header-injection) and control chars are stripped.
+    expect(sanitizeFilename('a"b\x00.txt')).toBe("ab.txt");
+  });
+
+  it("storeFile keeps a traversal name inside the file's own directory", async () => {
+    const { storeFile } = await import("../src/files/storage");
+    const rel = storeFile("file_01TEST", "../../escape.txt", Buffer.from("x"));
+    // The traversal is collapsed: no "..", and the file lands under its id dir.
+    expect(rel).not.toContain("..");
+    expect(rel.endsWith(path.join("file_01TEST", "escape.txt"))).toBe(true);
+  });
+});
+
+describe("pagination limit clamping", () => {
+  it("coerces missing/blank/NaN to the fallback and clamps the range", async () => {
+    const { parseLimit } = await import("../src/http");
+    expect(parseLimit(null)).toBe(100);
+    expect(parseLimit("")).toBe(100);
+    expect(parseLimit("   ")).toBe(100);
+    expect(parseLimit("abc")).toBe(100);
+    expect(parseLimit("99999999")).toBe(500); // clamped to max
+    expect(parseLimit("0")).toBe(1);          // clamped to min
+    expect(parseLimit("-5")).toBe(1);
+    expect(parseLimit("25")).toBe(25);
+  });
+});
+
+describe("env value base64 framing", () => {
+  // The driver encodes env values; every wrapper decodes them with the same
+  // read loop. This locks that contract — including a multi-line value, which
+  // is the whole reason for the encoding (PEM/SSH keys in vaults).
+  const READ_LOOP =
+    'while IFS= read -r line; do [ -z "$line" ] && break; ' +
+    '__k=${line%%=*}; __v=$(printf "%s" "${line#*=}" | base64 -d); export "$__k=$__v"; done; ' +
+    'printf "%s" "$SSH_KEY"';
+
+  it("round-trips a multi-line value through the shell decode", () => {
+    const value = "-----BEGIN KEY-----\nline2\nline3\n-----END KEY-----";
+    // Driver-side encoding (matches sessions/driver.ts).
+    const block = `SSH_KEY=${Buffer.from(value).toString("base64")}\n\nPROMPT`;
+    const out = execFileSync("sh", ["-c", READ_LOOP], { input: block }).toString();
+    expect(out).toBe(value);
+  });
+
+  it("handles values containing '=' (base64 padding / KEY=a=b)", () => {
+    const value = "a=b=c";
+    const block = `SSH_KEY=${Buffer.from(value).toString("base64")}\n\nPROMPT`;
+    const out = execFileSync("sh", ["-c", READ_LOOP], { input: block }).toString();
+    expect(out).toBe(value);
+  });
+});
+
+describe("OAuth callback escapes HTML", () => {
+  beforeEach(() => freshDbEnv());
+
+  it("does not reflect the error query param unescaped", async () => {
+    await bootDb();
+    const { handleOAuthCallback } = await import("../src/handlers/anthropic-compat/enrollment");
+    const res = await handleOAuthCallback(
+      new Request("http://localhost/anthropic/v1/oauth/callback?error=<img src=x onerror=alert(1)>"),
+    );
+    const html = await res.text();
+    expect(html).not.toContain("<img src=x");
+    expect(html).toContain("&lt;img");
+  });
+});

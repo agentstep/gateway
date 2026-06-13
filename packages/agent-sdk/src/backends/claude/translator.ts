@@ -45,6 +45,7 @@ interface ClaudeContentBlock {
 
 interface ClaudeMessage {
   content?: ClaudeContentBlock[];
+  stop_reason?: string | null;
   usage?: Partial<TurnUsage> & {
     input_tokens?: number;
     output_tokens?: number;
@@ -67,6 +68,11 @@ export function createClaudeTranslator(opts: TranslatorOptions): Translator {
   let sawInit = false;
   let sawCustom = false;
   let turnResult: TurnResult | null = null;
+  // stop_reason of the most recent assistant message. Fable-class models can
+  // end a turn with "refusal" (safety classifiers; HTTP 200, possibly empty
+  // content) — only the LAST assistant message counts, so a refusal that the
+  // CLI retried/continued past does not mark the whole turn refused.
+  let lastAssistantStopReason: string | null = null;
 
   function classify(name: string): ToolClass {
     if (BUILT_IN_SET.has(name)) return "builtin";
@@ -100,6 +106,7 @@ export function createClaudeTranslator(opts: TranslatorOptions): Translator {
 
     if (type === "assistant") {
       const msg = (raw.message as ClaudeMessage | undefined) ?? {};
+      if (msg.stop_reason != null) lastAssistantStopReason = msg.stop_reason;
       const blocks = msg.content ?? [];
       for (const block of blocks) {
         if (block.type === "text" && typeof block.text === "string") {
@@ -244,6 +251,7 @@ export function createClaudeTranslator(opts: TranslatorOptions): Translator {
       if (sawCustom) stopReason = "custom_tool_call";
       else if (subtype === "error_max_turns") stopReason = "max_turns";
       else if (subtype === "error_during_execution") stopReason = "error";
+      else if (lastAssistantStopReason === "refusal") stopReason = "refusal";
       else stopReason = "end_turn";
 
       turnResult = {

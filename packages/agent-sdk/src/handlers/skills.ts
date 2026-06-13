@@ -4,7 +4,7 @@
  * Phase 1: Feed-based (top 50 per leaderboard from agentstep.com feed)
  * Phase 2: Full index search (72k+ skills with filters, pagination, sorting)
  */
-import { routeWrap, jsonOk } from "../http";
+import { routeWrap, jsonOk, parseLimit } from "../http";
 import {
   getFeed,
   getIndex,
@@ -24,7 +24,7 @@ export async function handleGetSkillsCatalog(request: Request): Promise<Response
       leaderboard === "hot" ? feed.topHot :
       leaderboard === "allTime" ? feed.topAllTime :
       feed.topTrending;
-    const limit = Number(url.searchParams.get("limit") || "50");
+    const limit = parseLimit(url.searchParams.get("limit"), 50);
     return jsonOk({ skills: skills.slice(0, limit), total: skills.length });
   });
 }
@@ -38,7 +38,7 @@ export async function handleSearchSkills(request: Request): Promise<Response> {
       owner: url.searchParams.get("owner") || undefined,
       source: url.searchParams.get("source") || url.searchParams.get("repo") || undefined,
       sort: (url.searchParams.get("sort") as SearchOptions["sort"]) || undefined,
-      limit: Number(url.searchParams.get("limit") || "50"),
+      limit: parseLimit(url.searchParams.get("limit"), 50),
       offset: Number(url.searchParams.get("offset") || "0"),
     };
     const result = await searchSkills(opts);
@@ -58,7 +58,7 @@ export async function handleGetSkillsStats(request: Request): Promise<Response> 
 export async function handleGetSkillsSources(request: Request): Promise<Response> {
   return routeWrap(request, async ({ request: req }) => {
     const url = new URL(req.url);
-    const limit = Number(url.searchParams.get("limit") || "100");
+    const limit = parseLimit(url.searchParams.get("limit"), 100);
     const offset = Number(url.searchParams.get("offset") || "0");
     const sources = await getSources();
     return jsonOk({

@@ -164,7 +164,9 @@ describe("e2e opencode round-trip (fake exec)", () => {
 
     // Turn 1 stdin should contain env block + blank line + wrapped prompt.
     // opencode agents with no system prompt pass the prompt verbatim.
-    expect(turn1Stdin).toContain("ANTHROPIC_API_KEY=sk-ant-fake-for-test");
+    // Env values are base64-encoded so newline-bearing secrets survive framing.
+    const expectedKeyLine = `ANTHROPIC_API_KEY=${Buffer.from("sk-ant-fake-for-test").toString("base64")}`;
+    expect(turn1Stdin).toContain(expectedKeyLine);
     expect(turn1Stdin).toContain("hello from curl");
 
     // Backend session id captured from turn 1 fixture

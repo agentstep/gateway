@@ -27,8 +27,8 @@
 import { appendEventsBatch, appendEvent } from "./bus";
 import { newTrace, childSpan, type TraceContext } from "./trace";
 import type { AppendInput } from "../db/events";
-import { getRuntime, drainPendingUserInputs, type TurnInput } from "../state";
-import { getSession, setBackendSessionId, updateSessionStatus, updateSessionMutable, bumpSessionStats, setIdleSince, getSessionRow, getOutcomeCriteria, setOutcomeCriteria, archiveSession } from "../db/sessions";
+import { getRuntime, drainPendingUserInputs, clearTurnStarting, markTurnStarting, getTurnStartingEpoch, type TurnInput } from "../state";
+import { getSession, setBackendSessionId, updateSessionStatus, updateSessionMutable, bumpSessionStats, setIdleSince, getSessionRow, getOutcomeCriteria, setOutcomeCriteria, archiveSession, setSessionSandbox } from "../db/sessions";
 import { purgeSession as zdrPurgeSession } from "../db/zero-retention";
 import { getAgent } from "../db/agents";
 import { getEnvironment } from "../db/environments";
@@ -54,6 +54,8 @@ import { ApiError } from "../errors";
 import { nowMs, toIso } from "../util/clock";
 import { getDb } from "../db/client";
 import { injectMcpAuthHeaders } from "./mcp-auth";
+import { applyTurnDecorators } from "./turn-pipeline";
+import { ContainerExecutor } from "./executor";
 import {
   PERMISSION_BRIDGE_PENDING_PATH,
   PERMISSION_BRIDGE_REQUEST_PATH,
@@ -112,7 +114,81 @@ function markErrorAndMaybePurge(sessionId: string): void {
   }
 }
 
+/**
+ * Run `task` to settlement while invoking `onBeat` every `intervalMs`.
+ * Used to emit `span.outcome_evaluation_ongoing` heartbeats during long
+ * grader calls (the hosted API's cadence). The beat stops the moment the
+ * task settles — resolution and rejection both pass through untouched.
+ */
+export async function withHeartbeat<T>(
+  task: Promise<T>,
+  onBeat: () => void,
+  intervalMs: number,
+): Promise<T> {
+  const timer = setInterval(onBeat, intervalMs);
+  try {
+    return await task;
+  } finally {
+    clearInterval(timer);
+  }
+}
+
+/**
+ * Public entry point. Wraps {@link runTurnInner} so that *no* unexpected
+ * throw can strand a session in `running` forever: a large amount of work
+ * (usage persistence, file sync, provider re-resolution, dynamic imports)
+ * runs after the stream loop's own try/finally, and a throw there would
+ * otherwise leave status="running", inFlightRuns deleted (so interrupt is a
+ * no-op) and the sweeper skipping it. The catch here is the backstop that
+ * always returns the session to idle. The `finally` clears the
+ * scheduled-turn marker and drains any inputs that arrived mid-turn — the
+ * inner happy/abort paths drain too, so this only matters for error exits.
+ */
 export async function runTurn(
+  sessionId: string,
+  inputs: TurnInput[],
+  _depth = 0,
+  parentTrace?: TraceContext,
+): Promise<void> {
+  // Snapshot the scheduled-turn marker's epoch synchronously at entry — the
+  // scheduler that launched this turn marked the session just before calling
+  // us, and that marker is the only one our finally may clear. The inner
+  // paths drain queued input (marking the session again for the NEXT turn)
+  // before the finally runs; an unconditional clear would delete the
+  // successor's marker while it is still pre-registration, re-opening the
+  // concurrent-turn race this marker exists to close.
+  const markerEpoch = getTurnStartingEpoch(sessionId);
+  try {
+    await runTurnInner(sessionId, inputs, _depth, parentTrace);
+  } catch (err) {
+    console.error(`[driver] runTurn crashed for ${sessionId}:`, err);
+    try {
+      getRuntime().inFlightRuns.delete(sessionId);
+      const msg = err instanceof Error ? err.message : String(err);
+      appendEvent(sessionId, {
+        type: "session.error",
+        payload: { error: { type: "server_error", message: msg } },
+        origin: "server",
+        processedAt: nowMs(),
+      });
+      appendEvent(sessionId, {
+        type: "session.status_idle",
+        payload: { stop_reason: { type: "error" } },
+        origin: "server",
+        processedAt: nowMs(),
+      });
+      updateSessionStatus(sessionId, "idle", "error");
+      setIdleSince(sessionId, nowMs());
+    } catch (e2) {
+      console.error(`[driver] failed to mark ${sessionId} idle after crash:`, e2);
+    }
+  } finally {
+    clearTurnStarting(sessionId, markerEpoch);
+    scheduleDrain(sessionId);
+  }
+}
+
+async function runTurnInner(
   sessionId: string,
   inputs: TurnInput[],
   _depth = 0,
@@ -161,9 +237,13 @@ export async function runTurn(
   const backend = resolveBackend(agent.engine);
 
   // Load all vault entries + credentials once — reused for runtime validation
-  // bypass, MCP auth header injection, and env var injection.
+  // bypass, MCP auth header injection, and env var injection. Expiring
+  // mcp_oauth credentials are refreshed first so the turn never injects a
+  // stale token (best-effort — failures surface as MCP auth errors).
   const vaultEntries: Array<{ key: string; value: string }> = [];
   if (session.vault_ids && session.vault_ids.length > 0) {
+    const { refreshExpiringCredentials } = await import("./credential-refresh");
+    await refreshExpiringCredentials(session.vault_ids);
     const secrets = loadSessionSecrets(session.vault_ids, session.user_profile_id);
     vaultEntries.push(...secrets.map(s => ({ key: s.key, value: s.value })));
   }
@@ -272,6 +352,35 @@ export async function runTurn(
     }
   }
 
+  // Register the abort controller BEFORE acquiring the sandbox. Acquire +
+  // engine-install can take tens of seconds; without an early registration an
+  // interrupt arriving during that window (or during a retry backoff) would be
+  // a silent no-op, because `interruptSession` looks the controller up in
+  // `inFlightRuns`. We check `controller.signal.aborted` after each long phase
+  // and divert to the interrupt path. `deregister` is guarded so it only
+  // removes OUR entry — a retry handoff installs a fresh controller, which this
+  // attempt's cleanup must never clobber.
+  const runtime = getRuntime();
+  const controller = new AbortController();
+  runtime.inFlightRuns.set(sessionId, { sessionId, controller, startedAt: nowMs() });
+  const deregister = (): void => {
+    if (runtime.inFlightRuns.get(sessionId)?.controller === controller) {
+      runtime.inFlightRuns.delete(sessionId);
+    }
+  };
+  let aborted = false;
+
+  // Acknowledge an interrupt that lands before the engine exec starts. No span
+  // was opened and no remote process exists yet, so we just emit the idle
+  // boundary and drain any queued input.
+  const finishInterruptedDuringSetup = (): void => {
+    emit("session.status_idle", { stop_reason: formatStopReason("interrupted") });
+    updateSessionStatus(sessionId, "idle", "interrupted");
+    setIdleSince(sessionId, nowMs());
+    deregister();
+    scheduleDrain(sessionId);
+  };
+
   // Acquire sandbox if needed. Retry once on transient 502 errors — the
   // lifecycle cleans up partial containers on failure, so a retry is safe.
   console.log(`[driver] ${sessionId} acquiring container...`);
@@ -328,7 +437,17 @@ export async function runTurn(
     const msg = err instanceof Error ? err.message : String(err);
     emit("session.error", { error: { type: "server_error", message: `container creation failed: ${msg}` } });
     emit("session.status_idle", { stop_reason: formatStopReason("error") });
+    // ZDR-aware error finalize (replaces a bare updateSessionStatus error);
+    // deregister is main's ownership cleanup for the in-flight controller.
     markErrorAndMaybePurge(sessionId);
+    deregister();
+    return;
+  }
+
+  // Interrupt may have landed during acquire/install — the engine hasn't
+  // started, so acknowledge and stop before flipping to running.
+  if (controller.signal.aborted) {
+    finishInterruptedDuringSetup();
     return;
   }
 
@@ -412,121 +531,82 @@ export async function runTurn(
     emit("session.error", { error: { type, message: msg } });
     emit("session.status_idle", { stop_reason: formatStopReason("error") });
     markErrorAndMaybePurge(sessionId);
+    deregister();
     return;
   }
 
   // Backend-specific provider quirks (e.g. codex+firecracker → --yolo).
   // Lives on each backend's definition so the driver doesn't grow an
   // `if (engine === ...)` per quirk.
+  const envRowForTurn = getEnvironment(session.environment_id);
+  const providerNameForTurn = resolveProviderName({ envConfigProvider: envRowForTurn?.config?.provider });
   if (backend.applyProviderQuirks) {
-    const envRow = getEnvironment(session.environment_id);
-    const provName = resolveProviderName({ envConfigProvider: envRow?.config?.provider });
-    backend.applyProviderQuirks(turnBuild, provName);
+    backend.applyProviderQuirks(turnBuild, providerNameForTurn);
   }
 
   console.log(`[driver] ${sessionId} executing turn (engine: ${agent.engine}, model: ${agent.model.id})`);
-  const argv = [backend.wrapperPath, ...turnBuild.argv];
 
-  // Inject RESOURCES_DIR if the session has resources
+  // Decoration pipeline: built-in decorators (resources dir, MCP timeout,
+  // vault env, key remaps, local-model wiring) then user-registered turn
+  // middleware. A middleware throw aborts the turn before exec.
   const freshSession = getSession(sessionId);
-  if (freshSession?.resources && freshSession.resources.length > 0) {
-    turnBuild.env.RESOURCES_DIR = "/tmp/resources";
+  try {
+    await applyTurnDecorators({
+      sessionId,
+      agent,
+      providerName: providerNameForTurn,
+      turnBuild,
+      vaultEntries,
+      hasResources: !!(freshSession?.resources && freshSession.resources.length > 0),
+      mcpTimeoutMs: backend.mcpTimeoutMs,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    emit("span.model_request_end", { model: agent.model.id, model_usage: null, status: "error" });
+    emit("session.error", { error: { type: "invalid_request_error", message: `turn middleware rejected the turn: ${msg}` } });
+    emit("session.status_idle", { stop_reason: formatStopReason("error") });
+    updateSessionStatus(sessionId, "idle", "error");
+    deregister();
+    return;
   }
 
-  // Backend default for MCP server connect timeout. Claude needs 30s on
-  // Firecracker VMs where Node cold-start takes ~1.2s; other engines may
-  // not use MCP at all (backend.mcpTimeoutMs omitted).
-  if (backend.mcpTimeoutMs && !turnBuild.env.MCP_TIMEOUT) {
-    turnBuild.env.MCP_TIMEOUT = String(backend.mcpTimeoutMs);
-  }
-
-  // Inject vault entries as env vars (override server defaults).
-  // Skip MCP_AUTH_* and MCP_HEADER_* keys — they were already consumed
-  // as MCP server headers and should not leak into the container env.
-  const MCP_KEY_RE = /^MCP_(AUTH|HEADER)_/i;
-  for (const entry of vaultEntries) {
-    if (!BLOCKED_ENV_KEYS.has(entry.key) && !MCP_KEY_RE.test(entry.key)) {
-      turnBuild.env[entry.key] = entry.value;
-    }
-  }
-  // If vault provides OPENAI_API_KEY, also set CODEX_API_KEY so the codex
-  // backend picks it up (codex checks CODEX_API_KEY before OPENAI_API_KEY).
-  if (turnBuild.env.OPENAI_API_KEY && !turnBuild.env.CODEX_API_KEY) {
-    turnBuild.env.CODEX_API_KEY = turnBuild.env.OPENAI_API_KEY;
-  }
-  // Auto-remap: if ANTHROPIC_API_KEY is an OAuth token (sk-ant-oat*),
-  // move it to CLAUDE_CODE_OAUTH_TOKEN. Claude CLI doesn't recognize
-  // OAuth tokens in ANTHROPIC_API_KEY — it expects them in a separate
-  // env var. Without this, the CLI garbles stdin parsing (Bug #2/#5).
-  if (isAnthropicOAuthToken(turnBuild.env.ANTHROPIC_API_KEY)) {
-    turnBuild.env.CLAUDE_CODE_OAUTH_TOKEN = turnBuild.env.ANTHROPIC_API_KEY;
-    delete turnBuild.env.ANTHROPIC_API_KEY;
-  }
-  // If vault provides CLAUDE_CODE_OAUTH_TOKEN, remove ANTHROPIC_API_KEY
-  // so Claude Code uses the OAuth token (it prefers ANTHROPIC_API_KEY when both set)
-  if (turnBuild.env.CLAUDE_CODE_OAUTH_TOKEN && turnBuild.env.ANTHROPIC_API_KEY) {
-    delete turnBuild.env.ANTHROPIC_API_KEY;
-  }
-  // Ollama: inject env vars so backend CLIs can reach the host's Ollama
-  // server from inside the container.
-  // - OLLAMA_HOST: used by the ollama CLI itself (host:port, no scheme)
-  // - CODEX_OSS_BASE_URL: used by Codex --local-provider ollama (http://host:port/v1)
-  // - OPENCODE_CONFIG_CONTENT: patched with the correct baseURL for opencode
-  const ollamaCloudPrefixes = ["claude-", "gpt-", "o1-", "o3-", "o4-", "codex-", "chatgpt-", "gemini-"];
-  const isOllamaModel = !agent.model.id.includes("/") && !ollamaCloudPrefixes.some(p => agent.model.id.startsWith(p));
-  if (isOllamaModel) {
-    let ollamaHostPort: string | undefined;
-    if (!turnBuild.env.OLLAMA_HOST) {
-      const envRow = getEnvironment(session.environment_id);
-      const provName = resolveProviderName({ envConfigProvider: envRow?.config?.provider });
-      if (provName === "docker" || provName === "podman") {
-        ollamaHostPort = "host.docker.internal:11434";
-      } else if (provName === "apple-container" || provName === "apple-firecracker") {
-        // Apple Containers run in VMs — localhost inside the VM doesn't reach the host.
-        // Ollama must be started with OLLAMA_HOST=0.0.0.0:11434 to listen on all interfaces.
-        // The container reaches the host via its gateway IP (192.168.64.1 by default).
-        const customUrl = getConfig().ollamaUrl;
-        ollamaHostPort = customUrl !== "http://localhost:11434"
-          ? customUrl.replace(/^https?:\/\//, "")
-          : "192.168.64.1:11434";
-      }
-      if (ollamaHostPort) {
-        turnBuild.env.OLLAMA_HOST = ollamaHostPort;
-      }
-    } else {
-      ollamaHostPort = turnBuild.env.OLLAMA_HOST;
-    }
-    // Codex reads CODEX_OSS_BASE_URL (not OLLAMA_HOST) for its --local-provider ollama
-    if (ollamaHostPort && !turnBuild.env.CODEX_OSS_BASE_URL) {
-      const host = ollamaHostPort.replace(/^https?:\/\//, "");
-      turnBuild.env.CODEX_OSS_BASE_URL = `http://${host}/v1`;
-    }
-    // Patch OpenCode's OPENCODE_CONFIG_CONTENT with the correct Ollama baseURL
-    if (ollamaHostPort && turnBuild.env.OPENCODE_CONFIG_CONTENT) {
-      try {
-        const cfg = JSON.parse(turnBuild.env.OPENCODE_CONFIG_CONTENT);
-        const host = ollamaHostPort.replace(/^https?:\/\//, "");
-        if (cfg.provider?.ollama?.options) {
-          cfg.provider.ollama.options.baseURL = `http://${host}/v1`;
-          turnBuild.env.OPENCODE_CONFIG_CONTENT = JSON.stringify(cfg);
-        }
-      } catch { /* leave config as-is if parse fails */ }
-    }
-    // Codex needs a dummy OPENAI_API_KEY to not error on startup
-    if (!turnBuild.env.OPENAI_API_KEY) {
-      turnBuild.env.OPENAI_API_KEY = "ollama";
-    }
-    if (!turnBuild.env.CODEX_API_KEY) {
-      turnBuild.env.CODEX_API_KEY = "ollama";
-    }
-  }
+  // argv is composed after decoration so middleware may rewrite turnBuild.argv.
+  const argv = [backend.wrapperPath, ...turnBuild.argv];
 
   // Compose the wrapper stdin: env KEY=value lines, blank line, prompt body.
   // Both backends' wrappers read env until blank line; from there claude
   // pipes stdin into `claude`, while opencode captures stdin into $PROMPT
   // and re-passes it as a trailing argv entry to `opencode`.
+  //
+  // The wrapper reads `KEY=base64(value)` lines until a blank line. Values are
+  // base64-encoded so that secrets containing newlines (PEM/SSH keys) survive
+  // intact — a raw newline inside a value would otherwise terminate the env
+  // block early and spill every remaining var (other secrets included) into
+  // the prompt. The key name must still be a valid shell identifier since the
+  // wrapper `export`s it directly. The wrapper decodes with a printf-x
+  // sentinel so trailing newlines survive too (command substitution would
+  // otherwise strip them — see wrapper-env-framing.test.ts). (Wrapper and
+  // driver ship together, so the encode/decode contract can't drift across
+  // a release.)
+  const badKey = Object.keys(turnBuild.env).find(
+    (k) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(k),
+  );
+  if (badKey) {
+    emit("span.model_request_end", { model: agent.model.id, model_usage: null, status: "error" });
+    emit("session.error", {
+      error: {
+        type: "invalid_request_error",
+        message: `environment variable "${badKey}" has an unsupported name (must be a valid shell identifier)`,
+      },
+    });
+    emit("session.status_idle", { stop_reason: formatStopReason("error") });
+    updateSessionStatus(sessionId, "idle", "error");
+    deregister();
+    return;
+  }
+
   const envLines = Object.entries(turnBuild.env)
-    .map(([k, v]) => `${k}=${v}`)
+    .map(([k, v]) => `${k}=${Buffer.from(String(v)).toString("base64")}`)
     .join("\n");
   const stdin = `${envLines}\n\n${turnBuild.stdin}`;
 
@@ -606,17 +686,18 @@ export async function runTurn(
     console.warn(`[debug-prompt] capture failed for ${sessionId}:`, err);
   }
 
-  const runtime = getRuntime();
-  const controller = new AbortController();
-  runtime.inFlightRuns.set(sessionId, {
-    sessionId,
-    controller,
-    startedAt: turnStartMs,
-  });
+  // controller + inFlightRuns were registered before acquire (see above), so an
+  // interrupt during setup is already honoured. Refresh startedAt to the actual
+  // exec start for accurate elapsed-time reporting.
+  const inFlight = runtime.inFlightRuns.get(sessionId);
+  if (inFlight) inFlight.startedAt = turnStartMs;
 
+  // Execution seam: today always the container executor; the interface is
+  // the plug point for future tiers (see sessions/executor.ts).
+  const executor = new ContainerExecutor(provider);
   let exec;
   try {
-    exec = await provider.startExec(sandboxName, {
+    exec = await executor.start(sandboxName, {
       argv,
       stdin,
       signal: controller.signal,
@@ -639,6 +720,11 @@ export async function runTurn(
         await provider.delete(sandboxName, secrets).catch((err) => {
           console.warn(`[driver] best-effort delete of reaped sandbox ${sandboxName} failed:`, err);
         });
+        // Clear the stale binding BEFORE re-acquiring. acquireForFirstTurn
+        // short-circuits and returns the existing sandbox_name if the row
+        // still has one — without this the "re-acquire" would hand back the
+        // very sandbox we just deleted, and the retry would 404 again.
+        setSessionSandbox(sessionId, null);
         sandboxName = await acquireForFirstTurn(sessionId);
         // The wrapper script + skills + resources are tied to the sandbox;
         // re-install them on the new sandbox before retrying the turn.
@@ -646,14 +732,14 @@ export async function runTurn(
         if (agent.skills && agent.skills.length > 0) {
           await installSkills(sandboxName, wrapProviderWithSecrets(provider, secrets), agent.skills, agent.engine);
         }
-        exec = await provider.startExec(sandboxName, {
+        exec = await executor.start(sandboxName, {
           argv,
           stdin,
           signal: controller.signal,
           secrets,
         });
       } catch (retryErr) {
-        runtime.inFlightRuns.delete(sessionId);
+        deregister();
         const msg = retryErr instanceof Error ? retryErr.message : String(retryErr);
         emit("span.model_request_end", { model: agent.model.id, model_usage: null, status: "error" });
         emit("session.error", { error: { type: "server_error", message: `exec failed after re-acquire: ${msg}` } });
@@ -662,7 +748,7 @@ export async function runTurn(
         return;
       }
     } else {
-      runtime.inFlightRuns.delete(sessionId);
+      deregister();
       const msg = err instanceof Error ? err.message : String(err);
       // Close the open turn span before returning — see buildTurn catch above.
       emit("span.model_request_end", { model: agent.model.id, model_usage: null, status: "error" });
@@ -681,8 +767,12 @@ export async function runTurn(
   // Docker doesn't add these framing bytes, so stripping is conditional.
   const CONTROL_CHARS = /[\x00-\x08\x0B\x0C\x0E-\x1F]/g;
   let buffer = "";
-  let aborted = false;
+  // `aborted` was declared at the top of the turn (before acquire).
   let toolCallsInTurn = 0;
+  // Retry is deferred until after the finally so the abort controller stays
+  // registered through the backoff (interrupt-during-backoff is then honoured).
+  let retryRequested = false;
+  let retryDelayMs = 0;
 
   // Permission confirmation: if the agent has confirmation_mode, start a
   // background poller that checks for /tmp/permission-bridge/pending every
@@ -721,7 +811,7 @@ export async function runTurn(
       const { done, value } = await reader.read();
       if (done) break;
       const raw = decoder.decode(value, { stream: true });
-      buffer += provider.stripControlChars ? raw.replace(CONTROL_CHARS, "") : raw;
+      buffer += executor.stripControlChars ? raw.replace(CONTROL_CHARS, "") : raw;
 
       const batch: TranslatedEvent[] = [];
       buffer = parseNDJSONLines(buffer, (raw) => {
@@ -777,23 +867,31 @@ export async function runTurn(
       buffer = "";
     }
 
+    // CLI providers (docker/podman/apple) close stdout cleanly when their
+    // child is killed on interrupt, so the read loop above exits via `done`
+    // rather than throwing — detect that here so we report `interrupted`
+    // instead of a spurious end_turn/backend error. (Sprites' HTTP exec
+    // throws on abort and is handled in the catch below.)
+    if (controller.signal.aborted) aborted = true;
+
     const exitResult = await exec.exit;
     if (process.env.DEBUG_NDJSON && exitResult) {
       console.log(`[driver] ${sessionId} exit code: ${(exitResult as { code?: number }).code}`);
     }
-    // If the process exited with non-zero and the translator received no
-    // meaningful output, surface an error. We check toolCallsInTurn as a
-    // proxy for "translator saw events" — if the CLI responded then crashed
-    // (exit code 2), the response is already committed and an error event
-    // would be confusing (Bug #3).
+    // If the turn produced no meaningful output, surface an error. We can't
+    // rely on the exit code alone: sprites' HTTP exec has no real exit status
+    // and always reports 0, so a CLI that died instantly (bad install, OOM)
+    // would otherwise look like a silent, empty end_turn. `translatorSawOutput`
+    // (a tool call or a stop reason) is the real signal that the CLI ran.
+    // A normal turn always sets a stop reason, so this won't false-positive.
     const exitCode = (exitResult as { code?: number })?.code;
     const translatorSawOutput = toolCallsInTurn > 0 || translator.getTurnResult()?.stopReason != null;
-    if (exitCode !== 0 && !translatorSawOutput) {
+    if (!aborted && !translatorSawOutput) {
       const code = exitCode ?? "unknown";
       emit("session.error", {
         error: {
           type: "backend_error",
-          message: `Backend CLI exited with code ${code} and no output. Check that the engine is installed and the API key is valid.`,
+          message: `Backend CLI produced no output (exit code ${code}). Check that the engine is installed and the API key is valid.`,
         },
       });
     }
@@ -806,33 +904,53 @@ export async function runTurn(
       const retry = shouldRetry(sessionId, classified);
 
       if (retry) {
-        // Auto-retry: emit rescheduled event (with trace context), wait, then re-run
+        // Auto-retry: emit rescheduled now, then defer the wait + re-run until
+        // after the finally (so the abort controller stays registered through
+        // the backoff). Stop the sentinel pollers before the wait so they don't
+        // keep polling the dead sandbox; the finally clears them too but only
+        // after the deferred section returns.
         incrementRetry(sessionId);
         emit("session.error", { error: { type: "server_error", message: msg, classified } });
         emit("session.status_rescheduled", { retry_attempt: retry.attempt, retry_delay_ms: retry.delayMs });
-        runtime.inFlightRuns.delete(sessionId);
-        await retryDelay(retry.delayMs);
-        // Re-run the turn (recursive call with original inputs + incremented depth)
-        return runTurn(sessionId, inputs, _depth + 1, parentTrace);
+        if (permissionPollTimer) clearInterval(permissionPollTimer);
+        if (toolBridgePollTimer) clearInterval(toolBridgePollTimer);
+        retryRequested = true;
+        retryDelayMs = retry.delayMs;
+      } else {
+        // Not retryable or exhausted — close the open turn span before returning.
+        // This path is reached when the NDJSON stream itself fails (translator
+        // throw, read error, or exhausted retries).
+        emit("span.model_request_end", { model: agent.model.id, model_usage: null, status: "error" });
+        const retryStatus = classified.retryable ? "exhausted" : "terminal";
+        emit("session.error", { error: buildErrorPayload(classified, retryStatus) });
+        emit("session.status_idle", { stop_reason: formatStopReason("error") });
+        // ZDR-aware terminal finalize (replaces a bare updateSessionStatus error).
+        markErrorAndMaybePurge(sessionId);
+        deregister();
+        return;
       }
-
-      // Not retryable or exhausted — close the open turn span before returning.
-      // This path is reached when the NDJSON stream itself fails (translator
-      // throw, read error, or exhausted retries).
-      emit("span.model_request_end", { model: agent.model.id, model_usage: null, status: "error" });
-      const retryStatus = classified.retryable ? "exhausted" : "terminal";
-      emit("session.error", { error: buildErrorPayload(classified, retryStatus) });
-      emit("session.status_idle", { stop_reason: formatStopReason("error") });
-      markErrorAndMaybePurge(sessionId);
-      runtime.inFlightRuns.delete(sessionId);
-      return;
     }
   } finally {
     if (permissionPollTimer) clearInterval(permissionPollTimer);
     if (toolBridgePollTimer) clearInterval(toolBridgePollTimer);
     getPendingToolBridgeCalls().delete(sessionId);
     customToolCallCounts.delete(sessionId);
-    runtime.inFlightRuns.delete(sessionId);
+    // Keep the controller registered through a retry backoff so an interrupt
+    // during the wait is honoured; the retry handoff below deregisters instead.
+    if (!retryRequested) deregister();
+  }
+
+  // Deferred retry backoff. Runs after the finally so the controller stays
+  // registered during the wait; an interrupt mid-backoff diverts to the
+  // interrupt path rather than launching the retry.
+  if (retryRequested) {
+    await retryDelay(retryDelayMs);
+    if (controller.signal.aborted) {
+      aborted = true;
+    } else {
+      deregister();
+      return runTurn(sessionId, inputs, _depth + 1, parentTrace);
+    }
   }
 
   if (aborted) {
@@ -847,6 +965,38 @@ export async function runTurn(
     emit("session.status_idle", { stop_reason: formatStopReason("interrupted") });
     updateSessionStatus(sessionId, "idle", "interrupted");
     setIdleSince(sessionId, nowMs());
+
+    // If an outcome loop was still running, surface a terminal evaluation
+    // event instead of leaving the outcome dangling (mirrors the hosted
+    // API's `interrupted` outcome result).
+    const criteria = getOutcomeCriteria(sessionId) as {
+      outcome_id?: string;
+      rubric?: string;
+      grader_iteration?: number;
+      status?: string;
+    } | null;
+    if (criteria?.rubric && criteria?.status === "running") {
+      emit("span.outcome_evaluation_end", {
+        outcome_id: criteria.outcome_id ?? null,
+        result: "interrupted",
+        explanation: "Session was interrupted before the outcome was satisfied.",
+        iteration: criteria.grader_iteration ?? 0,
+        usage: { input_tokens: 0, output_tokens: 0 },
+      });
+      setOutcomeCriteria(sessionId, {
+        ...criteria,
+        status: "interrupted",
+        completed_at: new Date(nowMs()).toISOString(),
+      });
+    }
+
+    // Stop the orphaned engine on the sandbox BEFORE draining queued input.
+    // Sprites' HTTP exec abort only closes our connection — without this a
+    // rapid re-prompt would start a second engine on the same sandbox,
+    // racing the first on shared `--resume` state. Awaited so the next turn
+    // (scheduleDrain or a racing POST) can't overlap it.
+    await killTurnProcess(provider, sandboxName, secrets, agent.engine);
+    deregister();
     scheduleDrain(sessionId);
     return;
   }
@@ -1035,10 +1185,12 @@ export async function runTurn(
 
         emit("span.outcome_evaluation_start", { outcome_id: outcomeId, iteration });
 
-        const evaluation = await runGraderEvaluation(
-          criteria.rubric,
-          lastAgentText,
-          agent.model.id,
+        // Heartbeat while the grader call is in flight, matching the hosted
+        // API's span.outcome_evaluation_ongoing cadence for long evaluations.
+        const evaluation = await withHeartbeat(
+          runGraderEvaluation(criteria.rubric, lastAgentText, agent.model.id),
+          () => emit("span.outcome_evaluation_ongoing", { outcome_id: outcomeId, iteration }),
+          10_000,
         );
 
         // Track grader token usage in session stats
@@ -1175,11 +1327,54 @@ async function handleServerSideTool(
  * subsequent event POSTs. Concurrent turns for the same session are
  * prevented by the status flag.
  */
+/**
+ * Engine CLI binary names for best-effort process matching on interrupt.
+ * factory's binary is `droid`; the rest match the engine name.
+ */
+const ENGINE_BINARY: Record<string, string> = {
+  claude: "claude",
+  codex: "codex",
+  gemini: "gemini",
+  opencode: "opencode",
+  factory: "droid",
+  pi: "pi",
+};
+
+/**
+ * Best-effort: stop the engine process left running on the sandbox after an
+ * interrupt. The wrapper records its PID in /tmp/.agent-turn.pid; we kill that
+ * process group (the whole turn tree) and, as a fallback, the engine binary by
+ * exact name. Never throws — a missing pidfile, a non-group-leader wrapper, or
+ * an absent `pkill` just means we did what we could. (CLI providers already
+ * SIGKILL the child on abort, so for them this is a harmless no-op.)
+ */
+async function killTurnProcess(
+  provider: ContainerProvider,
+  sandboxName: string,
+  secrets: Record<string, string> | undefined,
+  engine: string,
+): Promise<void> {
+  const binary = ENGINE_BINARY[engine];
+  const killByName = binary ? `pkill -9 -x ${binary} 2>/dev/null; ` : "";
+  const script =
+    'PID=$(cat /tmp/.agent-turn.pid 2>/dev/null); ' +
+    'if [ -n "$PID" ]; then kill -9 -"$PID" 2>/dev/null; kill -9 "$PID" 2>/dev/null; fi; ' +
+    killByName +
+    "true";
+  try {
+    await provider.exec(sandboxName, ["sh", "-c", script], { secrets, timeoutMs: 5000 });
+  } catch (err) {
+    console.warn(`[driver] best-effort interrupt kill on ${sandboxName} failed:`, err);
+  }
+}
+
 function scheduleDrain(sessionId: string): void {
   const pending = drainPendingUserInputs(sessionId);
   if (pending.length === 0) return;
-  // Fire-and-forget — the next turn runs on its own, and the status flag
-  // (flipped to "running" by runTurn's first step) prevents concurrent turns.
+  // Mark the session active synchronously BEFORE launching the turn so a
+  // POST that races the (async) sandbox acquire is queued rather than
+  // starting a second concurrent turn. runTurn's finally clears the marker.
+  markTurnStarting(sessionId);
   void runTurn(sessionId, pending).catch((err: unknown) => {
     console.error(`[driver] scheduleDrain runTurn failed:`, err);
   });

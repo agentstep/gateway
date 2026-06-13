@@ -22,6 +22,15 @@ export interface RouteContext {
   request: Request;
 }
 
+function maxRequestBodyBytes(): number {
+  const env = process.env.GATEWAY_MAX_BODY_BYTES;
+  if (env) {
+    const n = Number(env);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return 64 * 1024 * 1024; // 64MB
+}
+
 export async function routeWrap(
   request: Request,
   handler: (ctx: RouteContext) => Promise<Response>,
@@ -29,6 +38,20 @@ export async function routeWrap(
   const startedAt = Date.now();
   let status = 500;
   try {
+    // Reject oversized request bodies up front (before reading them into
+    // memory). Default 64MB — comfortably above the 50MB file-upload cap
+    // plus multipart overhead; override with GATEWAY_MAX_BODY_BYTES.
+    // Only requests that declare Content-Length are covered — a chunked
+    // upload bypasses this; per-handler caps (e.g. getMaxFileSize) remain
+    // the backstop there.
+    const declaredLen = Number(request.headers.get("content-length"));
+    if (Number.isFinite(declaredLen) && declaredLen > maxRequestBodyBytes()) {
+      status = 413;
+      return toResponse(
+        new ApiError(413, "invalid_request_error", "request body too large"),
+      );
+    }
+
     await ensureInitialized();
     // `authenticateAndIntercept` returns a terminal Response for any
     // passthrough request — the handler closure never runs. Gateway-mode
@@ -84,6 +107,26 @@ export async function routeWrap(
 
 export function jsonOk<T>(body: T, status = 200): Response {
   return Response.json(body, { status });
+}
+
+/**
+ * Parse a client-supplied `?limit=` into a sane integer.
+ *
+ * Coerces missing/NaN values to `fallback` and clamps to `[1, max]` so a
+ * caller can't request the whole table in one response (`?limit=99999999`)
+ * or poison the SQL `LIMIT` with `NaN`.
+ */
+export function parseLimit(
+  raw: string | null | undefined,
+  fallback = 100,
+  max = 500,
+): number {
+  // Note: Number(null) and Number("") are both 0 (finite), so an absent or
+  // blank param must short-circuit to the fallback before the numeric clamp.
+  if (raw == null || raw.trim() === "") return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(Math.max(Math.floor(n), 1), max);
 }
 
 /** Build a paginated list response matching Anthropic's shape. */
