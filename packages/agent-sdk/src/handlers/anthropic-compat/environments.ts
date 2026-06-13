@@ -241,18 +241,32 @@ export function handleUpdateEnvironment(request: Request, id: string): Promise<R
         body: await request.text(),
       });
     }
-    loadEnvForCaller(auth, id); // tenant guard
+    const existing = loadEnvForCaller(auth, id); // tenant guard + current config
 
     const rawBody = await request.text();
     const body = rawBody ? JSON.parse(rawBody) : null;
     const parsed = UpdateSchema.safeParse(body);
     if (!parsed.success) throw badRequest(parsed.error.message);
 
+    // Architect M1: PATCH semantics for config. The prior code blindly
+    // replaced `config` with the request body, which meant a caller
+    // sending `{config: {idle_timeout_ms: 5000}}` would silently
+    // unset every other config key — including `zero_data_retention`.
+    // For a flag that's supposed to be immutable per-session (and
+    // thus relied upon to stay set on the env it inherits from), this
+    // is a critical-data-leak shaped foot-gun. Merge instead of
+    // replace, so callers can update one knob without re-sending the
+    // whole config object.
+    const mergedConfig =
+      parsed.data.config !== undefined
+        ? { ...(existing.config ?? {}), ...parsed.data.config }
+        : undefined;
+
     const updated = updateEnvironment(id, {
       name: parsed.data.name,
       description: parsed.data.description,
       metadata: parsed.data.metadata,
-      config: parsed.data.config,
+      config: mergedConfig,
     });
     return jsonOk(updated!);
   });

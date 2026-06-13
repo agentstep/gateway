@@ -156,7 +156,7 @@ async function evictIdleSessions(): Promise<void> {
         // of the sweeper's hot path for non-ZDR sessions.
         if (row.zero_data_retention && row.tenant_id) {
           const { purgeSession } = await import("../db/zero-retention");
-          purgeSession({ tenantId: row.tenant_id, sessionId });
+          purgeSession({ tenantId: row.tenant_id, sessionId, initiatedBy: "sweeper_idle_ttl" });
         }
       });
       dropActor(sessionId);

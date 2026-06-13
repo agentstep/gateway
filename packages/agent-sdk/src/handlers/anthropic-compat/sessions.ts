@@ -59,6 +59,40 @@ function loadSessionForCaller(auth: AuthContext, id: string) {
   return session;
 }
 
+// Architect H2: defense in depth — even if the DB still holds
+// content fields (e.g. on a 'purging' row mid-flight after a crash,
+// before the boot reaper finishes), the API response must not leak
+// them. stubSessionRow already NULLs these once the purge completes,
+// so for 'purged'/'purge_failed' this is a no-op; for 'purging' it
+// guarantees the caller sees the same stub shape regardless of the
+// in-flight DB state.
+function stripContentIfPurged<T extends { status: SessionStatus }>(session: T): T {
+  if (
+    session.status !== "purging" &&
+    session.status !== "purged" &&
+    session.status !== "purge_failed"
+  ) {
+    return session;
+  }
+  return {
+    ...session,
+    stop_reason: null,
+    metadata: {},
+    title: null,
+    claude_session_id: null,
+    sandbox_name: null,
+    outcome_criteria: null,
+    resources: null,
+    vault_ids: null,
+    user_profile_id: null,
+    debug_prompt: null,
+    parked_checkpoint_id: null,
+    last_seq: 0,
+    tool_calls_count: 0,
+    idle_since: null,
+  };
+}
+
 /**
  * Enforce tenancy for proxied sessions. Two states:
  *   - Local row present (sync-and-proxy): the local `sessions.tenant_id`
@@ -79,7 +113,21 @@ function assertProxiedSessionTenant(auth: AuthContext, id: string): void {
   assertResourceTenant(auth, proxied, `session ${id} not found`);
 }
 
-const ALLOWED_STATUSES: SessionStatus[] = ["idle", "running", "rescheduling", "terminated"];
+// Architect H2: list/filter must accept ZDR lifecycle states. A
+// caller migrating from "show me all my sessions" should be able to
+// see purging/purged rows (with NULLed content fields per
+// stubSessionRow) — otherwise audit/UX silently loses sessions the
+// moment ZDR engages. purge_failed is the reaper-abandoned terminal
+// state; callers need to see it to take corrective action.
+const ALLOWED_STATUSES: SessionStatus[] = [
+  "idle",
+  "running",
+  "rescheduling",
+  "terminated",
+  "purging",
+  "purged",
+  "purge_failed",
+];
 
 const AgentRef = z.union([
   z.string(),
@@ -705,7 +753,7 @@ export function handleGetSession(request: Request, id: string): Promise<Response
       // Pure proxy: forward to Anthropic
       return forwardToAnthropic(request, `/v1/sessions/${resolveRemoteSessionId(id)}`);
     }
-    return jsonOk(loadSessionForCaller(auth, id));
+    return jsonOk(stripContentIfPurged(loadSessionForCaller(auth, id)));
   });
 }
 
@@ -733,8 +781,28 @@ export function handleDeleteSession(request: Request, id: string): Promise<Respo
   return routeWrap(request, async ({ auth }) => {
     if (isProxied(id)) {
       assertProxiedSessionTenant(auth, id);
+      // Architect H6: also purge the local row for ZDR sessions on
+      // the delete path, matching the new archive-path behavior
+      // above. Without this, DELETE on a proxied ZDR session would
+      // forward to Anthropic and leave title/metadata/vault_ids/
+      // claude_session_id in the local DB indefinitely.
+      const sessionRow = loadSessionForCaller(auth, id);
       const res = await forwardToAnthropic(request, `/v1/sessions/${resolveRemoteSessionId(id)}`);
       if (res.ok) unmarkProxied(id);
+      if (sessionRow.zero_data_retention && sessionRow.tenant_id) {
+        try {
+          const { purgeSession } = await import("../../db/zero-retention");
+          purgeSession({
+            tenantId: sessionRow.tenant_id,
+            sessionId: id,
+            initiatedBy: res.ok ? "proxy_delete_ok" : `proxy_delete_status_${res.status}`,
+          });
+        } catch (err) {
+          console.warn(
+            `[zdr] post-proxy-delete purge failed for ${id}: ${err instanceof Error ? err.message : err}`,
+          );
+        }
+      }
       return res;
     }
     const sessionRow = loadSessionForCaller(auth, id); // tenant guard
@@ -750,12 +818,16 @@ export function handleDeleteSession(request: Request, id: string): Promise<Respo
         processedAt: nowMs(),
       });
       updateSessionStatus(id, "terminated", "deleted");
-      // ZDR (PR-Z2): purge session content + memory_versions + files
+      // ZDR: purge session content + memory_versions + files
       // before responding success. The purge engine has its own tenant
       // guard so even a future call-site bug can't cross tenants.
       if (sessionRow.zero_data_retention && sessionRow.tenant_id) {
         const { purgeSession } = await import("../../db/zero-retention");
-        purgeSession({ tenantId: sessionRow.tenant_id, sessionId: id });
+        purgeSession({
+          tenantId: sessionRow.tenant_id,
+          sessionId: id,
+          initiatedBy: "delete",
+        });
       }
     });
     dropActor(id);
@@ -768,8 +840,44 @@ export function handleArchiveSession(request: Request, id: string): Promise<Resp
   return routeWrap(request, async ({ auth }) => {
     if (isProxied(id)) {
       assertProxiedSessionTenant(auth, id);
+      // Architect H6: previously this path short-circuited — proxied
+      // sessions never had their LOCAL row purged, only forwarded
+      // archive to Anthropic. For ZDR sessions using provider=
+      // "anthropic" (Counselproof's main use case), the local row
+      // retained title, metadata_json (matter ids, case names),
+      // vault_ids_json, claude_session_id, and the anthropic_sync
+      // pointer. Effectively ZDR was a no-op for these sessions.
+      //
+      // Now: tenant-check the local row first, fire the proxy
+      // forward, then ALWAYS purge the local row for ZDR sessions
+      // regardless of upstream response. Anthropic-side content is
+      // covered by the customer's separate Anthropic ZDR agreement
+      // and surfaced as a storage_warning in the audit log.
+      const sessionRow = loadSessionForCaller(auth, id);
       const res = await forwardToAnthropic(request, `/v1/sessions/${resolveRemoteSessionId(id)}/archive`);
       if (res.ok) unmarkProxied(id);
+      if (sessionRow.zero_data_retention && sessionRow.tenant_id) {
+        try {
+          const { purgeSession } = await import("../../db/zero-retention");
+          const stats = purgeSession({
+            tenantId: sessionRow.tenant_id,
+            sessionId: id,
+            initiatedBy: res.ok ? "proxy_archive_ok" : `proxy_archive_status_${res.status}`,
+          });
+          // Surface the Anthropic-side caveat in operator logs so a
+          // human can see it even if the audit row's metadata is
+          // truncated.
+          if (stats.storage_warnings.length > 0) {
+            console.warn(
+              `[zdr] proxied session ${id} purged locally; Anthropic-side data governed by customer's separate ZDR agreement`,
+            );
+          }
+        } catch (err) {
+          console.warn(
+            `[zdr] post-proxy-archive purge failed for ${id}: ${err instanceof Error ? err.message : err}`,
+          );
+        }
+      }
       return res;
     }
     const sessionRow = loadSessionForCaller(auth, id); // tenant guard
@@ -778,10 +886,14 @@ export function handleArchiveSession(request: Request, id: string): Promise<Resp
     await actor.enqueue(async () => {
       await releaseSession(id);
       archiveSession(id);
-      // ZDR (PR-Z2): purge after archive completes
+      // ZDR: purge after archive completes
       if (sessionRow.zero_data_retention && sessionRow.tenant_id) {
         const { purgeSession } = await import("../../db/zero-retention");
-        purgeSession({ tenantId: sessionRow.tenant_id, sessionId: id });
+        purgeSession({
+          tenantId: sessionRow.tenant_id,
+          sessionId: id,
+          initiatedBy: "archive",
+        });
       }
     });
     return jsonOk(getSession(id));

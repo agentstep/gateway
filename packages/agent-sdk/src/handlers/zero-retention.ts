@@ -57,24 +57,33 @@ export function handlePurgeEnvironmentExisting(
     }
     const confirm = body.confirm === true;
 
+    // Architect C4: prior implementation capped at 5000 sessions with
+    // no continuation. An env with >5000 sessions silently lost the
+    // rest, and the audit row reported "sessions_considered: 5000"
+    // (truthy-looking). Now: page through with a continuation cursor,
+    // and put a hard upper bound on the loop to prevent runaway.
     const db = getDb();
-    const sessions = db
+    const PAGE_SIZE = 500;
+    const MAX_PAGES = 1000; // hard ceiling = 500k sessions per invocation
+    const countRows = db
       .prepare(
-        `SELECT id, tenant_id, status
-           FROM sessions
-          WHERE environment_id = ?
-            AND status NOT IN ('purged', 'purging')
-          LIMIT 5000`,
+        `SELECT COUNT(*) AS n FROM sessions
+          WHERE environment_id = ? AND status NOT IN ('purged', 'purging')`,
       )
-      .all(envId) as SessionToList[];
+      .get(envId) as { n: number };
+    const totalEligible = countRows.n;
 
     if (!confirm) {
       return jsonOk({
         type: "purge_existing_dry_run",
         environment_id: envId,
-        session_count: sessions.length,
+        session_count: totalEligible,
         would_purge: true,
-        hint: 'POST again with body {"confirm": true} to execute',
+        max_per_invocation: PAGE_SIZE * MAX_PAGES,
+        hint:
+          totalEligible > PAGE_SIZE * MAX_PAGES
+            ? `over ${PAGE_SIZE * MAX_PAGES} eligible sessions — POST {"confirm": true} multiple times until session_count reaches 0`
+            : 'POST again with body {"confirm": true} to execute',
       });
     }
 
@@ -92,35 +101,68 @@ export function handlePurgeEnvironmentExisting(
     let purged_count = 0;
     let failed_count = 0;
     const failed_ids: string[] = [];
+    let pagesProcessed = 0;
+    let truncated = false;
 
-    for (const session of sessions) {
-      if (!session.tenant_id) {
-        failed_count++;
-        failed_ids.push(session.id);
-        continue;
+    pageLoop: for (let page = 0; page < MAX_PAGES; page++) {
+      // We re-query each loop because the SET of eligible sessions
+      // shrinks as we purge them (status moves to 'purged'/'purging').
+      // No OFFSET needed — the previous-page sessions are no longer
+      // in the result set.
+      const sessions = db
+        .prepare(
+          `SELECT id, tenant_id, status
+             FROM sessions
+            WHERE environment_id = ?
+              AND status NOT IN ('purged', 'purging', 'purge_failed')
+            LIMIT ?`,
+        )
+        .all(envId, PAGE_SIZE) as SessionToList[];
+      if (sessions.length === 0) break pageLoop;
+      pagesProcessed = page + 1;
+
+      for (const session of sessions) {
+        if (!session.tenant_id) {
+          failed_count++;
+          if (failed_ids.length < 100) failed_ids.push(session.id);
+          continue;
+        }
+        try {
+          const stats = purgeSession({
+            tenantId: session.tenant_id,
+            sessionId: session.id,
+            initiatedBy: "purge_existing_admin",
+          });
+          purged_count++;
+          aggregate.events_deleted += stats.events_deleted;
+          aggregate.threads_purged += stats.threads_purged;
+          aggregate.resources_deleted += stats.resources_deleted;
+          aggregate.work_items_deleted += stats.work_items_deleted;
+          aggregate.memory_versions_deleted += stats.memory_versions_deleted;
+          aggregate.memories_recomputed += stats.memories_recomputed;
+          aggregate.memories_orphaned += stats.memories_orphaned;
+          aggregate.files_unlinked += stats.files_unlinked;
+          aggregate.storage_warnings.push(...stats.storage_warnings);
+        } catch (err) {
+          console.warn(
+            `[zdr.purge-existing] failed to purge session ${session.id}: ${err instanceof Error ? err.message : err}`,
+          );
+          failed_count++;
+          if (failed_ids.length < 100) failed_ids.push(session.id);
+        }
       }
-      try {
-        const stats = purgeSession({
-          tenantId: session.tenant_id,
-          sessionId: session.id,
-        });
-        purged_count++;
-        aggregate.events_deleted += stats.events_deleted;
-        aggregate.threads_purged += stats.threads_purged;
-        aggregate.resources_deleted += stats.resources_deleted;
-        aggregate.work_items_deleted += stats.work_items_deleted;
-        aggregate.memory_versions_deleted += stats.memory_versions_deleted;
-        aggregate.memories_recomputed += stats.memories_recomputed;
-        aggregate.memories_orphaned += stats.memories_orphaned;
-        aggregate.files_unlinked += stats.files_unlinked;
-        aggregate.storage_warnings.push(...stats.storage_warnings);
-      } catch (err) {
-        console.warn(
-          `[zdr.purge-existing] failed to purge session ${session.id}: ${err instanceof Error ? err.message : err}`,
-        );
-        failed_count++;
-        failed_ids.push(session.id);
-      }
+    }
+
+    // Check whether there are still eligible sessions remaining — i.e.
+    // we hit the MAX_PAGES safety bound rather than completing.
+    if (pagesProcessed >= MAX_PAGES) {
+      const remaining = db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM sessions
+            WHERE environment_id = ? AND status NOT IN ('purged', 'purging', 'purge_failed')`,
+        )
+        .get(envId) as { n: number };
+      if (remaining.n > 0) truncated = true;
     }
 
     recordAudit({
@@ -128,14 +170,13 @@ export function handlePurgeEnvironmentExisting(
       action: "environment.purge_existing",
       resource_type: "environment",
       resource_id: envId,
-      // AuditOutcome is `"success" | "denied" | "failure"`. Anything
-      // less than fully-clean counts as "failure" — the count of
-      // failed sessions is in metadata.
-      outcome: failed_count === 0 ? "success" : "failure",
+      outcome: failed_count === 0 && !truncated ? "success" : "failure",
       metadata: {
-        sessions_considered: sessions.length,
+        total_eligible_at_start: totalEligible,
+        pages_processed: pagesProcessed,
         purged_count,
         failed_count,
+        truncated,
         events_deleted: aggregate.events_deleted,
         threads_purged: aggregate.threads_purged,
         resources_deleted: aggregate.resources_deleted,
@@ -152,9 +193,11 @@ export function handlePurgeEnvironmentExisting(
     return jsonOk({
       type: "purge_existing_result",
       environment_id: envId,
-      session_count: sessions.length,
+      total_eligible_at_start: totalEligible,
+      pages_processed: pagesProcessed,
       purged_count,
       failed_count,
+      truncated,
       stats: aggregate,
     });
   });

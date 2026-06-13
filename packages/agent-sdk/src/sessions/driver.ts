@@ -29,6 +29,7 @@ import { newTrace, childSpan, type TraceContext } from "./trace";
 import type { AppendInput } from "../db/events";
 import { getRuntime, drainPendingUserInputs, type TurnInput } from "../state";
 import { getSession, setBackendSessionId, updateSessionStatus, updateSessionMutable, bumpSessionStats, setIdleSince, getSessionRow, getOutcomeCriteria, setOutcomeCriteria, archiveSession } from "../db/sessions";
+import { purgeSession as zdrPurgeSession } from "../db/zero-retention";
 import { getAgent } from "../db/agents";
 import { getEnvironment } from "../db/environments";
 import { getConfig } from "../config";
@@ -76,41 +77,39 @@ function formatStopReason(reason: string, eventIds?: string[]): Record<string, u
 }
 
 /**
- * ZDR error-path helper (PR-Z2b). Wraps `updateSessionStatus(... "error")`
+ * ZDR error-path helper. Wraps `updateSessionStatus(... "error")`
  * with an immediate archive + purge for ZDR sessions, so errored ZDR
  * sessions don't sit idle for the full sweeper TTL (30 min default).
  *
- * The architect's PR-Z1 review was explicit that this is V1, not V2:
- * a customer asking "when does ZDR fire?" deserves the answer "at
- * terminate" without an asterisk for the error path.
+ * Architect C3 fix: the prior implementation used a fire-and-forget
+ * dynamic `import("../db/zero-retention")`. If the import failed
+ * (transient module-load error, edge runtime quirk, anything), the
+ * purge never ran, the `status='purging'` marker was never set, and
+ * the boot reaper never picked it up — the session retained all
+ * content with no recovery path. The sweeper-TTL fallback the prior
+ * comment relied on was also dead: archiveSession sets archived_at,
+ * which makes listIdleSessions skip the row.
  *
- * Best-effort: failures in archive/purge log + continue. The session
- * is already at status='idle' with stop_reason='error'; if we crash
- * before purgeSession completes, the boot reaper picks it up (the
- * sweeper TTL path also still covers it as a fallback).
+ * Now: static import, synchronous call inside a try/catch. If
+ * archive throws, status stays 'idle' with stop_reason='error' and
+ * the next event/sweep covers it. If purge throws AFTER archive,
+ * status='purging' is set (purgeSession sets it as its first
+ * action) and the boot reaper picks it up.
  */
 function markErrorAndMaybePurge(sessionId: string): void {
   updateSessionStatus(sessionId, "idle", "error");
-  // Lazy lookup: most sessions aren't ZDR, so this is one indexed
-  // PRIMARY KEY lookup per error event — cheap.
   const session = getSession(sessionId);
   if (!session?.zero_data_retention || !session.tenant_id) return;
   const tenantId = session.tenant_id;
-  // Fire-and-forget. Dynamic import keeps zero-retention out of the
-  // driver's static import graph (it imports from db/audit and other
-  // siblings; we don't want to entangle driver init with audit init).
-  // The boot reaper covers the case where this never completes
-  // (status='purging' marker is set inside purgeSession before any
-  // destructive work).
-  archiveSession(sessionId);
-  import("../db/zero-retention")
-    .then(({ purgeSession }) => purgeSession({ tenantId, sessionId }))
-    .catch((err) => {
-      console.warn(
-        `[zdr] error-path purge failed for ${sessionId}: ${err instanceof Error ? err.message : err} ` +
-        `— sweeper TTL will retry on next sweep`,
-      );
-    });
+  try {
+    archiveSession(sessionId);
+    zdrPurgeSession({ tenantId, sessionId, initiatedBy: "driver_error" });
+  } catch (err) {
+    console.warn(
+      `[zdr] error-path purge failed for ${sessionId}: ${err instanceof Error ? err.message : err} ` +
+      `— status='purging' marker may be set; boot reaper will retry`,
+    );
+  }
 }
 
 export async function runTurn(

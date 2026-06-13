@@ -290,7 +290,14 @@ export interface Environment {
 // Session
 // ---------------------------------------------------------------------------
 
-export type SessionStatus = "idle" | "running" | "rescheduling" | "terminated" | "purging" | "purged";
+export type SessionStatus =
+  | "idle"
+  | "running"
+  | "rescheduling"
+  | "terminated"
+  | "purging"      // ZDR purge in flight (or resume marker after crash)
+  | "purged"       // ZDR purge complete; content NULLed but billing row retained
+  | "purge_failed"; // reaper abandoned after MAX_REAPER_RETRIES — needs operator
 
 export interface SessionRow {
   id: string;
