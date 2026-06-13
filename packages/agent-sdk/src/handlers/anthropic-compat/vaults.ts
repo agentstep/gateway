@@ -1,109 +1,28 @@
-import { z } from "zod";
-import { routeWrap, jsonOk, paginatedOk, parseLimit } from "../../http";
-import { getDb } from "../../db/client";
-import { createVault, getVault, updateVault, archiveVault, deleteVault, listVaults, listEntries, getEntry, setEntry, deleteEntry } from "../../db/vaults";
-import { getAgent } from "../../db/agents";
-import { badRequest, notFound, conflict } from "../../errors";
-import { assertResourceTenant, resolveCreateTenant, tenantFilter } from "../../auth/scope";
-import type { AuthContext } from "../../types";
-
-function getVaultTenantId(id: string): string | null | undefined {
-  const row = getDb()
-    .prepare(`SELECT tenant_id FROM vaults WHERE id = ?`)
-    .get(id) as { tenant_id: string | null } | undefined;
-  return row?.tenant_id;
-}
-
-function getAgentTenantId(id: string): string | null | undefined {
-  const row = getDb()
-    .prepare(`SELECT tenant_id FROM agents WHERE id = ?`)
-    .get(id) as { tenant_id: string | null } | undefined;
-  return row?.tenant_id;
-}
-
-export function loadVaultForCaller(auth: AuthContext, id: string) {
-  const tenantId = getVaultTenantId(id);
-  if (tenantId === undefined) throw notFound(`vault not found: ${id}`);
-  assertResourceTenant(auth, tenantId, `vault not found: ${id}`);
-  const vault = getVault(id);
-  if (!vault) throw notFound(`vault not found: ${id}`);
-  return vault;
-}
-
 /**
- * Mask a secret value for API responses. Returns preview showing
- * at most the first 4 chars and the last 2 chars, separated by asterisks.
- * Short values (<=6 chars) are fully masked.
+ * Vault handlers — HTTP codec over the vault service
+ * (`services/vaults.ts`). Secret masking happens in the service.
  */
-function maskValue(value: string): string {
-  if (value.length <= 6) return "******";
-  return `${value.slice(0, 4)}****${value.slice(-2)}`;
-}
+import { routeWrap, jsonOk, paginatedOk, parseLimit } from "../../http";
+import {
+  archiveVaultService,
+  createVaultService,
+  deleteEntryService,
+  deleteVaultService,
+  getEntryService,
+  getVaultService,
+  listEntriesService,
+  listVaultsService,
+  putEntryService,
+  updateVaultService,
+} from "../../services/vaults";
 
-const CreateVaultSchema = z.object({
-  agent_id: z.string().min(1).optional(),
-  name: z.string().min(1).optional(),
-  /** Anthropic-compatible alias for `name`. */
-  display_name: z.string().min(1).optional(),
-  metadata: z.record(z.string().max(512)).optional(),
-  /** v0.5: required for global admin, ignored for tenant users. */
-  tenant_id: z.string().optional(),
-}).refine(data => data.name || data.display_name, {
-  message: "Either name or display_name is required",
-}).refine(data => !data.metadata || Object.keys(data.metadata).length <= 16, {
-  message: "metadata must have at most 16 key-value pairs",
-});
-
-const PutEntrySchema = z.object({
-  value: z.string(),
-});
+// Re-exported for credentials.ts (tenant guard shared across vault routes).
+export { loadVaultForCaller } from "../../services/vaults";
 
 export function handleCreateVault(request: Request): Promise<Response> {
   return routeWrap(request, async ({ auth }) => {
     const body = await request.json();
-    const parsed = CreateVaultSchema.safeParse(body);
-    if (!parsed.success) throw badRequest(parsed.error.message);
-
-    let createTenantId: string;
-
-    if (parsed.data.agent_id) {
-      // Agent-scoped vault: tenant comes from the agent.
-      const agentTenantId = getAgentTenantId(parsed.data.agent_id);
-      if (agentTenantId === undefined) {
-        throw notFound(`agent not found: ${parsed.data.agent_id}`);
-      }
-      assertResourceTenant(auth, agentTenantId, `agent not found: ${parsed.data.agent_id}`);
-      const agent = getAgent(parsed.data.agent_id);
-      if (!agent) throw notFound(`agent not found: ${parsed.data.agent_id}`);
-
-      createTenantId = resolveCreateTenant(auth, parsed.data.tenant_id);
-      if (createTenantId !== agentTenantId) {
-        throw badRequest(
-          `vault tenant_id must match agent tenant_id (${agentTenantId})`,
-        );
-      }
-
-      // Check for duplicate vault name on same agent
-      const vaultName = (parsed.data.name ?? parsed.data.display_name)!;
-      const existing = listVaults({ agent_id: parsed.data.agent_id, tenantFilter: tenantFilter(auth) });
-      if (existing.some(v => v.name === vaultName)) {
-        throw conflict(`Vault "${vaultName}" already exists for this agent`);
-      }
-    } else {
-      // Standalone vault: tenant from auth context
-      createTenantId = resolveCreateTenant(auth, parsed.data.tenant_id);
-    }
-
-    // Resolve name from either field (name takes precedence)
-    const vaultName = (parsed.data.name ?? parsed.data.display_name)!;
-
-    const vault = createVault({
-      agent_id: parsed.data.agent_id ?? null,
-      name: vaultName,
-      metadata: parsed.data.metadata,
-      tenant_id: createTenantId,
-    });
-    return jsonOk(vault, 201);
+    return jsonOk(createVaultService(auth, body), 201);
   });
 }
 
@@ -112,96 +31,45 @@ export function handleListVaults(request: Request): Promise<Response> {
     const url = new URL(req.url);
     const agentId = url.searchParams.get("agent_id") ?? undefined;
     const requestedLimit = parseLimit(url.searchParams.get("limit"), 100);
-    const data = listVaults({ agent_id: agentId, tenantFilter: tenantFilter(auth) });
+    const data = listVaultsService(auth, { agentId });
     return paginatedOk(data, requestedLimit);
   });
 }
 
 export function handleGetVault(request: Request, id: string): Promise<Response> {
-  return routeWrap(request, async ({ auth }) => {
-    return jsonOk(loadVaultForCaller(auth, id));
-  });
+  return routeWrap(request, async ({ auth }) => jsonOk(getVaultService(auth, id)));
 }
 
 export function handleDeleteVault(request: Request, id: string): Promise<Response> {
-  return routeWrap(request, async ({ auth }) => {
-    loadVaultForCaller(auth, id); // tenant guard
-    const deleted = deleteVault(id);
-    if (!deleted) throw notFound(`vault not found: ${id}`);
-    return jsonOk({ id, type: "vault_deleted" });
-  });
+  return routeWrap(request, async ({ auth }) => jsonOk(deleteVaultService(auth, id)));
 }
-
-const UpdateVaultSchema = z.object({
-  display_name: z.string().min(1).max(255).optional(),
-  metadata: z.record(z.string().max(512)).optional(),
-}).refine(data => !data.metadata || Object.keys(data.metadata).length <= 16, {
-  message: "metadata must have at most 16 key-value pairs",
-});
 
 export function handleUpdateVault(request: Request, id: string): Promise<Response> {
   return routeWrap(request, async ({ auth }) => {
-    loadVaultForCaller(auth, id); // tenant guard
     const body = await request.json();
-    const parsed = UpdateVaultSchema.safeParse(body);
-    if (!parsed.success) throw badRequest(parsed.error.message);
-    const vault = updateVault(id, {
-      display_name: parsed.data.display_name,
-      metadata: parsed.data.metadata,
-    });
-    if (!vault) throw notFound(`vault not found: ${id}`);
-    return jsonOk(vault);
+    return jsonOk(updateVaultService(auth, id, body));
   });
 }
 
 export function handleArchiveVault(request: Request, id: string): Promise<Response> {
-  return routeWrap(request, async ({ auth }) => {
-    loadVaultForCaller(auth, id); // tenant guard
-    const ok = archiveVault(id);
-    if (!ok) throw notFound(`vault not found: ${id}`);
-    const vault = getVault(id)!;
-    return jsonOk(vault);
-  });
+  return routeWrap(request, async ({ auth }) => jsonOk(archiveVaultService(auth, id)));
 }
 
 export function handleListEntries(request: Request, vaultId: string): Promise<Response> {
-  return routeWrap(request, async ({ auth }) => {
-    loadVaultForCaller(auth, vaultId); // tenant guard
-    // Return keys with masked values — never expose plaintext via list API
-    const entries = listEntries(vaultId);
-    const data = entries.map(e => ({ key: e.key, value: maskValue(e.value) }));
-    return jsonOk({ data });
-  });
+  return routeWrap(request, async ({ auth }) => jsonOk({ data: listEntriesService(auth, vaultId) }));
 }
 
 export function handleGetEntry(request: Request, vaultId: string, key: string): Promise<Response> {
-  return routeWrap(request, async ({ auth }) => {
-    loadVaultForCaller(auth, vaultId); // tenant guard
-    const entry = getEntry(vaultId, key);
-    if (!entry) throw notFound(`entry not found: ${key}`);
-    // Mask value — plaintext is only available to server-side consumers (driver, sync)
-    return jsonOk({ key: entry.key, value: maskValue(entry.value) });
-  });
+  return routeWrap(request, async ({ auth }) => jsonOk(getEntryService(auth, vaultId, key)));
 }
 
 export function handlePutEntry(request: Request, vaultId: string, key: string): Promise<Response> {
   return routeWrap(request, async ({ auth }) => {
-    loadVaultForCaller(auth, vaultId); // tenant guard
-
     const body = await request.json();
-    const parsed = PutEntrySchema.safeParse(body);
-    if (!parsed.success) throw badRequest(parsed.error.message);
-
-    setEntry(vaultId, key, parsed.data.value);
-    return jsonOk({ key, ok: true });
+    return jsonOk(putEntryService(auth, vaultId, key, body));
   });
 }
 
 export function handleDeleteEntry(request: Request, vaultId: string, key: string): Promise<Response> {
-  return routeWrap(request, async ({ auth }) => {
-    loadVaultForCaller(auth, vaultId); // tenant guard
-    const deleted = deleteEntry(vaultId, key);
-    if (!deleted) throw notFound(`entry not found: ${key}`);
-    return jsonOk({ key, type: "entry_deleted" });
-  });
+  return routeWrap(request, async ({ auth }) => jsonOk(deleteEntryService(auth, vaultId, key)));
 }

@@ -90,7 +90,7 @@ async function runInteractiveQuickstart(b: any, opts: any, verbose: boolean): Pr
     const s = p.spinner();
     s.start("Creating agent...");
     try {
-      agent = await b.agents.create({ name: (name as string).trim(), model, backend: engine });
+      agent = await b.agents.create({ name: (name as string).trim(), model, engine: engine as string });
       s.stop(`Agent created: ${agent.id}`);
     } catch (err: any) {
       if (err?.message?.includes("already exists")) {
@@ -209,8 +209,8 @@ async function runNonInteractiveQuickstart(b: any, opts: any, verbose: boolean):
   const agentName = `quickstart-${opts.engine}`;
   let agent: any;
   try {
-    agent = await b.agents.create({ name: agentName, model, backend: opts.engine });
-    console.log(`Creating agent (backend: ${opts.engine}, model: ${model})...`);
+    agent = await b.agents.create({ name: agentName, model, engine: opts.engine });
+    console.log(`Creating agent (engine: ${opts.engine}, model: ${model})...`);
   } catch (err: any) {
     if (err?.message?.includes("already exists")) {
       const list = await b.agents.list({ limit: 50 });

@@ -31,14 +31,14 @@ docker build -t gateway . && docker run -p 4000:4000 gateway  # standalone
 
 TypeScript monorepo under `@agentstep/*` scope. Four packages:
 
-- **`@agentstep/agent-sdk`** (`packages/agent-sdk`) — framework-agnostic engine. All business logic lives here. Handlers accept `Request` → return `Response`.
-- **`@agentstep/gateway`** (`packages/gateway`) — CLI tool. Bundles everything via esbuild into a single `dist/gateway.js`. The `LocalBackend` routes all operations through agent-sdk handler functions (same code path as the web app).
+- **`@agentstep/agent-sdk`** (`packages/agent-sdk`) — framework-agnostic engine. All business logic lives here. Handlers accept `Request` → return `Response`. Also ships the programmatic client (`src/client/`, exported as `@agentstep/agent-sdk/client`): `createClient()` returns a typed `AgentStepClient` over an in-process transport (handler dispatch) or HTTP transport (`{ baseUrl, apiKey }`). `SessionHandle` offers `for await (const ev of session.send("..."))` turn iteration and awaitable `session.run("...") → TurnResult`. Composable call middleware via `createClient({ middleware: [withRetry(), withLogging()] })`; typed event guards (`isAgentMessage`, `isSessionIdle`, `eventText`, ...) in `client/events.ts`.
+- **`@agentstep/gateway`** (`packages/gateway`) — CLI tool. Bundles everything via esbuild into a single `dist/gateway.js`. `resolveBackend()` wraps the SDK's `createClient()` client for both local and remote mode.
 - **`@agentstep/gateway-ui`** (`packages/gateway-ui`) — React + shadcn/ui web app. Builds to single HTML via Vite + vite-plugin-singlefile, then inlined into the CLI bundle.
 - **`@agentstep/gateway-hono`** (`packages/gateway-hono`) — Hono server adapter (powers `gateway serve`).
 
 `gateway-hono` is a thin route adapter. The hosted product (agentstep.com) uses `@agentstep/agent-sdk` directly via its own Next.js routes (in the separate `agentstep-product` repo).
 
-**Critical: Both CLI and web app use the same handler functions.** The CLI's `LocalBackend` constructs `Request` objects and calls handlers — never imports DB functions directly.
+**Critical: CLI, web app, and programmatic client all use the same handler functions.** The client's `LocalTransport` constructs `Request` objects and calls handlers by export name — never imports DB functions directly. Auth, validation, and audit apply identically in-process and over HTTP.
 
 ### UI build pipeline
 
@@ -74,9 +74,17 @@ The turn driver (`packages/agent-sdk/src/sessions/driver.ts`) orchestrates every
 
 **Config cascade** (`config/index.ts`): env vars → settings DB table → defaults. Cached 30s. Use `PUT /v1/settings` or `writeSetting()` to persist.
 
+**Event schema registry** (`events/registry.ts`): zod payload schema per event type; everything derives from it — the `GatewayEvent` discriminated union (`switch (ev.type)` narrows), client guards, `validateEventPayload()`. Translator drift is caught by `test/event-registry.test.ts`.
+
+**Turn pipeline** (`sessions/turn-pipeline.ts`): the driver's decoration stages as named middleware (vault env, key remaps, local-model wiring, ...). `registerTurnMiddleware(fn)` adds programmable hooks that can mutate `{argv, env, stdin}` or throw to abort the turn pre-exec. Shared turn kickoff in `sessions/kickoff.ts`.
+
+**Scheduled deployments** (`db/deployments.ts`, `sessions/deployments.ts`, `handlers/deployments.ts`): `/v1/deployments` runs an agent on a cron cadence (zero-dep matcher in `util/cron.ts`, IANA wall-clock); each firing writes a `deployment_run` with the session id or a typed error. Scheduler tick installed in `init.ts`.
+
+**Chat stream** (`handlers/chat-stream.ts`): `POST /v1/sessions/:id/chat` accepts `{messages: [...]}` and streams the turn as UI message SSE frames — standard chat frontends drive any harness with zero translation.
+
 ### HTTP pattern
 
-All handlers use `routeWrap()` from `http.ts` which handles init-on-first-request, auth, and error envelopes. Hono, Fastify, Next.js adapters, and the CLI's LocalBackend all call these same handler functions.
+All handlers use `routeWrap()` from `http.ts` which handles init-on-first-request, auth, and error envelopes. Hono, Fastify, Next.js adapters, and the client's `LocalTransport` all call these same handler functions.
 
 ### API namespace
 
@@ -110,6 +118,7 @@ libsql (SQLite) with WAL mode. Schema is idempotent (`CREATE TABLE IF NOT EXISTS
 1,400+ tests across 50+ test files:
 - `packages/agent-sdk/test/api-comprehensive.test.ts` (~200) — full API surface + settings masking
 - `packages/agent-sdk/test/cli-local-backend.test.ts` — CLI handler-based flow
+- `packages/agent-sdk/test/client.test.ts` — programmatic client (`createClient`) + SessionHandle turn iteration
 - `packages/agent-sdk/test/translator-*.test.ts` — all backend translators + error handling
 - `packages/agent-sdk/test/anthropic-sync.test.ts` — sync-and-proxy flow + headers
 - `packages/agent-sdk/test/vault-crypto.test.ts` — AES-GCM round-trip, bad key handling

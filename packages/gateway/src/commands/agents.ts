@@ -61,9 +61,11 @@ export function registerAgentCommands(parent: Command): void {
     .option("--system <prompt>", "New system prompt")
     .action(async (id, opts) => {
       const b = await initBackend();
-      const input: Record<string, unknown> = {};
+      // Updates require the current version (optimistic concurrency).
+      const current = await b.agents.get(id);
+      const input: Record<string, unknown> = { version: current.version };
       if (opts.name) input.name = opts.name;
-      if (opts.model) input.model = opts.model;
+      if (opts.model) input.model = { id: opts.model };
       if (opts.system) input.system = opts.system;
       const agent = await b.agents.update(id, input);
       formatOutput(getFormat(), agent, detail);
@@ -126,7 +128,7 @@ export function registerAgentCommands(parent: Command): void {
         process.exit(1);
       }
 
-      await b.agents.update(id, { skills: [...existing, skill] });
+      await b.agents.update(id, { version: agent.version, skills: [...existing, skill] });
       console.log(`Installed skill "${skill.name}" from ${source}`);
     });
 
@@ -141,7 +143,7 @@ export function registerAgentCommands(parent: Command): void {
         console.error(`Skill "${skillName}" not found.`);
         process.exit(1);
       }
-      await b.agents.update(id, { skills: filtered });
+      await b.agents.update(id, { version: agent.version, skills: filtered });
       console.log(`Removed skill "${skillName}"`);
     });
 }

@@ -22,6 +22,53 @@ export {
 } from "./registry";
 export { FALLBACK_MODELS, inferEngineFromModel, isValidModelForEngine } from "./backends/models";
 
+// Programmatic client — typed, transport-agnostic facade over the same
+// handler functions the HTTP adapters mount. `createClient()` runs
+// in-process; `createClient({ baseUrl, apiKey })` talks to a deployed
+// gateway server.
+export {
+  createClient,
+  AgentStepClient,
+  ApiClientError,
+  SessionHandle,
+  withRetry,
+  withLogging,
+  eventText,
+  isAgentCustomToolUse,
+  isAgentMessage,
+  isAgentThinking,
+  isAgentToolResult,
+  isAgentToolUse,
+  isOutcomeEvaluationEnd,
+  isSessionError,
+  isSessionIdle,
+  isSessionRunning,
+  type ClientMiddleware,
+  type ClientOptions,
+  type DefineOutcomeInput,
+  type OutcomeResult,
+  type Page,
+  type SendOptions,
+  type Transport,
+  type TurnResult,
+  type UserContentBlock,
+} from "./client/index";
+
+// Event schema registry — the engine-defined event union. `switch
+// (ev.type)` narrows; everything downstream (client guards, SSE, webhooks,
+// OpenAPI) derives from this.
+export {
+  EVENT_PAYLOADS,
+  KNOWN_EVENT_TYPES,
+  isKnownEventType,
+  validateEventPayload,
+  type EventBase,
+  type EventOf,
+  type GatewayEvent,
+  type KnownEventType,
+  type UnknownEvent,
+} from "./events/registry";
+
 // HTTP helpers
 export { routeWrap, jsonOk, type RouteContext } from "./http";
 
@@ -44,6 +91,11 @@ export {
 export { ensureInitialized } from "./init";
 export { installShutdownHandlers } from "./shutdown";
 
+// Explicit runtime — construct/tear down the engine as a value (the
+// embedding and test-isolation surface). One runtime per process until
+// instance isolation lands; see src/runtime.ts.
+export { createRuntime, resetEngineState, type Runtime, type RuntimeConfig } from "./runtime";
+
 // Auth
 export { authenticate, authenticateAndIntercept } from "./auth/middleware";
 
@@ -59,6 +111,16 @@ export type {
 
 // State
 export { pushPendingUserInput, type TurnInput } from "./state";
+
+// Turn pipeline — programmable hooks over turn preparation. Registered
+// middleware runs after the built-in decorators on every turn; it may
+// mutate {argv, env, stdin} or throw to abort the turn before exec.
+export {
+  registerTurnMiddleware,
+  applyTurnDecorators,
+  type TurnContext,
+  type TurnMiddleware,
+} from "./sessions/turn-pipeline";
 
 // DB
 export { getDb, closeDb } from "./db/client";

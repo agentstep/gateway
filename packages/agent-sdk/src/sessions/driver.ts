@@ -52,6 +52,8 @@ import { isProxied } from "../db/proxy";
 import { ApiError } from "../errors";
 import { nowMs } from "../util/clock";
 import { injectMcpAuthHeaders } from "./mcp-auth";
+import { applyTurnDecorators } from "./turn-pipeline";
+import { ContainerExecutor } from "./executor";
 import {
   PERMISSION_BRIDGE_PENDING_PATH,
   PERMISSION_BRIDGE_REQUEST_PATH,
@@ -197,9 +199,13 @@ async function runTurnInner(
   const backend = resolveBackend(agent.engine);
 
   // Load all vault entries + credentials once — reused for runtime validation
-  // bypass, MCP auth header injection, and env var injection.
+  // bypass, MCP auth header injection, and env var injection. Expiring
+  // mcp_oauth credentials are refreshed first so the turn never injects a
+  // stale token (best-effort — failures surface as MCP auth errors).
   const vaultEntries: Array<{ key: string; value: string }> = [];
   if (session.vault_ids && session.vault_ids.length > 0) {
+    const { refreshExpiringCredentials } = await import("./credential-refresh");
+    await refreshExpiringCredentials(session.vault_ids);
     const secrets = loadSessionSecrets(session.vault_ids, session.user_profile_id);
     vaultEntries.push(...secrets.map(s => ({ key: s.key, value: s.value })));
   }
@@ -492,108 +498,40 @@ async function runTurnInner(
   // Backend-specific provider quirks (e.g. codex+firecracker → --yolo).
   // Lives on each backend's definition so the driver doesn't grow an
   // `if (engine === ...)` per quirk.
+  const envRowForTurn = getEnvironment(session.environment_id);
+  const providerNameForTurn = resolveProviderName({ envConfigProvider: envRowForTurn?.config?.provider });
   if (backend.applyProviderQuirks) {
-    const envRow = getEnvironment(session.environment_id);
-    const provName = resolveProviderName({ envConfigProvider: envRow?.config?.provider });
-    backend.applyProviderQuirks(turnBuild, provName);
+    backend.applyProviderQuirks(turnBuild, providerNameForTurn);
   }
 
   console.log(`[driver] ${sessionId} executing turn (engine: ${agent.engine}, model: ${agent.model.id})`);
-  const argv = [backend.wrapperPath, ...turnBuild.argv];
 
-  // Inject RESOURCES_DIR if the session has resources
+  // Decoration pipeline: built-in decorators (resources dir, MCP timeout,
+  // vault env, key remaps, local-model wiring) then user-registered turn
+  // middleware. A middleware throw aborts the turn before exec.
   const freshSession = getSession(sessionId);
-  if (freshSession?.resources && freshSession.resources.length > 0) {
-    turnBuild.env.RESOURCES_DIR = "/tmp/resources";
+  try {
+    await applyTurnDecorators({
+      sessionId,
+      agent,
+      providerName: providerNameForTurn,
+      turnBuild,
+      vaultEntries,
+      hasResources: !!(freshSession?.resources && freshSession.resources.length > 0),
+      mcpTimeoutMs: backend.mcpTimeoutMs,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    emit("span.model_request_end", { model: agent.model.id, model_usage: null, status: "error" });
+    emit("session.error", { error: { type: "invalid_request_error", message: `turn middleware rejected the turn: ${msg}` } });
+    emit("session.status_idle", { stop_reason: formatStopReason("error") });
+    updateSessionStatus(sessionId, "idle", "error");
+    deregister();
+    return;
   }
 
-  // Backend default for MCP server connect timeout. Claude needs 30s on
-  // Firecracker VMs where Node cold-start takes ~1.2s; other engines may
-  // not use MCP at all (backend.mcpTimeoutMs omitted).
-  if (backend.mcpTimeoutMs && !turnBuild.env.MCP_TIMEOUT) {
-    turnBuild.env.MCP_TIMEOUT = String(backend.mcpTimeoutMs);
-  }
-
-  // Inject vault entries as env vars (override server defaults).
-  // Skip MCP_AUTH_* and MCP_HEADER_* keys — they were already consumed
-  // as MCP server headers and should not leak into the container env.
-  const MCP_KEY_RE = /^MCP_(AUTH|HEADER)_/i;
-  for (const entry of vaultEntries) {
-    if (!BLOCKED_ENV_KEYS.has(entry.key) && !MCP_KEY_RE.test(entry.key)) {
-      turnBuild.env[entry.key] = entry.value;
-    }
-  }
-  // If vault provides OPENAI_API_KEY, also set CODEX_API_KEY so the codex
-  // backend picks it up (codex checks CODEX_API_KEY before OPENAI_API_KEY).
-  if (turnBuild.env.OPENAI_API_KEY && !turnBuild.env.CODEX_API_KEY) {
-    turnBuild.env.CODEX_API_KEY = turnBuild.env.OPENAI_API_KEY;
-  }
-  // Auto-remap: if ANTHROPIC_API_KEY is an OAuth token (sk-ant-oat*),
-  // move it to CLAUDE_CODE_OAUTH_TOKEN. Claude CLI doesn't recognize
-  // OAuth tokens in ANTHROPIC_API_KEY — it expects them in a separate
-  // env var. Without this, the CLI garbles stdin parsing (Bug #2/#5).
-  if (isAnthropicOAuthToken(turnBuild.env.ANTHROPIC_API_KEY)) {
-    turnBuild.env.CLAUDE_CODE_OAUTH_TOKEN = turnBuild.env.ANTHROPIC_API_KEY;
-    delete turnBuild.env.ANTHROPIC_API_KEY;
-  }
-  // If vault provides CLAUDE_CODE_OAUTH_TOKEN, remove ANTHROPIC_API_KEY
-  // so Claude Code uses the OAuth token (it prefers ANTHROPIC_API_KEY when both set)
-  if (turnBuild.env.CLAUDE_CODE_OAUTH_TOKEN && turnBuild.env.ANTHROPIC_API_KEY) {
-    delete turnBuild.env.ANTHROPIC_API_KEY;
-  }
-  // Ollama: inject env vars so backend CLIs can reach the host's Ollama
-  // server from inside the container.
-  // - OLLAMA_HOST: used by the ollama CLI itself (host:port, no scheme)
-  // - CODEX_OSS_BASE_URL: used by Codex --local-provider ollama (http://host:port/v1)
-  // - OPENCODE_CONFIG_CONTENT: patched with the correct baseURL for opencode
-  const ollamaCloudPrefixes = ["claude-", "gpt-", "o1-", "o3-", "o4-", "codex-", "chatgpt-", "gemini-"];
-  const isOllamaModel = !agent.model.id.includes("/") && !ollamaCloudPrefixes.some(p => agent.model.id.startsWith(p));
-  if (isOllamaModel) {
-    let ollamaHostPort: string | undefined;
-    if (!turnBuild.env.OLLAMA_HOST) {
-      const envRow = getEnvironment(session.environment_id);
-      const provName = resolveProviderName({ envConfigProvider: envRow?.config?.provider });
-      if (provName === "docker" || provName === "podman") {
-        ollamaHostPort = "host.docker.internal:11434";
-      } else if (provName === "apple-container" || provName === "apple-firecracker") {
-        // Apple Containers run in VMs — localhost inside the VM doesn't reach the host.
-        // Ollama must be started with OLLAMA_HOST=0.0.0.0:11434 to listen on all interfaces.
-        // The container reaches the host via its gateway IP (192.168.64.1 by default).
-        const customUrl = getConfig().ollamaUrl;
-        ollamaHostPort = customUrl !== "http://localhost:11434"
-          ? customUrl.replace(/^https?:\/\//, "")
-          : "192.168.64.1:11434";
-      }
-      if (ollamaHostPort) {
-        turnBuild.env.OLLAMA_HOST = ollamaHostPort;
-      }
-    } else {
-      ollamaHostPort = turnBuild.env.OLLAMA_HOST;
-    }
-    // Codex reads CODEX_OSS_BASE_URL (not OLLAMA_HOST) for its --local-provider ollama
-    if (ollamaHostPort && !turnBuild.env.CODEX_OSS_BASE_URL) {
-      const host = ollamaHostPort.replace(/^https?:\/\//, "");
-      turnBuild.env.CODEX_OSS_BASE_URL = `http://${host}/v1`;
-    }
-    // Patch OpenCode's OPENCODE_CONFIG_CONTENT with the correct Ollama baseURL
-    if (ollamaHostPort && turnBuild.env.OPENCODE_CONFIG_CONTENT) {
-      try {
-        const cfg = JSON.parse(turnBuild.env.OPENCODE_CONFIG_CONTENT);
-        const host = ollamaHostPort.replace(/^https?:\/\//, "");
-        if (cfg.provider?.ollama?.options) {
-          cfg.provider.ollama.options.baseURL = `http://${host}/v1`;
-          turnBuild.env.OPENCODE_CONFIG_CONTENT = JSON.stringify(cfg);
-        }
-      } catch { /* leave config as-is if parse fails */ }
-    }
-    // Codex needs a dummy OPENAI_API_KEY to not error on startup
-    if (!turnBuild.env.OPENAI_API_KEY) {
-      turnBuild.env.OPENAI_API_KEY = "ollama";
-    }
-    if (!turnBuild.env.CODEX_API_KEY) {
-      turnBuild.env.CODEX_API_KEY = "ollama";
-    }
-  }
+  // argv is composed after decoration so middleware may rewrite turnBuild.argv.
+  const argv = [backend.wrapperPath, ...turnBuild.argv];
 
   // Compose the wrapper stdin: env KEY=value lines, blank line, prompt body.
   // Both backends' wrappers read env until blank line; from there claude
@@ -685,9 +623,12 @@ async function runTurnInner(
   const inFlight = runtime.inFlightRuns.get(sessionId);
   if (inFlight) inFlight.startedAt = turnStartMs;
 
+  // Execution seam: today always the container executor; the interface is
+  // the plug point for future tiers (see sessions/executor.ts).
+  const executor = new ContainerExecutor(provider);
   let exec;
   try {
-    exec = await provider.startExec(sandboxName, {
+    exec = await executor.start(sandboxName, {
       argv,
       stdin,
       signal: controller.signal,
@@ -722,7 +663,7 @@ async function runTurnInner(
         if (agent.skills && agent.skills.length > 0) {
           await installSkills(sandboxName, wrapProviderWithSecrets(provider, secrets), agent.skills, agent.engine);
         }
-        exec = await provider.startExec(sandboxName, {
+        exec = await executor.start(sandboxName, {
           argv,
           stdin,
           signal: controller.signal,
@@ -801,7 +742,7 @@ async function runTurnInner(
       const { done, value } = await reader.read();
       if (done) break;
       const raw = decoder.decode(value, { stream: true });
-      buffer += provider.stripControlChars ? raw.replace(CONTROL_CHARS, "") : raw;
+      buffer += executor.stripControlChars ? raw.replace(CONTROL_CHARS, "") : raw;
 
       const batch: TranslatedEvent[] = [];
       buffer = parseNDJSONLines(buffer, (raw) => {
