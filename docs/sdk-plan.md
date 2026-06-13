@@ -41,16 +41,18 @@ shape improves, the old one is deleted in the same commit.
 |---|---|
 | 0 — typed client, turn ergonomics, middleware, naming | ✅ shipped |
 | 1.1 — event schema registry (`GatewayEvent`, drift guard) | ✅ shipped |
-| 1.2 — service core extraction | ⏳ next up (start: sessions/events; `sessions/kickoff.ts` is the first extracted piece) |
-| 1.3 — explicit runtime | ⏳ after 1.2 |
-| 2.1/2.2 — turn pipeline + `registerTurnMiddleware` hooks | ✅ shipped (executor interface 2.3 pending) |
-| 3 — egress credential substitution | ⏳ MCP creds already gateway-side; proxy pending |
+| 1.2 — service core extraction | 🟡 agents, environments, vaults shipped; sessions/events next (kickoff already extracted to `sessions/kickoff.ts`); memory/skills after |
+| 1.3 — explicit runtime | ✅ shipped (scoped: `createRuntime`/`close`/`resetEngineState`, runtime-scoped turn middleware; one runtime per process until services finish migrating off the singletons) |
+| 2.1/2.2 — turn pipeline + `registerTurnMiddleware` hooks | ✅ shipped |
+| 2.3 — executor interface | ✅ shipped (`TurnExecutor` seam; `ContainerExecutor` is the sole implementation) |
+| 3.1 — MCP credential model + automatic OAuth refresh | ✅ shipped (turn-time refresh with rotation, best-effort) |
+| 3.2 — egress substitution proxy | ❌ descoped, with rationale: substitution into HTTPS requests requires TLS termination (a trusted MITM CA installed in every container image, per-provider cert plumbing). That's real infrastructure, not an SDK patch — revisit as its own project. Until then, env-var injection (filtered, encrypted at rest) remains the model, with MCP auth already kept gateway-side. |
 | 4.1 — outcomes on the client (`defineOutcome` → `OutcomeResult`) | ✅ shipped |
 | 4.2 — scheduled deployments + runs + scheduler | ✅ shipped |
-| 4.3 — threads parity | ⏳ |
-| 5.1 — lite execution tier | ⏳ needs 2.3 |
+| 4.3 — threads parity | ✅ shipped (thread get/archive/events/stream on the client) |
+| 5.1 — lite execution tier | ❌ descoped for now: needs an in-process agent loop (model calls + tool dispatch outside any harness CLI) — an engine feature in its own right. The 2.3 executor seam is its prepared landing point. |
 | 5.2 — chat/UI message stream endpoint | ✅ shipped |
-| 5.3 — packaging rename | ⏳ decision pending |
+| 5.3 — packaging rename | ⏳ publishing decision (npm name churn) — deliberately left to the maintainers |
 
 ## Where we stand (Phase 0 — shipped)
 

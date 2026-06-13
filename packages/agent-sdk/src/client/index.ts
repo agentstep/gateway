@@ -297,6 +297,45 @@ export class AgentStepClient {
         path: `/v1/sessions/${id}/threads${buildQuery({ limit: opts?.limit })}`,
         ids: [id],
       }),
+    /** Retrieve one subagent thread (agent snapshot, status, parent link, usage). */
+    thread: (sessionId: string, threadId: string): Promise<SessionThread> =>
+      this.call({
+        handler: "handleGetThread",
+        method: "GET",
+        path: `/v1/sessions/${sessionId}/threads/${threadId}`,
+        ids: [sessionId, threadId],
+      }),
+    archiveThread: (sessionId: string, threadId: string): Promise<SessionThread> =>
+      this.call({
+        handler: "handleArchiveThread",
+        method: "POST",
+        path: `/v1/sessions/${sessionId}/threads/${threadId}/archive`,
+        ids: [sessionId, threadId],
+      }),
+    threadEvents: (
+      sessionId: string,
+      threadId: string,
+      opts?: { limit?: number; order?: string; after_seq?: number },
+    ): Promise<Page<GatewayEvent>> =>
+      this.call({
+        handler: "handleListThreadEvents",
+        method: "GET",
+        path: `/v1/sessions/${sessionId}/threads/${threadId}/events${buildQuery({
+          limit: opts?.limit,
+          order: opts?.order,
+          after_seq: opts?.after_seq,
+        })}`,
+        ids: [sessionId, threadId],
+      }),
+    /** Live-tail one subagent thread's event stream. */
+    streamThread: (sessionId: string, threadId: string, afterSeq?: number): AsyncGenerator<GatewayEvent, void, unknown> =>
+      this.transport.stream({
+        handler: "handleStreamThreadEvents",
+        method: "GET",
+        path: `/v1/sessions/${sessionId}/threads/${threadId}/stream${buildQuery({ after_seq: afterSeq })}`,
+        ids: [sessionId, threadId],
+        lastEventId: afterSeq != null ? String(afterSeq) : undefined,
+      }),
   };
 
   events = {

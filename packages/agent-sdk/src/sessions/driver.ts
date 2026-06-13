@@ -53,6 +53,7 @@ import { ApiError } from "../errors";
 import { nowMs } from "../util/clock";
 import { injectMcpAuthHeaders } from "./mcp-auth";
 import { applyTurnDecorators } from "./turn-pipeline";
+import { ContainerExecutor } from "./executor";
 import {
   PERMISSION_BRIDGE_PENDING_PATH,
   PERMISSION_BRIDGE_REQUEST_PATH,
@@ -622,9 +623,12 @@ async function runTurnInner(
   const inFlight = runtime.inFlightRuns.get(sessionId);
   if (inFlight) inFlight.startedAt = turnStartMs;
 
+  // Execution seam: today always the container executor; the interface is
+  // the plug point for future tiers (see sessions/executor.ts).
+  const executor = new ContainerExecutor(provider);
   let exec;
   try {
-    exec = await provider.startExec(sandboxName, {
+    exec = await executor.start(sandboxName, {
       argv,
       stdin,
       signal: controller.signal,
@@ -659,7 +663,7 @@ async function runTurnInner(
         if (agent.skills && agent.skills.length > 0) {
           await installSkills(sandboxName, wrapProviderWithSecrets(provider, secrets), agent.skills, agent.engine);
         }
-        exec = await provider.startExec(sandboxName, {
+        exec = await executor.start(sandboxName, {
           argv,
           stdin,
           signal: controller.signal,
@@ -738,7 +742,7 @@ async function runTurnInner(
       const { done, value } = await reader.read();
       if (done) break;
       const raw = decoder.decode(value, { stream: true });
-      buffer += provider.stripControlChars ? raw.replace(CONTROL_CHARS, "") : raw;
+      buffer += executor.stripControlChars ? raw.replace(CONTROL_CHARS, "") : raw;
 
       const batch: TranslatedEvent[] = [];
       buffer = parseNDJSONLines(buffer, (raw) => {
