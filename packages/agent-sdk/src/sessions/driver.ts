@@ -198,9 +198,13 @@ async function runTurnInner(
   const backend = resolveBackend(agent.engine);
 
   // Load all vault entries + credentials once — reused for runtime validation
-  // bypass, MCP auth header injection, and env var injection.
+  // bypass, MCP auth header injection, and env var injection. Expiring
+  // mcp_oauth credentials are refreshed first so the turn never injects a
+  // stale token (best-effort — failures surface as MCP auth errors).
   const vaultEntries: Array<{ key: string; value: string }> = [];
   if (session.vault_ids && session.vault_ids.length > 0) {
+    const { refreshExpiringCredentials } = await import("./credential-refresh");
+    await refreshExpiringCredentials(session.vault_ids);
     const secrets = loadSessionSecrets(session.vault_ids, session.user_profile_id);
     vaultEntries.push(...secrets.map(s => ({ key: s.key, value: s.value })));
   }

@@ -91,6 +91,11 @@ export {
 export { ensureInitialized } from "./init";
 export { installShutdownHandlers } from "./shutdown";
 
+// Explicit runtime — construct/tear down the engine as a value (the
+// embedding and test-isolation surface). One runtime per process until
+// instance isolation lands; see src/runtime.ts.
+export { createRuntime, resetEngineState, type Runtime, type RuntimeConfig } from "./runtime";
+
 // Auth
 export { authenticate, authenticateAndIntercept } from "./auth/middleware";
 
