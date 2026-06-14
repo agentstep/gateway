@@ -5,6 +5,7 @@
     "google-compatibility",
     "migration",
     "multi-llm",
+    "omnigent-comparison",
     "pricing-comparison",
     "auto-curation",
     "ollama-integration",

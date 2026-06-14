@@ -1,0 +1,146 @@
+---
+title: Omnigent vs. AgentStep Gateway
+description: How Databricks' Omnigent meta-harness compares to AgentStep Gateway across composing, controlling, and sharing agents — concept-by-concept mapping, overlaps, and gaps.
+---
+
+[Omnigent](https://github.com/omnigent-ai/omnigent) is an open-source "meta-harness" Databricks released in June 2026 (Apache 2.0, alpha). Like AgentStep Gateway, it sits *above* individual coding agents — Claude Code, Codex, Pi, and custom agents — and gives them a shared layer for three things it calls **compose**, **control**, and **collaborate**.
+
+AgentStep Gateway is, by the same definition, a meta-harness: six engines behind one API, a provider abstraction for where agents run, policy hooks in the turn pipeline, budget/quota gating, and an append-only event bus that multiple clients can tail. This guide maps the two systems concept-by-concept so you can see where they overlap, where each is stronger, and what the gateway would need to reach feature parity.
+
+This is an orientation document, not an integration guide. Nothing here changes gateway behavior.
+
+## At a glance
+
+| | Omnigent | AgentStep Gateway |
+|---|---|---|
+| Origin | Databricks, open-sourced June 2026, alpha | This repo |
+| License | Apache 2.0 | This repo's license |
+| Primary language | Python 3.12+ (Node 22 + tmux for native wrappers) | TypeScript monorepo |
+| Wrapped harnesses | Claude Code, Codex, Pi, OpenAI Agents, custom | claude, codex, opencode, gemini, factory, pi |
+| Agent definition | YAML (`prompt` + `executor.harness` + `tools`) | API/DB record (`engine` + `model` + `tools`) |
+| Where agents run | Local runner, or managed hosts (Modal, Daytona) | 11 providers (sprites, docker, e2b, vercel, daytona, fly, modal, …) |
+| Control model | Policy handlers intercepting every tool call | Turn-pipeline middleware + budget/quota gating + auth scopes + audit |
+| Collaboration | Live session share by URL, co-drive, fork, OIDC accounts | Append-only event bus + SSE chat stream + web UI (observe) |
+| Surface | CLI (`omnigent …`), web UI, web APIs | CLI (`gateway …`), web UI, HTTP API + vendor-compat namespaces |
+
+## Architecture mapping
+
+Omnigent describes itself in three layers. Each maps onto an existing gateway concept:
+
+| Omnigent layer | What it does | Gateway equivalent |
+|---|---|---|
+| **Runner** | Executes an agent locally, picks credentials, drives the terminal | Turn driver (`sessions/driver.ts`) + CLI (`packages/gateway`) |
+| **Server** | Persists sessions, auth, policy, sharing; exposes terminal/app/web APIs | `gateway serve` (`gateway-hono`) over the SDK handlers |
+| **Session** | Live conversation state: messages, sub-agents, terminals, file sync | Session + event bus (`sessions/bus.ts`), one actor per session |
+
+The key terminology difference: Omnigent calls the underlying agent framework an **executor** (a.k.a. **harness**); the gateway calls it an **engine** (a.k.a. **backend**). They mean the same thing — the swappable runtime that actually runs the model.
+
+| Omnigent term | Gateway term |
+|---|---|
+| Executor / harness | Engine / backend (`backends/types.ts`) |
+| Managed host | Provider / container provider (`providers/types.ts`) |
+| Policy | Turn middleware + budget/quota checks |
+| Co-attach | Multiple SSE subscribers on one session bus |
+| Fork | (no direct equivalent — see gaps) |
+| Gateway (OpenAI/Anthropic-compatible endpoint) | Upstream key / passthrough + model registry |
+
+## Compose
+
+Both let you swap or combine harnesses without rewriting agent logic.
+
+**Omnigent.** An agent is YAML — a `prompt`, an `executor.harness` (`claude-sdk`, `codex`, `pi`, `openai-agents`, or custom), and a `tools` map. Switch harnesses with the `--harness` flag or `/model` mid-session; per-agent defaults mean a Claude orchestrator and a Codex sub-agent can run concurrently. Tools are Python callables (schemas auto-generated) or sub-agents, enabling hierarchical delegation.
+
+```yaml
+name: my_agent
+prompt: You are a helpful data analyst.
+executor:
+  harness: claude-sdk
+tools:
+  word_count:
+    type: function
+    callable: mypackage.mymodule.word_count
+  researcher:
+    type: agent
+    prompt: Search and summarize information.
+    tools:
+      word_count: inherit
+```
+
+**Gateway.** An agent is an API/DB record with an `engine` field; `resolveBackend(engine)` returns one of six `Backend` implementations, each of which produces `{argv, env, stdin}` for its CLI via `buildTurn()` and parses native output back through a `Translator` into one unified event schema. Engine is auto-inferred from the model prefix when omitted (`inferEngineFromModel` in `backends/models.ts`: `claude-*` → claude, `gpt-*`/`o4-*` → codex, `gemini-*` → gemini). See [Multi-LLM Setup](/guides/multi-llm) for the full engine matrix.
+
+```json
+POST /v1/agents
+{ "name": "codex-agent", "engine": "codex", "model": { "id": "o4-mini" } }
+```
+
+**Where they differ.**
+
+- **Multi-agent composition.** Omnigent's YAML makes sub-agents and hierarchical tool delegation a first-class, declarative primitive (`type: agent`, `tools: { x: inherit }`). The gateway supports multi-agent workflows too (see [Multi-agent](/build-agents/multi-agent)) but expresses orchestration through the API and tool wiring rather than a single declarative agent file.
+- **Harness coverage.** Omnigent ships an `openai-agents` executor; the gateway ships `opencode`, `gemini`, and `factory` engines that Omnigent does not. Both cover claude / codex / pi.
+- **Model switching mid-session.** Omnigent exposes `/model` in its interactive UI. The gateway pins `engine` at agent-creation time (immutable), though model can vary per session.
+
+## Control
+
+This is where the two are most philosophically aligned and most worth comparing — both insist guardrails belong at the harness layer, **not** in prompts.
+
+**Omnigent.** Policies are handlers that intercept every tool invocation and return *approve*, *block*, or *request-approval*. They form a three-tier hierarchy — server-wide (admin) → per-agent (developer) → per-session (user) — with the strictest (session) rules checked first. Policies are stateful and contextual: the canonical example is intercepting `git push` only *after* the agent has installed an npm dependency, and requiring manual approval. Builtins cover cost budgets and OS-tool safety:
+
+```yaml
+policies:
+  approve_shell:
+    handler: omnigent.policies.builtins.safety.ask_on_os_tools
+  budget:
+    handler: omnigent.policies.builtins.cost.cost_budget
+    factory_params:
+      max_cost_usd: 5.00
+      ask_thresholds_usd: [3.00]
+```
+
+**Gateway.** Control is spread across several composable mechanisms rather than one policy object:
+
+- **Turn-pipeline middleware** (`sessions/turn-pipeline.ts`) — `registerTurnMiddleware(fn)` adds hooks that mutate `{argv, env, stdin}` or **throw to abort a turn pre-exec**. Built-ins inject vault env, remap keys, and wire local models. This is the closest analogue to an Omnigent policy that runs *before* a turn, but it fires per-turn, not per-tool-call.
+- **Budget & quota gating** (`sessions/driver.ts`) — before each turn the driver enforces session `max_budget_usd` vs `usage_cost_usd`, **per-API-key** `budget_usd` vs `spent_usd`, token quotas, and wall-clock limits, raising `session.error{type:"budget_exceeded"|"quota_exceeded"}`. This is the direct counterpart to Omnigent's `cost_budget` policy — but enforced at turn boundaries rather than as a streaming threshold with `ask_thresholds_usd`.
+- **Per-tool approval** — the Claude backend's permission hook (`backends/claude/permission-hook.ts`) gates individual tool calls: it writes a pending sentinel, the driver emits `agent.tool_confirmation_request`, and the client answers with `user.tool_confirmation`. This is the gateway's true per-tool *request-approval*, equivalent to Omnigent's `ask_on_os_tools` — but today it's Claude-specific, not a cross-engine policy layer.
+- **Auth scopes & audit** (`auth/scope.ts`, `db/audit.ts`) — admin/tenant/resource allow-lists plus a best-effort append-only audit log with `outcome` (success/denied/failure). Omnigent's tier hierarchy is roughly server/agent/session; the gateway's is admin/tenant/resource-scope. Different axes, overlapping intent.
+- **Concurrency limits** (`queue/index.ts`) — global + per-environment turn concurrency, a control dimension Omnigent does not emphasize.
+
+**Where they differ.**
+
+- **Granularity.** Omnigent's unifying primitive is a *stateful policy on every tool call across every harness*. The gateway has the pieces — pre-turn middleware, budget gating, per-tool confirmation — but they are separate mechanisms, and per-tool gating is currently Claude-only. A gateway "policy" abstraction that runs cross-engine on each tool call, with access to accumulated session state, would be the single largest step toward parity.
+- **Streaming budget thresholds.** Omnigent can warn at `$3` and hard-stop at `$5` within a run; the gateway checks budgets at turn boundaries.
+- **Where it's enforced.** Omnigent enforces in-process in the Python runner. The gateway enforces identically in-process and over HTTP because the CLI, web UI, and client all call the same handler functions.
+
+## Collaborate
+
+**Omnigent.** Built for real-time multiplayer: hit **Share** in the web UI and send a URL; teammates watch the agent work and chat with it live. `omnigent attach <session_id>` lets multiple users **co-drive** the same session (messages execute on the host machine), supporting pairing and mid-investigation handoff. `omnigent run --fork <session_id>` clones a conversation from any point. Multi-user accounts (`OMNIGENT_AUTH_ENABLED=1`) are invite-only with OIDC (Google, GitHub, Okta, Microsoft), and sessions follow you across devices.
+
+**Gateway.** Collaboration is built on the **event bus** (`sessions/bus.ts`): an append-only, DB-authoritative log with an in-memory `EventEmitter` for live tail. `subscribe(sessionId, fromSeq, onEvent)` drains backlog from the DB then attaches a deduplicated live listener, so any number of clients can independently watch one session and reconnect with `Last-Event-ID`/`?after_seq`. The [chat stream](/run-sessions/events) (`POST /v1/sessions/:id/chat`) emits UI-message SSE frames any chat frontend can render, and the web UI renders the live event list. Ordering is guaranteed by a per-session FIFO actor.
+
+**Where they differ.**
+
+- **Co-driving / steering.** This is Omnigent's standout. Multiple gateway clients can *observe* one session and any holder of a valid key can send a message to it, but there is no first-class notion of multiple named users attached to one live session with handoff — and no observer-only role distinct from a full key.
+- **Share-by-URL.** Omnigent has one-click share links with live chat. The gateway exposes sessions through authenticated API/UI; there is no built-in unauthenticated/scoped share-link flow.
+- **Fork.** Omnigent forks a conversation from any point. The gateway has no direct session-fork primitive (the append-only log makes a copy-from-seq fork feasible to build, but it isn't a feature today).
+- **Identity.** Omnigent ships OIDC multi-user accounts; the gateway authenticates via API keys with tenant/resource scopes.
+
+## Summary: overlaps and gaps
+
+**Strong overlap** — both are genuine meta-harnesses with a swappable engine/executor abstraction over claude/codex/pi, a provider/host abstraction for where agents run, control that lives at the harness layer instead of in prompts, cost-budget enforcement, and a server that exposes sessions over terminal + web + API.
+
+**Where the gateway is ahead** — more engines (adds opencode, gemini, factory), far more run targets (11 providers vs. managed Modal/Daytona), tenant/resource auth scopes with an audit log, vendor-compat API namespaces (`/anthropic/v1/*`, `/google/v1beta/*`) so existing Anthropic/Google clients drive it unchanged, and identical enforcement in-process and over HTTP.
+
+**Where Omnigent is ahead (gateway gaps)**
+
+1. **A unified, stateful cross-engine policy primitive** that intercepts every tool call (approve / block / ask) with access to accumulated session state. The gateway has pre-turn middleware, turn-boundary budget gating, and Claude-only per-tool confirmation — but not one policy object spanning all engines and tool calls.
+2. **Streaming budget thresholds** (warn at X, stop at Y mid-run) rather than turn-boundary checks.
+3. **First-class real-time co-driving** — multiple named users attached to one live session with handoff and an observer-only role.
+4. **Share-by-URL** with live chat for non-key-holders.
+5. **Session fork** from an arbitrary point in the log.
+6. **Declarative multi-agent YAML** with inherited sub-agent tools as a single primitive.
+
+None of these are architectural impossibilities for the gateway — items 1 and 5 in particular fit naturally onto the existing turn pipeline and append-only event bus, respectively. They are noted here as orientation, not commitments.
+
+## Sources
+
+- [Introducing Omnigent: A Meta-Harness to Combine, Control and Share Your Agents — Databricks Blog](https://www.databricks.com/blog/introducing-omnigent-meta-harness-combine-control-and-share-your-agents)
+- [omnigent-ai/omnigent — GitHub](https://github.com/omnigent-ai/omnigent)
