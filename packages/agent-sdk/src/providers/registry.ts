@@ -22,6 +22,8 @@ const PROVIDERS: Record<ProviderName, () => Promise<ContainerProvider>> = {
   mvm: async () => (await import("./apple-firecracker")).mvmProvider,
   anthropic: async () => (await import("./anthropic")).anthropicProvider,
   cloudflare: async () => (await import("./cloudflare")).cloudflareProvider,
+  "gke-agent-sandbox": async () => (await import("./gke-agent-sandbox")).gkeAgentSandboxProvider,
+  "lambda-microvm": async () => (await import("./lambda-microvm")).lambdaMicroVmProvider,
 };
 
 export async function resolveContainerProvider(

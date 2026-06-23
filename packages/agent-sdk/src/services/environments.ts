@@ -59,7 +59,7 @@ const NetworkingSchema = z.union([
 
 const ConfigSchema = z.object({
   type: z.enum(["cloud", "self_hosted"]),
-  provider: z.enum(["sprites", "docker", "apple-container", "apple-firecracker", "podman", "e2b", "vercel", "daytona", "fly", "modal", "mvm", "anthropic"]).optional(),
+  provider: z.enum(["sprites", "docker", "apple-container", "apple-firecracker", "podman", "e2b", "vercel", "daytona", "fly", "modal", "mvm", "anthropic", "gke-agent-sandbox", "lambda-microvm"]).optional(),
   packages: PackagesSchema,
   networking: NetworkingSchema.optional(),
   warm_pool_size: z.number().int().min(0).optional(),
@@ -122,7 +122,7 @@ export async function createEnvironmentService(auth: AuthContext, body: unknown)
   if (configType !== "cloud") {
     // self_hosted — provider is a deprecated fallback; not required.
     if (providerName) {
-      const CLOUD_PROVIDERS = new Set(["sprites", "e2b", "vercel", "daytona", "fly", "modal", "anthropic"]);
+      const CLOUD_PROVIDERS = new Set(["sprites", "e2b", "vercel", "daytona", "fly", "modal", "anthropic", "gke-agent-sandbox", "lambda-microvm"]);
       if (!CLOUD_PROVIDERS.has(providerName)) {
         const provider = await resolveProvider(providerName);
         if (provider.checkAvailability) {

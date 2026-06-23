@@ -19,6 +19,8 @@ AgentStep Gateway runs agent backends inside isolated containers or sandboxes. E
 | `daytona` | Cloud | Daytona sandboxes | `DAYTONA_API_KEY` |
 | `fly` | Cloud | Fly Machines (REST API, no SDK) | `FLY_API_TOKEN`, `FLY_APP_NAME` |
 | `modal` | Cloud | Modal sandboxes | `MODAL_TOKEN_ID` + `MODAL_TOKEN_SECRET`, `modal` npm package |
+| `gke-agent-sandbox` | Cloud | Google GKE Agent Sandbox (`Sandbox` CRD) | `GKE_API_SERVER`, `GKE_TOKEN` |
+| `lambda-microvm` | Cloud | AWS Lambda MicroVMs (Firecracker) | AWS credentials, `LAMBDA_MICROVM_SNAPSHOT` |
 | `mvm` | Local | Alias for `apple-firecracker` | Same as `apple-firecracker` |
 
 ## Provider details
@@ -98,6 +100,24 @@ Uses the [Modal](https://modal.com) SDK (`modal` npm package, v0.7+) via gRPC. S
 
 - **Credentials**: `MODAL_TOKEN_ID` + `MODAL_TOKEN_SECRET`, or a `~/.modal.toml` config file (run `modal token set`). Credentials can also be stored in vault secrets.
 - **Optional dependency**: `npm install modal`.
+
+### gke-agent-sandbox
+
+Runs each sandbox as a Kubernetes `Sandbox` custom resource (`agents.x-k8s.io/v1beta1`) on Google GKE Agent Sandbox — the open-source [kubernetes-sigs/agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) runtime. The controller materialises a Pod (named after the sandbox) with gVisor/Kata kernel isolation, default-deny networking, and snapshot-backed suspend/resume. Lifecycle (create/delete/list) uses the stable Kubernetes REST surface; no SDK is bundled. Exec uses the Kubernetes streaming **channel** subprotocol over WebSocket (`v5.channel.k8s.io`, falling back to `v4`), which lets the driver half-close stdin so the agent CLI sees EOF.
+
+- **Credentials**: `GKE_API_SERVER` (control-plane URL) and `GKE_TOKEN` (bearer token, e.g. `gcloud auth print-access-token` or a ServiceAccount token). The token is sent as an Authorization header for REST and as the `base64url.bearer.authorization.k8s.io.<token>` WebSocket subprotocol for exec.
+- **Namespace / image / container**: `GKE_SANDBOX_NAMESPACE` (default `default`), `GKE_SANDBOX_IMAGE` (default `node:22`), `GKE_SANDBOX_CONTAINER` (default `sandbox`), optional `GKE_SANDBOX_SERVICE_ACCOUNT`.
+- **TLS**: provide the cluster CA via `GKE_CA_DATA` (base64 PEM, as in a kubeconfig) or trust it process-wide with `NODE_EXTRA_CA_CERTS`. `GKE_INSECURE_SKIP_TLS_VERIFY=1` disables verification for local development only.
+
+### lambda-microvm
+
+Uses [AWS Lambda MicroVMs](https://aws.amazon.com/lambda/lambda-microvms/) — Firecracker-backed, stateful, isolated sandboxes with full lifecycle control (launch, suspend, resume, terminate) and runtimes up to 8 hours. The control plane is driven over HTTPS with AWS Signature V4 signing (no SDK bundled); each running microVM exposes a dedicated HTTPS endpoint that the provider uses for exec, so the launched image must serve a small exec agent (`POST /exec`, `POST /exec/stream`).
+
+- **Credentials**: `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (+ optional `AWS_SESSION_TOKEN`), `AWS_REGION` (default `us-east-1`).
+- **Snapshot**: `LAMBDA_MICROVM_SNAPSHOT` — the snapshot id/ARN each microVM launches from (required).
+- **Sizing**: `LAMBDA_MICROVM_VCPUS` (default 2), `LAMBDA_MICROVM_MEMORY_MIB` (default 4096).
+- **Endpoint overrides** (the service is new — defaults follow AWS conventions and are overridable): `LAMBDA_MICROVM_ENDPOINT`, `LAMBDA_MICROVM_PREFIX`, `LAMBDA_MICROVM_SERVICE`.
+- Suspend/resume are exposed as provider helpers (`suspend()`/`resume()`) in addition to the standard create/delete lifecycle.
 
 ## ContainerProvider interface
 

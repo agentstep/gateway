@@ -5,7 +5,7 @@ import { waitForEnvironment } from "./environments.js";
 import { runChatLoop } from "./chat-loop.js";
 
 const LOCAL_PROVIDERS = ["docker", "apple-container", "apple-firecracker", "podman", "mvm"];
-const CLOUD_PROVIDERS = ["anthropic", "sprites", "e2b", "vercel", "daytona", "fly", "modal"];
+const CLOUD_PROVIDERS = ["anthropic", "sprites", "e2b", "vercel", "daytona", "fly", "modal", "gke-agent-sandbox", "lambda-microvm"];
 
 const ENGINES = ["claude", "opencode", "codex", "gemini", "factory", "pi"] as const;
 type Engine = typeof ENGINES[number];
@@ -24,7 +24,7 @@ export function registerQuickstartCommand(parent: Command): void {
     .description("Create agent + environment + session and start chatting")
     .option("--engine <engine>", "Agent harness: claude, opencode, codex, gemini, factory, pi", "claude")
     .option("--model <model>", "Model (defaults per engine)")
-    .option("--provider <provider>", "Provider: sprites, docker, apple-container, podman, e2b, vercel, daytona, fly, modal, mvm", "sprites")
+    .option("--provider <provider>", "Provider: sprites, docker, apple-container, podman, e2b, vercel, daytona, fly, modal, mvm, gke-agent-sandbox, lambda-microvm", "sprites")
     .action(async (opts) => {
       const b = await initBackend();
       const verbose = parent.opts().verbose ?? false;
@@ -386,6 +386,15 @@ const PROVIDER_TOKENS: Record<string, TokenField[]> = {
   modal: [
     { envVar: "MODAL_TOKEN_ID", settingKey: "modal_token_id", label: "Modal Token ID" },
     { envVar: "MODAL_TOKEN_SECRET", settingKey: "modal_token_secret", label: "Modal Token Secret" },
+  ],
+  "gke-agent-sandbox": [
+    { envVar: "GKE_API_SERVER", settingKey: "gke_api_server", label: "GKE API Server (https://...)" },
+    { envVar: "GKE_TOKEN", settingKey: "gke_token", label: "GKE Bearer Token (gcloud auth print-access-token)" },
+  ],
+  "lambda-microvm": [
+    { envVar: "AWS_ACCESS_KEY_ID", settingKey: "aws_access_key_id", label: "AWS Access Key ID" },
+    { envVar: "AWS_SECRET_ACCESS_KEY", settingKey: "aws_secret_access_key", label: "AWS Secret Access Key" },
+    { envVar: "LAMBDA_MICROVM_SNAPSHOT", settingKey: "lambda_microvm_snapshot", label: "Lambda MicroVM Snapshot ID" },
   ],
 };
 

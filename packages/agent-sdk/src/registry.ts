@@ -45,7 +45,8 @@ export interface ProviderInfo {
   /** Provider identifier (matches ProviderName). */
   id:
     | "sprites" | "docker" | "podman" | "apple-container" | "apple-firecracker"
-    | "e2b" | "vercel" | "daytona" | "fly" | "modal" | "anthropic" | "cloudflare";
+    | "e2b" | "vercel" | "daytona" | "fly" | "modal" | "anthropic" | "cloudflare"
+    | "gke-agent-sandbox" | "lambda-microvm";
   /** UI display label. */
   label: string;
   /** Where this provider runs. Affects discoverability in the UI. */
@@ -98,6 +99,8 @@ export const PROVIDERS: readonly ProviderInfo[] = [
   { id: "modal",             label: "Modal",                     kind: "cloud", secret: { key: "MODAL_TOKEN_ID",   label: "Modal Token ID",        placeholder: "..." } },
   { id: "daytona",           label: "Daytona",                   kind: "cloud", secret: { key: "DAYTONA_API_KEY", label: "Daytona API Key",       placeholder: "..." } },
   { id: "cloudflare",        label: "Cloudflare Sandbox",        kind: "cloud", secret: { key: "CLOUDFLARE_API_TOKEN", label: "Cloudflare API Token", placeholder: "..." } },
+  { id: "gke-agent-sandbox", label: "Google GKE Agent Sandbox",  kind: "cloud", secret: { key: "GKE_TOKEN",         label: "GKE Bearer Token",      placeholder: "gcloud auth print-access-token" } },
+  { id: "lambda-microvm",    label: "AWS Lambda MicroVM",        kind: "cloud", secret: { key: "AWS_ACCESS_KEY_ID",  label: "AWS Access Key ID",     placeholder: "AKIA..." } },
 ] as const;
 
 /** Engine ids as a tuple suitable for zod's `z.enum(...)` constructor. */

@@ -19,7 +19,7 @@ export const MODELS = FALLBACK_MODELS;
 export const ENGINES = Object.keys(FALLBACK_MODELS);
 
 export const LOCAL_PROVIDERS = ["docker", "apple-container", "podman"] as const;
-export const CLOUD_PROVIDERS = ["anthropic", "sprites", "e2b", "vercel", "daytona", "fly", "modal"] as const;
+export const CLOUD_PROVIDERS = ["anthropic", "sprites", "e2b", "vercel", "daytona", "fly", "modal", "gke-agent-sandbox", "lambda-microvm"] as const;
 export const PROVIDERS = [...LOCAL_PROVIDERS, ...CLOUD_PROVIDERS] as const;
 
 export const PROVIDER_TOKENS: Record<string, { key: string; label: string; placeholder: string }> = {
@@ -30,6 +30,8 @@ export const PROVIDER_TOKENS: Record<string, { key: string; label: string; place
   daytona: { key: "DAYTONA_API_KEY", label: "Daytona API Key", placeholder: "..." },
   fly: { key: "FLY_API_TOKEN", label: "Fly.io API Token", placeholder: "fo1_..." },
   modal: { key: "MODAL_TOKEN_ID", label: "Modal Token ID", placeholder: "..." },
+  "gke-agent-sandbox": { key: "GKE_TOKEN", label: "GKE Bearer Token", placeholder: "gcloud auth print-access-token" },
+  "lambda-microvm": { key: "AWS_ACCESS_KEY_ID", label: "AWS Access Key ID", placeholder: "AKIA..." },
 };
 
 export const ENGINE_KEYS: Record<string, { key: string; label: string }> = {

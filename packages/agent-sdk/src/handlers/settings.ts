@@ -11,6 +11,14 @@ const NON_SECRET_KEYS = new Set([
   "vercel_team_id",
   "vercel_project_id",
   "fly_app_name",
+  // GKE Agent Sandbox + Lambda MicroVM non-secret config (endpoints, names,
+  // public CA cert, snapshot id) — surfaceable, not credentials.
+  "gke_api_server",
+  "gke_ca_data",
+  "gke_sandbox_namespace",
+  "gke_sandbox_image",
+  "aws_region",
+  "lambda_microvm_snapshot",
   // Skills catalog URL overrides — URLs, not secrets.
   "skills_feed_url",
   "skills_index_url",
@@ -23,8 +31,14 @@ const ALLOWED_KEYS = [
   "gemini_api_key", "factory_api_key", "claude_token",
   "e2b_api_key", "vercel_token", "daytona_api_key",
   "fly_api_token", "modal_token_id", "modal_token_secret",
+  // GKE Agent Sandbox credentials
+  "gke_token",
+  // AWS Lambda MicroVM credentials
+  "aws_access_key_id", "aws_secret_access_key", "aws_session_token",
   // Provider identifiers (not secrets but pair with credentials)
   "vercel_team_id", "vercel_project_id", "fly_app_name",
+  "gke_api_server", "gke_ca_data", "gke_sandbox_namespace", "gke_sandbox_image",
+  "aws_region", "lambda_microvm_snapshot",
   // Skills catalog URL overrides (operator override; default is agentstep.com)
   "skills_feed_url", "skills_index_url",
   // UI state

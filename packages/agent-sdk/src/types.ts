@@ -200,7 +200,7 @@ export type EnvironmentState = "preparing" | "ready" | "failed";
 
 export interface EnvironmentConfig {
   type: "cloud" | "self_hosted";
-  provider?: "sprites" | "docker" | "apple-container" | "apple-firecracker" | "podman" | "e2b" | "vercel" | "daytona" | "fly" | "modal" | "mvm" | "anthropic";
+  provider?: "sprites" | "docker" | "apple-container" | "apple-firecracker" | "podman" | "e2b" | "vercel" | "daytona" | "fly" | "modal" | "mvm" | "anthropic" | "gke-agent-sandbox" | "lambda-microvm";
   packages?: {
     apt?: string[];
     cargo?: string[];

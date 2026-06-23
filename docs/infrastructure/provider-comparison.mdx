@@ -19,6 +19,8 @@ AgentStep Gateway supports 11 container providers. This guide compares them acro
 | `daytona` | Cloud | ~5s | Container | Pay-per-use | Full dev environments |
 | `fly` | Cloud | ~5s | Firecracker microVM | Pay-per-use | Global edge deployment |
 | `modal` | Cloud | ~3s | gVisor sandbox | Pay-per-use | GPU workloads |
+| `gke-agent-sandbox` | Cloud | ~0.2s (warm pool) | Pod + gVisor/Kata | Pay-per-use (GKE) | Kubernetes-native, ultra-scale |
+| `lambda-microvm` | Cloud | sub-second (snapshot) | Firecracker microVM | Pay-per-use (AWS) | Stateful, suspend/resume |
 | `anthropic` | Cloud | Anthropic-managed | Anthropic-managed | $0.08/session-hour | Anthropic parity |
 
 ## Choosing a provider
@@ -45,6 +47,10 @@ AgentStep Gateway supports 11 container providers. This guide compares them acro
 
 **Daytona** provides full development environments rather than minimal containers — useful for agents that need pre-configured toolchains.
 
+**GKE Agent Sandbox** (`provider: "gke-agent-sandbox"`) runs each sandbox as a Kubernetes `Sandbox` custom resource (the open-source [kubernetes-sigs/agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) runtime, GA on GKE). You get gVisor/Kata kernel isolation, default-deny networking, snapshot-backed suspend/resume, and a warm-pool Sandbox API allocating sandboxes at sub-second latency. Best when you already run on GKE/Kubernetes or need ultra-scale (millions of short-lived tool calls). Auth is a bearer token (`GKE_TOKEN`, e.g. `gcloud auth print-access-token`) against `GKE_API_SERVER`; exec uses the Kubernetes streaming channel protocol over WebSocket.
+
+**AWS Lambda MicroVMs** (`provider: "lambda-microvm"`) launches Firecracker-backed, stateful sandboxes from a snapshot (`LAMBDA_MICROVM_SNAPSHOT`) with full lifecycle control — launch, suspend, resume, terminate — and up to 8-hour runtimes. Each microVM exposes a dedicated HTTPS endpoint that the provider drives for exec. Best for state-heavy workloads that idle between bursts (suspend/resume reclaims cost) and strong per-tenant isolation. Auth is standard AWS credentials (the control plane is SigV4-signed).
+
 ### For Anthropic compatibility
 
 **Anthropic** (`provider: "anthropic"`) proxies sessions to Anthropic's hosted Managed Agents. Your agent config stays local; execution happens on Anthropic's infrastructure. Use this for a hybrid setup where some workloads run locally and others on Anthropic.
@@ -65,8 +71,10 @@ AgentStep Gateway supports 11 container providers. This guide compares them acro
 | `modal` | gVisor user-space kernel | gVisor interceptor | gVisor + host exploit |
 | `vercel` | V8 isolate + container | Shared + isolated | V8 sandbox escape |
 | `daytona` | Container (cloud-managed) | Cloud-managed | Cloud provider breach |
+| `gke-agent-sandbox` | Pod + gVisor/Kata + default-deny netpol | gVisor interceptor / separate kernel | gVisor/Kata + host exploit |
+| `lambda-microvm` | Firecracker microVM | Separate kernel | Hypervisor exploit |
 
-For security-sensitive workloads, prefer microVM-based providers (E2B, Fly, apple-firecracker) or gVisor-based (Modal).
+For security-sensitive workloads, prefer microVM-based providers (E2B, Fly, apple-firecracker, lambda-microvm) or gVisor-based (Modal, gke-agent-sandbox).
 
 ### Credential requirements
 

@@ -15,7 +15,7 @@ export function registerEnvironmentCommands(parent: Command): void {
 
   envs.command("create")
     .requiredOption("--name <name>", "Environment name")
-    .option("--provider <provider>", "Provider: sprites, docker, apple-container, podman, e2b, vercel, daytona, fly, modal", "sprites")
+    .option("--provider <provider>", "Provider: sprites, docker, apple-container, podman, e2b, vercel, daytona, fly, modal, gke-agent-sandbox, lambda-microvm", "sprites")
     .option("--packages-npm <pkgs>", "npm packages (comma-separated)")
     .option("--packages-pip <pkgs>", "pip packages (comma-separated)")
     .option("--packages-apt <pkgs>", "apt packages (comma-separated)")

@@ -11,7 +11,7 @@
  * Vault secrets are resolved per-session and passed by the lifecycle/driver.
  */
 
-export type ProviderName = "sprites" | "docker" | "apple-container" | "apple-firecracker" | "podman" | "e2b" | "vercel" | "daytona" | "fly" | "modal" | "mvm" | "anthropic" | "cloudflare";
+export type ProviderName = "sprites" | "docker" | "apple-container" | "apple-firecracker" | "podman" | "e2b" | "vercel" | "daytona" | "fly" | "modal" | "mvm" | "anthropic" | "cloudflare" | "gke-agent-sandbox" | "lambda-microvm";
 
 /** Optional provider credential overrides from vault secrets. */
 export type ProviderSecrets = Record<string, string>;
