@@ -4,15 +4,15 @@
  * Targets the open-source Agent Sandbox runtime
  * (github.com/kubernetes-sigs/agent-sandbox), GA on GKE as of 2026. A
  * sandbox is a Kubernetes custom resource (`Sandbox`, group
- * `agents.x-k8s.io/v1beta1`) whose controller materialises a Pod with a
- * stable identity, gVisor/Kata kernel isolation, default-deny networking
- * and snapshot-backed suspend/resume.
+ * `agents.x-k8s.io`, version v1alpha1 in shipping releases) whose controller
+ * materialises a Pod with a stable identity, gVisor/Kata kernel isolation,
+ * default-deny networking and snapshot-backed suspend/resume.
  *
  * Lifecycle maps cleanly onto the Kubernetes API — no extra SDK needed,
  * just the stable REST surface every cluster exposes:
- *   create → POST   /apis/agents.x-k8s.io/v1beta1/namespaces/{ns}/sandboxes
- *   delete → DELETE /apis/agents.x-k8s.io/v1beta1/namespaces/{ns}/sandboxes/{name}
- *   list   → GET    /apis/agents.x-k8s.io/v1beta1/namespaces/{ns}/sandboxes
+ *   create → POST   /apis/agents.x-k8s.io/{ver}/namespaces/{ns}/sandboxes
+ *   delete → DELETE /apis/agents.x-k8s.io/{ver}/namespaces/{ns}/sandboxes/{name}
+ *   list   → GET    /apis/agents.x-k8s.io/{ver}/namespaces/{ns}/sandboxes
  *   exec   → WebSocket /api/v1/namespaces/{ns}/pods/{name}/exec  (channel proto)
  *
  * The Sandbox controller names the backing Pod after the Sandbox, so the
@@ -43,16 +43,54 @@
  *   GKE_SANDBOX_SERVICE_ACCOUNT optional — pod serviceAccountName
  *   GKE_CA_DATA                 optional — base64 PEM cluster CA
  *   GKE_INSECURE_SKIP_TLS_VERIFY optional — "1"/"true" to skip TLS verify
+ *   GKE_SANDBOX_API_VERSION     optional — pin the CRD version; otherwise the
+ *                               served version is discovered (fallback v1alpha1)
  */
 import type { ContainerProvider, ExecOptions, ExecSession, ProviderSecrets } from "./types";
 import { readEnvOrSetting } from "../config";
 
 const GROUP = "agents.x-k8s.io";
-const VERSION = "v1beta1";
 const PLURAL = "sandboxes";
+// Served version of the Sandbox CRD. This genuinely varies by deployment:
+// the open-source operator (kubernetes-sigs/agent-sandbox, through v0.4.6)
+// serves v1alpha1 — verified live against a real cluster, where a v1beta1
+// request 404s and `/apis/agents.x-k8s.io` reports v1alpha1 as preferred —
+// while the GKE-managed offering may serve a newer version. So we DISCOVER
+// the served (preferred) version at runtime rather than hardcode it.
+// `GKE_SANDBOX_API_VERSION` pins it explicitly; this is the fallback used
+// only when discovery can't run.
+const FALLBACK_VERSION = "v1alpha1";
 
 function val(secrets: ProviderSecrets | undefined, key: string): string | undefined {
   return secrets?.[key] ?? readEnvOrSetting(key);
+}
+
+// Discovered version is cached process-wide (like the TLS dispatcher below).
+// Single-cluster is the common case; multi-cluster/multi-version deployments
+// pin per-agent via the GKE_SANDBOX_API_VERSION secret, which short-circuits
+// discovery. Only successful discoveries are cached, so a transient failure
+// (which falls back) is retried on the next call.
+type GlobalWithGkeVer = typeof globalThis & { __caGkeApiVersion?: string };
+const gv = globalThis as GlobalWithGkeVer;
+
+async function getApiVersion(secrets?: ProviderSecrets): Promise<string> {
+  const override = val(secrets, "GKE_SANDBOX_API_VERSION");
+  if (override) return override;
+  if (gv.__caGkeApiVersion) return gv.__caGkeApiVersion;
+  try {
+    const res = await k8sFetch(`/apis/${GROUP}`, { secrets });
+    if (res.ok) {
+      const body = (await res.json()) as { preferredVersion?: { version?: string } };
+      const v = body.preferredVersion?.version;
+      if (typeof v === "string" && v) {
+        gv.__caGkeApiVersion = v;
+        return v;
+      }
+    }
+  } catch {
+    /* discovery unreachable — fall back below, don't cache the fallback */
+  }
+  return FALLBACK_VERSION;
 }
 
 function getServer(secrets?: ProviderSecrets): string {
@@ -137,8 +175,8 @@ async function k8sFetch(
   } as RequestInit);
 }
 
-function sandboxPath(ns: string, name?: string): string {
-  const base = `/apis/${GROUP}/${VERSION}/namespaces/${ns}/${PLURAL}`;
+function sandboxPath(ns: string, version: string, name?: string): string {
+  const base = `/apis/${GROUP}/${version}/namespaces/${ns}/${PLURAL}`;
   return name ? `${base}/${encodeURIComponent(name)}` : base;
 }
 
@@ -357,9 +395,10 @@ export const gkeAgentSandboxProvider: ContainerProvider = {
 
   async create({ name, secrets }) {
     const ns = getNamespace(secrets);
+    const version = await getApiVersion(secrets);
     const serviceAccount = val(secrets, "GKE_SANDBOX_SERVICE_ACCOUNT");
     const manifest = {
-      apiVersion: `${GROUP}/${VERSION}`,
+      apiVersion: `${GROUP}/${version}`,
       kind: "Sandbox",
       metadata: { name, labels: { "app.kubernetes.io/managed-by": "agentstep-gateway" } },
       spec: {
@@ -378,7 +417,7 @@ export const gkeAgentSandboxProvider: ContainerProvider = {
       },
     };
 
-    const res = await k8sFetch(sandboxPath(ns), { method: "POST", body: manifest, secrets, timeoutMs: 120_000 });
+    const res = await k8sFetch(sandboxPath(ns, version), { method: "POST", body: manifest, secrets, timeoutMs: 120_000 });
     if (!res.ok && res.status !== 409) {
       const body = await res.text().catch(() => "");
       throw new Error(`GKE sandbox create failed (${res.status}): ${body.slice(0, 400)}`);
@@ -389,8 +428,9 @@ export const gkeAgentSandboxProvider: ContainerProvider = {
 
   async delete(name, secrets?) {
     const ns = getNamespace(secrets);
+    const version = await getApiVersion(secrets);
     try {
-      const res = await k8sFetch(sandboxPath(ns, name), { method: "DELETE", secrets });
+      const res = await k8sFetch(sandboxPath(ns, version, name), { method: "DELETE", secrets });
       if (!res.ok && res.status !== 404) {
         const body = await res.text().catch(() => "");
         console.warn(`GKE sandbox delete failed (${res.status}): ${body.slice(0, 200)}`);
@@ -402,8 +442,9 @@ export const gkeAgentSandboxProvider: ContainerProvider = {
 
   async list(opts) {
     const ns = getNamespace();
+    const version = await getApiVersion();
     try {
-      const res = await k8sFetch(sandboxPath(ns), {});
+      const res = await k8sFetch(sandboxPath(ns, version), {});
       if (!res.ok) return [];
       const data = (await res.json()) as { items?: Array<{ metadata?: { name?: string } }> };
       const prefix = opts?.prefix ?? "ca-sess-";
