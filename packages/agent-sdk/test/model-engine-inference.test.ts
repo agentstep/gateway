@@ -82,4 +82,14 @@ describe("inferEngineFromModel + isValidModelForEngine integration", () => {
   it("cross-engine validation fails for claude model on gemini engine", () => {
     expect(isValidModelForEngine("gemini", "claude-sonnet-4-6")).toBe(false);
   });
+
+  it("a base-url override accepts any model on the claude engine only", () => {
+    // Without override: a non-claude model is rejected on the claude engine.
+    expect(isValidModelForEngine("claude", "gpt-5.4")).toBe(false);
+    // With override: any endpoint-served model is allowed on claude.
+    expect(isValidModelForEngine("claude", "gpt-5.4", { baseUrlOverride: true })).toBe(true);
+    expect(isValidModelForEngine("claude", "gemma4", { baseUrlOverride: true })).toBe(true);
+    // The override never loosens other engines.
+    expect(isValidModelForEngine("gemini", "gpt-5.4", { baseUrlOverride: true })).toBe(false);
+  });
 });

@@ -153,6 +153,55 @@ export const wireLocalModels: TurnMiddleware = (ctx) => {
   if (!env.CODEX_API_KEY) env.CODEX_API_KEY = "ollama";
 };
 
+/**
+ * Rewrite a localhost/127.0.0.1 URL to a host the sandbox container can
+ * reach (host.docker.internal for docker/podman; the VM gateway IP for
+ * Apple containers, which run in a VM where localhost is the VM itself).
+ * Non-loopback hosts and unknown providers pass through unchanged.
+ */
+function rewriteLoopbackForContainer(url: string, providerName: string): string {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return url;
+  }
+  if (u.hostname !== "localhost" && u.hostname !== "127.0.0.1") return url;
+  if (providerName === "docker" || providerName === "podman") {
+    u.hostname = "host.docker.internal";
+  } else if (providerName === "apple-container" || providerName === "apple-firecracker") {
+    u.hostname = "192.168.64.1";
+  } else {
+    return url; // unknown/remote provider — caller's URL is authoritative
+  }
+  return u.toString().replace(/\/$/, "");
+}
+
+/**
+ * Claude-engine base-URL override: when an agent sets
+ * `model_config.anthropic_base_url`, point Claude Code at that
+ * Anthropic-compatible endpoint (Ollama's /v1/messages, a provider compat
+ * endpoint, or a LiteLLM hop). Verified end-to-end against a local Ollama —
+ * `claude` honours ANTHROPIC_BASE_URL and completes a turn even though Ollama
+ * doesn't implement /v1/messages/count_tokens (it degrades gracefully).
+ *
+ * Runs after injectVaultEnv, so a real per-agent ANTHROPIC_API_KEY /
+ * CLAUDE_CODE_OAUTH_TOKEN from a vault is already present and wins; a
+ * placeholder is injected only when none was supplied (Claude Code refuses to
+ * start with no credential at all, but auth-less endpoints like Ollama ignore
+ * the value).
+ */
+export const wireClaudeBaseUrl: TurnMiddleware = (ctx) => {
+  if (ctx.agent.engine !== "claude") return;
+  const raw = ctx.agent.model_config?.anthropic_base_url;
+  if (!raw) return;
+  const env = ctx.turnBuild.env;
+  env.ANTHROPIC_BASE_URL = rewriteLoopbackForContainer(raw, ctx.providerName);
+  if (!env.ANTHROPIC_API_KEY && !env.CLAUDE_CODE_OAUTH_TOKEN) {
+    env.ANTHROPIC_API_KEY = "gateway-base-url-placeholder";
+  }
+};
+
 /** The built-in pipeline, in execution order. Order matters. */
 export const BUILT_IN_DECORATORS: readonly TurnMiddleware[] = [
   injectResourcesDir,
@@ -161,6 +210,7 @@ export const BUILT_IN_DECORATORS: readonly TurnMiddleware[] = [
   remapCodexKey,
   remapAnthropicOAuth,
   wireLocalModels,
+  wireClaudeBaseUrl,
 ];
 
 // ── User-registered middleware ────────────────────────────────────────────
