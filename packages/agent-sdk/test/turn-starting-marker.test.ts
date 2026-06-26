@@ -29,6 +29,19 @@ function newGate(): void {
   acquireGate = { promise, resolve };
 }
 
+/**
+ * Poll until `pred` is true (or throw at the deadline). Replaces fixed-delay
+ * sleeps so the test advances the instant the driver reaches the expected
+ * state rather than guessing a duration — deterministic under parallel load.
+ */
+async function waitUntil(pred: () => boolean, timeoutMs = 3000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!pred()) {
+    if (Date.now() > deadline) throw new Error("waitUntil: condition not met within timeout");
+    await new Promise((r) => setTimeout(r, 2));
+  }
+}
+
 vi.mock("../src/containers/exec", async () => {
   const fake = await import("./helpers/fake-exec");
   return { startExec: fake.startExec };
@@ -141,9 +154,10 @@ describe("runTurn wrapper does not clobber a drained successor's marker", () => 
     const { interruptSession } = await import("../src/sessions/interrupt");
     const { pushPendingUserInput, getRuntime } = await import("../src/state");
 
-    // Turn A blocks on the acquire gate.
+    // Turn A blocks on the acquire gate. Wait until it has registered its
+    // controller (so the interrupt below lands) rather than guessing a delay.
     const turnA = runTurn(sessionId, [{ kind: "text", eventId: "e1", text: "hi" }]);
-    await new Promise((r) => setTimeout(r, 20));
+    await waitUntil(() => getRuntime().inFlightRuns.has(sessionId));
 
     // Queue input for the next turn, then interrupt A mid-acquire. A's
     // interrupt path drains the queue, which marks + launches turn B.
@@ -161,11 +175,12 @@ describe("runTurn wrapper does not clobber a drained successor's marker", () => 
     // otherwise a racing POST could start a concurrent turn.
     expect(getRuntime().startingTurns.has(sessionId)).toBe(true);
 
-    // Cleanup: interrupt B and release its gate so the turn settles.
-    await new Promise((r) => setTimeout(r, 20));
+    // Cleanup: wait for B to register, interrupt it, release its gate, and
+    // wait for it to fully settle (deregister) — all condition-based.
+    await waitUntil(() => getRuntime().inFlightRuns.has(sessionId));
     interruptSession(sessionId);
     acquireGate.resolve("ca-sess-b");
-    await new Promise((r) => setTimeout(r, 50));
+    await waitUntil(() => !getRuntime().inFlightRuns.has(sessionId));
     expect(getRuntime().inFlightRuns.has(sessionId)).toBe(false);
   });
 });
