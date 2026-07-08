@@ -112,6 +112,17 @@ export interface AgentVersionRow {
 
 export interface ModelConfig {
   speed?: "standard" | "fast";
+  /**
+   * Anthropic-compatible endpoint for the claude engine. Claude Code honours
+   * ANTHROPIC_BASE_URL, so the claude harness can drive any backend that
+   * implements /v1/messages (Ollama's compat endpoint, a provider-native
+   * compat endpoint, or a LiteLLM hop) — keeping mid-turn tool re-entry,
+   * skills, and the permission bridge that the one-shot engines lack.
+   * A localhost URL is rewritten to a container-reachable host at turn time.
+   * Auth: a real per-agent ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN from a
+   * vault wins; a placeholder is injected only for auth-less endpoints.
+   */
+  anthropic_base_url?: string;
 }
 
 export interface AgentSkill {
