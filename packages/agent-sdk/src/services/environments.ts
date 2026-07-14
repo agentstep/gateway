@@ -63,6 +63,9 @@ const ConfigSchema = z.object({
   packages: PackagesSchema,
   networking: NetworkingSchema.optional(),
   warm_pool_size: z.number().int().min(0).optional(),
+  // ZDR (PR-Z1+, agent-sdk 0.5.64+) — AgentStep extension. See docs/zdr.mdx.
+  // When true, sessions created against this env are auto-purged at terminate.
+  zero_data_retention: z.boolean().optional(),
 });
 
 const CreateSchema = z.object({
@@ -183,16 +186,27 @@ export function archiveEnvironmentService(auth: AuthContext, id: string): Enviro
 }
 
 export function updateEnvironmentService(auth: AuthContext, id: string, body: unknown): Environment {
-  loadEnvForCaller(auth, id); // tenant guard
+  const existing = loadEnvForCaller(auth, id); // tenant guard + current config
 
   const parsed = UpdateSchema.safeParse(body);
   if (!parsed.success) throw badRequest(parsed.error.message);
+
+  // Architect M1: PATCH semantics for config. Blindly replacing `config`
+  // with the request body means a caller sending `{config: {idle_timeout_ms:
+  // 5000}}` would silently unset every other config key — including
+  // `zero_data_retention`, which is supposed to stay set on the env that
+  // sessions inherit it from. Merge instead of replace, so callers can update
+  // one knob without re-sending the whole config object.
+  const mergedConfig =
+    parsed.data.config !== undefined
+      ? { ...(existing.config ?? {}), ...parsed.data.config }
+      : undefined;
 
   const updated = updateEnvironment(id, {
     name: parsed.data.name,
     description: parsed.data.description,
     metadata: parsed.data.metadata,
-    config: parsed.data.config,
+    config: mergedConfig,
   });
   return updated!;
 }

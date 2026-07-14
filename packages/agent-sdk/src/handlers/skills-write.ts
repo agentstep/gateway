@@ -23,7 +23,7 @@ import {
   listSkillVersions,
   deleteSkillVersion,
 } from "../db/skills";
-import { resolveCreateTenant, tenantFilter } from "../auth/scope";
+import { resolveCreateTenant, tenantFilter, effectiveTenant } from "../auth/scope";
 
 // ---------------------------------------------------------------------------
 // Zip parser — minimal Local File Header reader (supports stored + deflate)
@@ -195,6 +195,38 @@ export function handleCreateSkill(request: Request): Promise<Response> {
   });
 }
 
+/**
+ * GET /v1/skills — list the caller's uploaded skills.
+ *
+ * Distinct from `handleSearchSkills` (in skills.ts) which queries the
+ * external community catalog (skills.sh index). Anthropic Managed Agents
+ * convention: `GET /v1/skills` returns the tenant's own uploads; community
+ * catalog lives at `/v1/skills/catalog`.
+ *
+ * Query params: `limit` (1–100, default 20), `after_id` (cursor),
+ * `include_archived` (default false).
+ */
+export function handleListSkills(request: Request): Promise<Response> {
+  return routeWrap(request, async ({ auth, request: req }) => {
+    const url = new URL(req.url);
+    const limit = Math.min(
+      Math.max(Number(url.searchParams.get("limit") || "20"), 1),
+      100,
+    );
+    const cursor = decodeCursor(url.searchParams.get("after_id"));
+    const includeArchived = url.searchParams.get("include_archived") === "true";
+    const tenantId = effectiveTenant(auth) ?? undefined;
+
+    const skills = listSkills({
+      limit,
+      cursor: cursor ?? undefined,
+      tenantId,
+      includeArchived,
+    });
+    return paginatedOk(skills, limit);
+  });
+}
+
 /** GET /v1/skills/:id */
 export function handleGetSkill(
   request: Request,
@@ -292,7 +324,7 @@ export function handleGetSkillVersionContent(
     return new Response(sv.content, {
       headers: {
         "Content-Type": "text/markdown",
-        "Content-Disposition": `attachment; filename="${skill.name}-${version}.md"`,
+        "Content-Disposition": `attachment; filename="${skill.display_title}-${version}.md"`,
         "Content-Length": String(Buffer.byteLength(sv.content, "utf-8")),
       },
     });

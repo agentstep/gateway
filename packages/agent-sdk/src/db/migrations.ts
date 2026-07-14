@@ -901,6 +901,57 @@ export function runMigrations(db: InstanceType<typeof Database>): void {
     db.exec(`ALTER TABLE agent_versions ADD COLUMN permission_policy_json TEXT`);
   } catch { /* column already exists */ }
 
+  // 0.5.45: debug-prompt capture column on sessions. Null = disabled.
+  // When debug capture is requested at session create time (header
+  // `X-AgentStep-Debug: prompt` or query `?debug=prompt`), this column
+  // is initialized to the sentinel `{"pending":true}`. The session
+  // driver replaces it with the captured payload on the first turn.
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN debug_prompt_json TEXT`);
+  } catch { /* column already exists */ }
+
+  // 0.5.64: ZDR Phase 0a — backfill NULL tenant_id rows from pre-0.5.
+  //
+  // The tenant_id columns on `sessions` and `audit_log` were added as
+  // nullable ALTER TABLE during the v0.5 multi-tenancy work. Rows
+  // created before that migration have NULL tenant_id and can't be
+  // tenant-filtered, which would let a ZDR purge or a tenant-scoped
+  // query miss them. We backfill "tenant_default" (the canonical
+  // single-tenant id every pre-0.5 install was on) for any NULL row.
+  //
+  // Idempotent: re-running affects zero rows once filled.
+  //
+  // NOTE: `events` and `memory_stores` deliberately do NOT have
+  // tenant_id columns today. ZDR purge doesn't need them — it
+  // resolves the tenant from `sessions.tenant_id` before any DELETE,
+  // and the session_id FK on events/memory_versions/etc. is unique
+  // and bound to that session. Adding tenant_id columns there is
+  // defense-in-depth worth doing in a follow-up, but it's NOT a ZDR
+  // prerequisite. Both prior architect reviews of the ZDR plan were
+  // wrong about events/memory_stores already having the column —
+  // this comment exists so the next person looking doesn't make the
+  // same mistake.
+  db.exec(`UPDATE sessions  SET tenant_id = 'tenant_default' WHERE tenant_id IS NULL`);
+  db.exec(`UPDATE audit_log SET tenant_id = 'tenant_default' WHERE tenant_id IS NULL`);
+
+  // 0.5.64: ZDR (PR-Z1) — flag + purge marker columns on sessions.
+  // `zero_data_retention` is copied from EnvironmentConfig at session
+  // create and is immutable thereafter (see docs/zdr.mdx). Defaults
+  // to 0 so existing sessions stay non-ZDR.
+  //
+  // `retention_purged_at` is set by purgeSession() in PR-Z2 *before*
+  // any DELETEs run, alongside `status='purging'`. The boot-time
+  // reaper finds any session in status='purging' on next startup and
+  // re-drives the purge — that's how we recover from a crash partway
+  // through a multi-table DELETE on a flaky FUSE mount.
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN zero_data_retention INTEGER NOT NULL DEFAULT 0`);
+  } catch { /* column already exists */ }
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN retention_purged_at INTEGER`);
+  } catch { /* column already exists */ }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_purging ON sessions(status) WHERE status = 'purging'`);
+
   // Scheduled deployments: cron-fired sessions with per-firing run records.
   db.exec(`
     CREATE TABLE IF NOT EXISTS deployments (

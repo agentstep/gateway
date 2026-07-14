@@ -29,6 +29,24 @@ export function requireGlobalAdmin(auth: AuthContext): void {
 }
 
 /**
+ * The tenant id the request is operating on, resolving the
+ * `x-agentstep-tenant` header on top of the key's own tenant.
+ *
+ *   1. `actingAsTenant` (validated header) wins when present.
+ *   2. Otherwise fall back to the key's own `tenantId`.
+ *   3. Null = global-admin "see everything" mode (no impersonation).
+ *
+ * Every tenant-scoped read/write helper in this file routes through
+ * this so the header is honored uniformly. The middleware has already
+ * authorized the header against the key — by the time we read it here
+ * we can trust `actingAsTenant`.
+ */
+export function effectiveTenant(auth: AuthContext): string | null {
+  if (auth.actingAsTenant) return auth.actingAsTenant;
+  return auth.tenantId;
+}
+
+/**
  * The tenant filter to apply to a list/get query.
  *
  * - Global admin (null tenant + admin) → `null` = no filter, see everything.
@@ -39,23 +57,39 @@ export function requireGlobalAdmin(auth: AuthContext): void {
  * admin rights within their tenant. This is the whole point of tenancy.
  */
 export function tenantFilter(auth: AuthContext): string | null {
+  // Header impersonation comes first: a global admin acting as a tenant
+  // narrows visibility to that tenant; without it, global admin still
+  // sees everything (null filter).
+  if (auth.actingAsTenant) return auth.actingAsTenant;
   if (auth.isGlobalAdmin) return null;
   return auth.tenantId;
 }
 
 /**
- * Assert the resource's `tenant_id` matches the caller's tenant (or the
- * caller is a global admin). Throws 404 (not 403) on mismatch so callers
- * can't probe resource IDs from other tenants.
+ * Assert the resource's `tenant_id` matches the caller's effective tenant
+ * (or the caller is a global admin operating without impersonation).
+ * Throws 404 (not 403) on mismatch so callers can't probe resource IDs
+ * from other tenants.
+ *
+ * Precedence order matters: `effectiveTenant()` is consulted BEFORE
+ * the global-admin bypass. Reading the bypass first would let a global
+ * admin's service key still see every tenant's resources even after the
+ * product sets the `x-agentstep-tenant` header — defeating the entire
+ * scoping mechanism.
  */
 export function assertResourceTenant(
   auth: AuthContext,
   resourceTenantId: string | null,
   notFoundMsg: string,
 ): void {
+  const acting = effectiveTenant(auth);
+  if (acting !== null) {
+    if (resourceTenantId === acting) return;
+    throw notFound(notFoundMsg);
+  }
+  // No effective tenant — only a global admin (no impersonation) reaches
+  // here. They see everything.
   if (auth.isGlobalAdmin) return;
-  if (resourceTenantId === auth.tenantId) return;
-  // Different tenant (or caller has no tenant): pretend not found.
   throw notFound(notFoundMsg);
 }
 
@@ -75,11 +109,41 @@ export function resolveCreateTenant(
   auth: AuthContext,
   bodyTenantId: string | null | undefined,
 ): string {
+  // Header impersonation (when set) wins. The middleware has already
+  // authorized it against the key, so by here `actingAsTenant` is the
+  // tenant the caller is allowed to act for.
+  if (auth.actingAsTenant) return auth.actingAsTenant;
+
   if (auth.isGlobalAdmin) {
-    // Default to `tenant_default` (seeded on first boot) when unspecified.
-    // Avoid importing db/tenants here to prevent a circular require —
-    // the id is a plain constant documented in db/tenants.ts.
-    return bodyTenantId ?? "tenant_default";
+    // Global-admin keys can declare the tenant they're acting for via
+    // either (1) `x-agentstep-tenant: <id>` header (preferred — lands
+    // in `auth.actingAsTenant` and short-circuits above) or (2) an
+    // explicit `tenant_id` in the create body, which arrives here as
+    // `bodyTenantId`.
+    //
+    // PR6 introduced strict-mode enforcement: when
+    // `REQUIRE_TENANT_HEADER=1` is set, the legacy
+    // "fall back to tenant_default" behavior is removed and callers
+    // must declare a tenant. This is the production setting going
+    // forward (the product gateway's sdk-bridge always sets the
+    // header as of agent-sdk 0.5.58+).
+    //
+    // The flag exists so the SDK's own test suite — which uses
+    // global-admin keys without thinking about tenancy — keeps
+    // working without 301 test-file edits. Tests can opt into strict
+    // mode by setting the env var.
+    if (bodyTenantId) return bodyTenantId;
+    if (process.env.REQUIRE_TENANT_HEADER === "1") {
+      throw forbidden(
+        "global-admin requests must declare a tenant via the " +
+        "`x-agentstep-tenant` header or `tenant_id` field. The legacy " +
+        "tenant_default fallback is disabled when " +
+        "REQUIRE_TENANT_HEADER=1 (PR6 / agent-sdk 0.5.58+).",
+      );
+    }
+    // Legacy fallback. Avoid importing db/tenants here to prevent a
+    // circular require — the id is a plain constant in db/tenants.ts.
+    return "tenant_default";
   }
   // Tenant admin/user — always stamp with their own tenant.
   if (!auth.tenantId) {

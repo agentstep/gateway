@@ -60,6 +60,30 @@ export function getDb(): DB {
 
   g.__caDb = db;
   g.__caDbPath = dbPath;
+
+  // ZDR boot-time orphan reaper (PR-Z2). Sessions left in
+  // `status='purging'` from a previous process that crashed
+  // mid-purge get re-driven now. Best-effort: failures log and
+  // continue, never block boot.
+  //
+  // Deferred via setImmediate so getDb() stays synchronous — the
+  // reaper runs after init returns. Uses dynamic `import()` (not
+  // `require()`) so ESM/TS module resolution works in both
+  // production (compiled to .js) and test (vitest .ts) loaders.
+  //
+  // Skipped when SKIP_ZDR_REAPER=1 (tests that boot the DB
+  // multiple times and don't want the reaper noise). Production
+  // never sets this.
+  if (process.env.SKIP_ZDR_REAPER !== "1") {
+    setImmediate(() => {
+      import("./zero-retention")
+        .then(({ reapPurgingSessions }) => reapPurgingSessions())
+        .catch((err) => {
+          console.warn("[zdr.reaper] boot reaper failed (ignoring):", err);
+        });
+    });
+  }
+
   return db;
 }
 

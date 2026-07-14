@@ -1,5 +1,6 @@
 export { handleCreateAgent, handleListAgents, handleGetAgent, handleUpdateAgent, handleDeleteAgent, handleArchiveAgent, handleListAgentVersions } from "./anthropic-compat/agents";
 export { handleCreateEnvironment, handleListEnvironments, handleGetEnvironment, handleUpdateEnvironment, handleDeleteEnvironment, handleArchiveEnvironment } from "./anthropic-compat/environments";
+export { handlePurgeEnvironmentExisting } from "./zero-retention";
 export { handleCreateSession, handleListSessions, handleGetSession, handleUpdateSession, handleDeleteSession, handleArchiveSession } from "./anthropic-compat/sessions";
 export { handlePostEvents, handleListEvents } from "./anthropic-compat/events";
 export { handleSessionStream, prepareSessionStream } from "./anthropic-compat/stream";
@@ -14,7 +15,7 @@ export { handleGetUI } from "./ui";
 export { handlePutSetting, handleGetSetting } from "./settings";
 export { handleGetProviderStatus } from "./providers";
 export { handleGetSkillsCatalog, handleSearchSkills, handleGetSkillsStats, handleGetSkillsSources, handleGetSkillsIndex, handleGetSkillsFeed } from "./skills";
-export { handleCreateSkill, handleGetSkill, handleDeleteSkill, handleCreateSkillVersion, handleListSkillVersions, handleGetSkillVersion, handleGetSkillVersionContent, handleDeleteSkillVersion } from "./skills-write";
+export { handleCreateSkill, handleListSkills, handleGetSkill, handleDeleteSkill, handleCreateSkillVersion, handleListSkillVersions, handleGetSkillVersion, handleGetSkillVersionContent, handleDeleteSkillVersion } from "./skills-write";
 export { handleGetTrace, handleListTraces, handleExportTrace } from "./traces";
 export { handleGetMetrics, handleGetApiMetrics } from "./metrics";
 export { handleUploadFile, handleListFiles, handleGetFile, handleGetFileContent, handleDeleteFile } from "./anthropic-compat/files";
@@ -23,9 +24,10 @@ export { handleCreateApiKey, handleListApiKeys, handleGetApiKey, handlePatchApiK
 export { handleAddUpstreamKey, handleListUpstreamKeys, handleGetUpstreamKey, handlePatchUpstreamKey, handleDeleteUpstreamKey } from "./upstream_keys";
 export { handleCreateTenant, handleListTenants, handleGetTenant, handlePatchTenant, handleArchiveTenant } from "./tenants";
 export { handleWhoami } from "./whoami";
+export { handleGetDebugPrompt, isDebugPromptRequested, redactEnv } from "./debug-prompt";
 export { handleListAudit } from "./audit";
 export { handleGetLicense } from "./license";
-export { handleListModels } from "./models";
+export { handleListModels, handleGetModel } from "./models";
 export { handleListWork, handleGetWork, handleUpdateWork, handlePollWork, handleWorkStats, handleAckWork, handleHeartbeatWork, handleStopWork } from "./work";
 export { handleCreateUserProfile, handleListUserProfiles, handleGetUserProfile, handleUpdateUserProfile } from "./anthropic-compat/user-profiles";
 export { handleEnrollmentUrl, handleOAuthCallback } from "./anthropic-compat/enrollment";

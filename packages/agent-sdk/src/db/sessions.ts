@@ -121,6 +121,10 @@ export function hydrateSession(row: SessionRow): Session {
       },
       cost_usd: row.usage_cost_usd,
     },
+    tenant_id: row.tenant_id ?? null,
+    // ZDR (PR-Z1): coerce to boolean — SQLite stores as integer.
+    zero_data_retention: Boolean(row.zero_data_retention),
+    retention_purged_at: row.retention_purged_at ? toIso(row.retention_purged_at) : null,
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
     archived_at: row.archived_at ? toIso(row.archived_at) : null,
@@ -145,6 +149,20 @@ export function createSession(input: {
   api_key_id?: string | null;
   /** v0.5: tenant ownership. Null = legacy/global (pre-migration). */
   tenant_id?: string | null;
+  /**
+   * 0.5.45: enable debug-prompt capture. When true, the driver will
+   * capture {argv, env (redacted), prompt} on the first turn into the
+   * `debug_prompt_json` column, retrievable via `GET /v1/sessions/:id/debug-prompt`
+   * for 1 hour from capture.
+   */
+  debug_capture?: boolean;
+  /**
+   * 0.5.64 (PR-Z1): Zero-Data-Retention flag inherited from the
+   * environment.config.zero_data_retention at session create. Immutable
+   * for the session's lifetime. Default false. When true, PR-Z2's
+   * lifecycle hooks purge the session at terminate.
+   */
+  zero_data_retention?: boolean;
 }): Session {
   const db = getDrizzle();
   const id = newId("sesn");
@@ -168,6 +186,8 @@ export function createSession(input: {
     thread_depth: input.thread_depth ?? 0,
     api_key_id: input.api_key_id ?? null,
     tenant_id: input.tenant_id ?? DEFAULT_TENANT_ID,
+    debug_prompt_json: input.debug_capture ? '{"pending":true}' : null,
+    zero_data_retention: input.zero_data_retention ?? false,
     created_at: now,
     updated_at: now,
   }).run();

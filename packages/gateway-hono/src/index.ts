@@ -19,12 +19,14 @@ import {
   handleUpdateEnvironment,
   handleDeleteEnvironment,
   handleArchiveEnvironment,
+  handlePurgeEnvironmentExisting,
   handleCreateSession,
   handleListSessions,
   handleGetSession,
   handleUpdateSession,
   handleDeleteSession,
   handleArchiveSession,
+  handleGetDebugPrompt,
   handlePostEvents,
   handleListEvents,
   handleSessionStream,
@@ -64,6 +66,7 @@ import {
   handleGetProviderStatus,
   handleGetSkillsCatalog,
   handleSearchSkills,
+  handleListSkills,
   handleGetSkillsStats,
   handleGetSkillsSources,
   handleGetSkillsIndex,
@@ -121,6 +124,7 @@ import {
   handleDreamMemoryStore,
   handleUpdateResource,
   handleListModels,
+  handleGetModel,
   handleListWork,
   handleGetWork,
   handleUpdateWork,
@@ -186,6 +190,99 @@ function allowOrigin(origin: string): string | null {
 
 app.use("/v1/*", cors({ origin: allowOrigin, credentials: true }));
 app.use("/anthropic/v1/*", cors({ origin: allowOrigin, credentials: true }));
+app.use("/agentstep/v1/*", cors({ origin: allowOrigin, credentials: true }));
+
+// ── /v1/* Deprecation alias (PR8) ─────────────────────────────────────────
+//
+// Gateway-native routes now live at /agentstep/v1/* (the canonical
+// surface). /v1/* keeps working as an alias for ≥1 release and
+// every response gains an RFC 8594 `Deprecation` header pointing at
+// the successor URL.
+//
+// Meta routes (/v1/openapi.json, /v1/docs) stay at /v1 — they aren't
+// resource endpoints and we want the combined spec discoverable at
+// the historical path. They get no Deprecation header.
+//
+// Requests forwarded internally from /agentstep/v1/* (canonical) to
+// /v1/* (handler) carry the `x-internal-canonical` marker so the
+// outer response isn't tagged.
+app.use("/v1/*", async (c, next) => {
+  await next();
+  if (c.req.header("x-internal-canonical") === "agentstep") return;
+  const p = c.req.path;
+  if (p === "/v1/openapi.json" || p === "/v1/docs") return;
+  c.header("Deprecation", "true");
+  c.header(
+    "Link",
+    `<${p.replace(/^\/v1\//, "/agentstep/v1/")}>; rel="successor-version"`,
+  );
+});
+
+// ── /agentstep/v1/* canonical-surface forwarder (PR8/PR9) ─────────────────
+//
+// Internally rewrite /agentstep/v1/<path> → /v1/<path> and re-enter
+// the app. Single registration covers every gateway-native route
+// without duplicating ~60 `app.{get,post,...}` lines. The
+// `x-internal-canonical` header tells the /v1/* deprecation
+// middleware "I'm already on the canonical surface, don't tag me."
+//
+// Specific /agentstep/v1/* routes that need different behavior than
+// their /v1/* counterpart (openapi.json/docs filter to the
+// gateway-native surface) MUST be registered ABOVE this catch-all
+// so Hono's registration-order match picks them first.
+//
+// PR9 added a CMA-canonical-path guard: skills CRUD, memory_stores
+// CRUD, models, and the environments/:id/work queue moved to
+// /anthropic/v1/* — they're CMA, not AgentStep. A request to e.g.
+// /agentstep/v1/skills would otherwise forward to /v1/skills (no
+// longer mounted) and 404 with no explanation. We 404 those paths
+// here with a clear pointer at the canonical URL instead.
+const CMA_CANONICAL_PATH_PATTERNS: RegExp[] = [
+  /^\/agentstep\/v1\/skills(\/.*)?$/, // catalog/feed/index/sources/stats are agentstep — see below
+  /^\/agentstep\/v1\/memory_stores(\/.*)?$/, // /dream is agentstep — see below
+  /^\/agentstep\/v1\/models(\/.*)?$/,
+  /^\/agentstep\/v1\/environments\/[^/]+\/work(\/.*)?$/,
+];
+const AGENTSTEP_EXTENSION_PATHS = new Set([
+  // Discovery extensions sitting under the CMA skills resource.
+  "/agentstep/v1/skills/catalog",
+  "/agentstep/v1/skills/stats",
+  "/agentstep/v1/skills/sources",
+  "/agentstep/v1/skills/index",
+  "/agentstep/v1/skills/feed",
+]);
+const AGENTSTEP_EXTENSION_DYNAMIC: RegExp[] = [
+  // /memory_stores/:id/dream — consolidation pass, AgentStep-only.
+  /^\/agentstep\/v1\/memory_stores\/[^/]+\/dream$/,
+];
+function isCmaCanonicalUnderAgentstep(path: string): boolean {
+  if (AGENTSTEP_EXTENSION_PATHS.has(path)) return false;
+  if (AGENTSTEP_EXTENSION_DYNAMIC.some((re) => re.test(path))) return false;
+  return CMA_CANONICAL_PATH_PATTERNS.some((re) => re.test(path));
+}
+const agentstepCanonicalForward = async (c: Context): Promise<Response> => {
+  if (isCmaCanonicalUnderAgentstep(c.req.path)) {
+    const canonical = c.req.path.replace(/^\/agentstep\/v1\//, "/anthropic/v1/");
+    return c.json(
+      {
+        type: "error",
+        error: {
+          type: "not_found_error",
+          message:
+            `${c.req.path} is a CMA-canonical resource and lives at ${canonical}. ` +
+            `The /agentstep/v1/* surface is gateway-native only — see /anthropic/v1/openapi.json for CMA-shape routes.`,
+        },
+      },
+      404,
+      { Link: `<${canonical}>; rel="canonical"` },
+    );
+  }
+  const url = new URL(c.req.url);
+  url.pathname = url.pathname.replace(/^\/agentstep\/v1\//, "/v1/");
+  const innerReq = new Request(url, c.req.raw);
+  innerReq.headers.set("x-internal-canonical", "agentstep");
+  return app.fetch(innerReq, c.env);
+};
 
 // Security headers for all responses
 app.use("*", async (c, next) => {
@@ -246,6 +343,18 @@ app.get("/api/health", (c) => c.json({ status: "ok" }));
 // ── OpenAPI (no auth) ────────────────────────────────────────────────────
 app.get("/v1/openapi.json", (c) => handleGetOpenApiSpec(c.req.raw));
 app.get("/v1/docs", () => handleGetDocs());
+// Canonical gateway-native surface (PR8). handleGetOpenApiSpec reads
+// the URL path → emits the /agentstep/v1/* filtered doc.
+app.get("/agentstep/v1/openapi.json", (c) => handleGetOpenApiSpec(c.req.raw));
+app.get("/agentstep/v1/docs", () => handleGetDocs());
+// Anthropic-shape + Google-compat per-surface specs.
+app.get("/anthropic/v1/openapi.json", (c) => handleGetOpenApiSpec(c.req.raw));
+app.get("/google/v1beta/openapi.json", (c) => handleGetOpenApiSpec(c.req.raw));
+// Catch-all canonical forwarder. Registered AFTER the specific
+// /agentstep/v1/openapi.json + /agentstep/v1/docs so they take
+// precedence. Every other /agentstep/v1/* path is rewritten to
+// /v1/* and re-dispatched in-process.
+app.all("/agentstep/v1/*", agentstepCanonicalForward);
 
 // ── Agents ───────────────────────────────────────────────────────────────
 app.post("/anthropic/v1/agents", (c) => handleCreateAgent(c.req.raw));
@@ -261,14 +370,14 @@ app.delete("/anthropic/v1/agents/:id", (c) => handleDeleteAgent(c.req.raw, c.req
 app.post("/anthropic/v1/environments", (c) => handleCreateEnvironment(c.req.raw));
 app.get("/anthropic/v1/environments", (c) => handleListEnvironments(c.req.raw));
 // Work queue routes (self_hosted environments) — must be before generic :id routes
-app.get("/v1/environments/:id/work/poll", (c) => handlePollWork(c.req.raw, c.req.param("id")));
-app.get("/v1/environments/:id/work/stats", (c) => handleWorkStats(c.req.raw, c.req.param("id")));
-app.post("/v1/environments/:id/work/:workId/ack", (c) => handleAckWork(c.req.raw, c.req.param("id"), c.req.param("workId")));
-app.post("/v1/environments/:id/work/:workId/heartbeat", (c) => handleHeartbeatWork(c.req.raw, c.req.param("id"), c.req.param("workId")));
-app.post("/v1/environments/:id/work/:workId/stop", (c) => handleStopWork(c.req.raw, c.req.param("id"), c.req.param("workId")));
-app.get("/v1/environments/:id/work/:workId", (c) => handleGetWork(c.req.raw, c.req.param("id"), c.req.param("workId")));
-app.post("/v1/environments/:id/work/:workId", (c) => handleUpdateWork(c.req.raw, c.req.param("id"), c.req.param("workId")));
-app.get("/v1/environments/:id/work", (c) => handleListWork(c.req.raw, c.req.param("id")));
+app.get("/anthropic/v1/environments/:id/work/poll", (c) => handlePollWork(c.req.raw, c.req.param("id")));
+app.get("/anthropic/v1/environments/:id/work/stats", (c) => handleWorkStats(c.req.raw, c.req.param("id")));
+app.post("/anthropic/v1/environments/:id/work/:workId/ack", (c) => handleAckWork(c.req.raw, c.req.param("id"), c.req.param("workId")));
+app.post("/anthropic/v1/environments/:id/work/:workId/heartbeat", (c) => handleHeartbeatWork(c.req.raw, c.req.param("id"), c.req.param("workId")));
+app.post("/anthropic/v1/environments/:id/work/:workId/stop", (c) => handleStopWork(c.req.raw, c.req.param("id"), c.req.param("workId")));
+app.get("/anthropic/v1/environments/:id/work/:workId", (c) => handleGetWork(c.req.raw, c.req.param("id"), c.req.param("workId")));
+app.post("/anthropic/v1/environments/:id/work/:workId", (c) => handleUpdateWork(c.req.raw, c.req.param("id"), c.req.param("workId")));
+app.get("/anthropic/v1/environments/:id/work", (c) => handleListWork(c.req.raw, c.req.param("id")));
 app.post("/anthropic/v1/environments/:id/archive", (c) => handleArchiveEnvironment(c.req.raw, c.req.param("id")));
 app.get("/anthropic/v1/environments/:id", (c) => handleGetEnvironment(c.req.raw, c.req.param("id")));
 app.post("/anthropic/v1/environments/:id", (c) => handleUpdateEnvironment(c.req.raw, c.req.param("id")));
@@ -281,6 +390,11 @@ app.get("/anthropic/v1/sessions/:id", (c) => handleGetSession(c.req.raw, c.req.p
 app.post("/anthropic/v1/sessions/:id", (c) => handleUpdateSession(c.req.raw, c.req.param("id")));
 app.delete("/anthropic/v1/sessions/:id", (c) => handleDeleteSession(c.req.raw, c.req.param("id")));
 app.post("/anthropic/v1/sessions/:id/archive", (c) => handleArchiveSession(c.req.raw, c.req.param("id")));
+
+// Debug-prompt capture (gateway-native, not Anthropic-compat).
+// GET returns the assembled-prompt JSON dumped at first-turn time
+// when the session was created with `?debug=prompt` or `X-AgentStep-Debug: prompt`.
+app.get("/v1/sessions/:id/debug-prompt", (c) => handleGetDebugPrompt(c.req.raw, c.req.param("id")));
 
 // ── Events ───────────────────────────────────────────────────────────────
 app.post("/anthropic/v1/sessions/:id/events", (c) => handlePostEvents(c.req.raw, c.req.param("id")));
@@ -419,23 +533,27 @@ app.post("/v1/deployments/:id/run", (c) => handleRunDeployment(c.req.raw, c.req.
 app.get("/v1/deployments/:id", (c) => handleGetDeployment(c.req.raw, c.req.param("id")));
 
 // ── Memory Stores ────────────────────────────────────────────────────────
-app.post("/v1/memory_stores", (c) => handleCreateMemoryStore(c.req.raw));
-app.get("/v1/memory_stores", (c) => handleListMemoryStores(c.req.raw));
+// CMA-canonical: under /anthropic/v1/*. The `/dream` consolidation
+// endpoint is an AgentStep-only extension and stays under /v1/*
+// (reachable as /agentstep/v1/memory_stores/:id/dream via the
+// canonical-surface catch-all forwarder).
+app.post("/anthropic/v1/memory_stores", (c) => handleCreateMemoryStore(c.req.raw));
+app.get("/anthropic/v1/memory_stores", (c) => handleListMemoryStores(c.req.raw));
 // Sub-resource routes must be registered BEFORE the generic :id routes
-app.post("/v1/memory_stores/:id/archive", (c) => handleArchiveMemoryStore(c.req.raw, c.req.param("id")));
+app.post("/anthropic/v1/memory_stores/:id/archive", (c) => handleArchiveMemoryStore(c.req.raw, c.req.param("id")));
 app.post("/v1/memory_stores/:id/dream", (c) => handleDreamMemoryStore(c.req.raw, c.req.param("id")));
-app.get("/v1/memory_stores/:id/memory_versions", (c) => handleListMemoryVersions(c.req.raw, c.req.param("id")));
-app.get("/v1/memory_stores/:id/memory_versions/:vid", (c) => handleGetMemoryVersion(c.req.raw, c.req.param("id"), c.req.param("vid")));
-app.post("/v1/memory_stores/:id/memory_versions/:vid/redact", (c) => handleRedactMemoryVersion(c.req.raw, c.req.param("id"), c.req.param("vid")));
-app.get("/v1/memory_stores/:id", (c) => handleGetMemoryStore(c.req.raw, c.req.param("id")));
-app.post("/v1/memory_stores/:id", (c) => handleUpdateMemoryStore(c.req.raw, c.req.param("id")));
-app.delete("/v1/memory_stores/:id", (c) => handleDeleteMemoryStore(c.req.raw, c.req.param("id")));
-app.post("/v1/memory_stores/:id/memories", (c) => handleCreateMemory(c.req.raw, c.req.param("id")));
-app.get("/v1/memory_stores/:id/memories", (c) => handleListMemories(c.req.raw, c.req.param("id")));
-app.get("/v1/memory_stores/:id/memories/:memId", (c) => handleGetMemory(c.req.raw, c.req.param("id"), c.req.param("memId")));
-app.post("/v1/memory_stores/:id/memories/:memId", (c) => handleUpdateMemory(c.req.raw, c.req.param("id"), c.req.param("memId")));
-app.patch("/v1/memory_stores/:id/memories/:memId", (c) => handleUpdateMemory(c.req.raw, c.req.param("id"), c.req.param("memId")));
-app.delete("/v1/memory_stores/:id/memories/:memId", (c) => handleDeleteMemory(c.req.raw, c.req.param("id"), c.req.param("memId")));
+app.get("/anthropic/v1/memory_stores/:id/memory_versions", (c) => handleListMemoryVersions(c.req.raw, c.req.param("id")));
+app.get("/anthropic/v1/memory_stores/:id/memory_versions/:vid", (c) => handleGetMemoryVersion(c.req.raw, c.req.param("id"), c.req.param("vid")));
+app.post("/anthropic/v1/memory_stores/:id/memory_versions/:vid/redact", (c) => handleRedactMemoryVersion(c.req.raw, c.req.param("id"), c.req.param("vid")));
+app.get("/anthropic/v1/memory_stores/:id", (c) => handleGetMemoryStore(c.req.raw, c.req.param("id")));
+app.post("/anthropic/v1/memory_stores/:id", (c) => handleUpdateMemoryStore(c.req.raw, c.req.param("id")));
+app.delete("/anthropic/v1/memory_stores/:id", (c) => handleDeleteMemoryStore(c.req.raw, c.req.param("id")));
+app.post("/anthropic/v1/memory_stores/:id/memories", (c) => handleCreateMemory(c.req.raw, c.req.param("id")));
+app.get("/anthropic/v1/memory_stores/:id/memories", (c) => handleListMemories(c.req.raw, c.req.param("id")));
+app.get("/anthropic/v1/memory_stores/:id/memories/:memId", (c) => handleGetMemory(c.req.raw, c.req.param("id"), c.req.param("memId")));
+app.post("/anthropic/v1/memory_stores/:id/memories/:memId", (c) => handleUpdateMemory(c.req.raw, c.req.param("id"), c.req.param("memId")));
+app.patch("/anthropic/v1/memory_stores/:id/memories/:memId", (c) => handleUpdateMemory(c.req.raw, c.req.param("id"), c.req.param("memId")));
+app.delete("/anthropic/v1/memory_stores/:id/memories/:memId", (c) => handleDeleteMemory(c.req.raw, c.req.param("id"), c.req.param("memId")));
 
 // ── Settings ─────────────────────────────────────────────────────────────
 app.put("/v1/settings", (c) => handlePutSetting(c.req.raw));
@@ -445,9 +563,17 @@ app.get("/v1/settings/:key", (c) => handleGetSetting(c.req.raw, c.req.param("key
 app.get("/v1/providers/status", (c) => handleGetProviderStatus(c.req.raw));
 
 // ── Models ───────────────────────────────────────────────────────────────
-app.get("/v1/models", (c) => handleListModels(c.req.raw));
+// CMA-canonical (PR9). Anthropic SDK exposes `GET /v1/models` on the
+// Managed Agents API surface.
+app.get("/anthropic/v1/models", (c) => handleListModels(c.req.raw));
+app.get("/anthropic/v1/models/:id", (c) => handleGetModel(c.req.raw, c.req.param("id")));
 
 // ── Skills ────────────────────────────────────────────────────────────
+// CMA-canonical CRUD goes under /anthropic/v1/* (PR9). The
+// catalog/feed/index/sources/stats discovery extensions are
+// AgentStep-only and stay under /v1/* (reachable as
+// /agentstep/v1/skills/{...} via the canonical-surface catch-all).
+//
 // Catalog/search routes (our extensions) — registered first to avoid shadowing
 app.get("/v1/skills/catalog", (c) => handleGetSkillsCatalog(c.req.raw));
 app.get("/v1/skills/stats", (c) => handleGetSkillsStats(c.req.raw));
@@ -456,16 +582,22 @@ app.get("/v1/skills/index", (c) => handleGetSkillsIndex(c.req.raw));
 app.get("/v1/skills/feed", (c) => handleGetSkillsFeed(c.req.raw));
 // CRUD + versioning routes — versioned routes before :id to avoid shadowing
 // Content download must be before the generic :version route to avoid shadowing
-app.get("/v1/skills/:id/versions/:version/content", (c) =>
+app.get("/anthropic/v1/skills/:id/versions/:version/content", (c) =>
   handleGetSkillVersionContent(c.req.raw, c.req.param("id"), c.req.param("version")));
-app.get("/v1/skills/:id/versions/:version", (c) => handleGetSkillVersion(c.req.raw, c.req.param("id"), c.req.param("version")));
-app.delete("/v1/skills/:id/versions/:version", (c) => handleDeleteSkillVersion(c.req.raw, c.req.param("id"), c.req.param("version")));
-app.post("/v1/skills/:id/versions", (c) => handleCreateSkillVersion(c.req.raw, c.req.param("id")));
-app.get("/v1/skills/:id/versions", (c) => handleListSkillVersions(c.req.raw, c.req.param("id")));
-app.post("/v1/skills", (c) => handleCreateSkill(c.req.raw));
-app.get("/v1/skills/:id", (c) => handleGetSkill(c.req.raw, c.req.param("id")));
-app.get("/v1/skills", (c) => handleSearchSkills(c.req.raw));
-app.delete("/v1/skills/:id", (c) => handleDeleteSkill(c.req.raw, c.req.param("id")));
+app.get("/anthropic/v1/skills/:id/versions/:version", (c) => handleGetSkillVersion(c.req.raw, c.req.param("id"), c.req.param("version")));
+app.delete("/anthropic/v1/skills/:id/versions/:version", (c) => handleDeleteSkillVersion(c.req.raw, c.req.param("id"), c.req.param("version")));
+app.post("/anthropic/v1/skills/:id/versions", (c) => handleCreateSkillVersion(c.req.raw, c.req.param("id")));
+app.get("/anthropic/v1/skills/:id/versions", (c) => handleListSkillVersions(c.req.raw, c.req.param("id")));
+app.post("/anthropic/v1/skills", (c) => handleCreateSkill(c.req.raw));
+app.get("/anthropic/v1/skills/:id", (c) => handleGetSkill(c.req.raw, c.req.param("id")));
+// Anthropic Managed Agents convention: GET /v1/skills returns the
+// caller's uploaded skills. Community catalog search lives at
+// /v1/skills/catalog (mounted above). Kept handleSearchSkills imported
+// because the CLI's LocalBackend (packages/gateway/src/backend/local.ts)
+// still calls it directly with query params for its `skills search`
+// command — semantically a community-catalog search, not a list.
+app.get("/anthropic/v1/skills", (c) => handleListSkills(c.req.raw));
+app.delete("/anthropic/v1/skills/:id", (c) => handleDeleteSkill(c.req.raw, c.req.param("id")));
 
 // ── Batch ────────────────────────────────────────────────────────────────
 app.post("/v1/batch", (c) => handleBatch(c.req.raw));

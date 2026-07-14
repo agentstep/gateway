@@ -225,6 +225,33 @@ export interface EnvironmentConfig {
   max_sandboxes?: number;
   /** Default engine for warm pool containers. Null/undefined = "claude". */
   default_engine?: string;
+  /**
+   * Zero-Data-Retention mode (AgentStep extension, not in CMA).
+   *
+   * When `true`, sessions created against this environment are purged
+   * at terminate: events, session_threads, session_resources,
+   * work_items, memory_versions tagged to the session, and the file
+   * bytes are deleted. The sessions row is stubbed (content fields
+   * NULLed, retention_purged_at timestamped, status = "purged"). The
+   * audit_log entry for the purge is preserved.
+   *
+   * The flag is **immutable per session** — it's copied from the
+   * environment into `sessions.zero_data_retention` at session create
+   * time, and toggling this field on the environment afterwards does
+   * NOT retroactively purge existing sessions. Use the admin
+   * `/agentstep/v1/environments/{id}/purge-existing` endpoint
+   * (PR-Z3) for retroactive purges.
+   *
+   * V1 limitations (see docs/zdr.mdx):
+   *   - Backups retain data for up to 24h per the bucket lifecycle
+   *     policy. Not procurement-grade for enterprise law-firm buyers
+   *     until the libsql migration ships.
+   *   - Remote-provider container disks (sprites, e2b, fly, modal)
+   *     are not scrubbed by AgentStep — only DB rows + local files.
+   *   - `claude_session_id`'s Anthropic-side logs are governed by
+   *     the customer's Anthropic ZDR agreement, separate from this.
+   */
+  zero_data_retention?: boolean;
 }
 
 export interface EnvironmentRow {
@@ -263,7 +290,14 @@ export interface Environment {
 // Session
 // ---------------------------------------------------------------------------
 
-export type SessionStatus = "idle" | "running" | "rescheduling" | "terminated";
+export type SessionStatus =
+  | "idle"
+  | "running"
+  | "rescheduling"
+  | "terminated"
+  | "purging"      // ZDR purge in flight (or resume marker after crash)
+  | "purged"       // ZDR purge complete; content NULLed but billing row retained
+  | "purge_failed"; // reaper abandoned after MAX_REAPER_RETRIES — needs operator
 
 export interface SessionRow {
   id: string;
@@ -303,6 +337,22 @@ export interface SessionRow {
   api_key_id: string | null;
   /** v0.5: tenant ownership. Null = legacy/global (pre-migration). */
   tenant_id: string | null;
+  /**
+   * 0.5.45: debug-prompt capture. Null = disabled. Sentinel
+   * `{"pending":true}` = enabled, no turn yet. JSON payload = captured.
+   */
+  debug_prompt_json: string | null;
+  /**
+   * ZDR (PR-Z1, 0.5.64). 0/false default; copied from environment
+   * config at session create. Immutable for the session's lifetime.
+   */
+  zero_data_retention: number | boolean;
+  /**
+   * ZDR (PR-Z1). Epoch ms when the purge completed. Null = not yet
+   * purged. Set by purgeSession() in PR-Z2 *before* the first DELETE
+   * so a crash-mid-purge can be recovered by the boot-time reaper.
+   */
+  retention_purged_at: number | null;
   created_at: number;
   updated_at: number;
   archived_at: number | null;
@@ -382,6 +432,26 @@ export interface Session {
     };
     cost_usd: number;
   };
+  /**
+   * Tenant scope of this session. Surfaced on the Session shape (in
+   * addition to SessionRow) so lifecycle hooks like the ZDR purge
+   * engine can resolve tenant context from a Session without a
+   * second DB lookup. Null = legacy/pre-0.5 row that hasn't been
+   * backfilled yet.
+   */
+  tenant_id: string | null;
+  /**
+   * ZDR (PR-Z1, 0.5.64): Inherited from environment.config.zero_data_retention
+   * at session create. Immutable for the session's lifetime. When true,
+   * lifecycle hooks (PR-Z2) purge the session at terminate.
+   */
+  zero_data_retention: boolean;
+  /**
+   * ZDR (PR-Z1): ISO timestamp when the purge completed. Null = not
+   * yet purged. When set, content fields above are nulled out and
+   * `status` is "purged".
+   */
+  retention_purged_at: string | null;
   created_at: string;
   updated_at: string;
   archived_at: string | null;
@@ -550,13 +620,26 @@ export interface MemoryVersion {
 // Skills (standalone, DB-stored)
 // ---------------------------------------------------------------------------
 
+/**
+ * Skill — aligned with Anthropic Claude Skills API shape (beta header
+ * `anthropic-beta: skills-2025-10-02`). The deprecated AgentStep
+ * aliases (`type`, `name`, `current_version`) were dropped in 0.5.57.
+ * Callers that previously read `name` should now read `display_title`;
+ * `current_version` is now `latest_version`.
+ *
+ * Extension fields (`description`, `updated_at`, `archived_at`) remain
+ * because they carry information Anthropic's response shape doesn't
+ * — Anthropic-SDK consumers ignore them harmlessly.
+ */
 export interface Skill {
-  type: "skill";
+  // ─── Anthropic CMA-compat fields ─────────────────────────────────
   id: string;
-  name: string;
-  description: string;
-  current_version: string;
+  display_title: string;
+  source: "custom" | "anthropic";
+  latest_version: string;
   created_at: string;
+  // ─── AgentStep extensions (not in Anthropic CMA) ─────────────────
+  description: string;
   updated_at: string;
   archived_at: string | null;
 }
@@ -642,6 +725,16 @@ export interface AuthContext {
   tenantId: string | null;
   /** Convenience: tenantId === null && permissions.admin. */
   isGlobalAdmin: boolean;
+  /**
+   * Tenant id from the `x-agentstep-tenant` header, validated. Null if absent.
+   * Honored only when the key is a global admin (so the global-admin "system"
+   * key can act on behalf of a specific tenant) or when the scoped key's
+   * own `tenantId` matches the header (defensive — same value, accepted).
+   * A scoped key with a mismatched header is rejected at auth time.
+   *
+   * Use `effectiveTenant(auth)` in scope helpers — do not read this directly.
+   */
+  actingAsTenant: string | null;
   /** Null = unlimited. In USD. Enforced in the driver pre-turn. */
   budgetUsd: number | null;
   /** Null = unlimited. Fixed 60-second window enforced in routeWrap. */

@@ -88,17 +88,29 @@ All handlers use `routeWrap()` from `http.ts` which handles init-on-first-reques
 
 ### API namespace
 
-Vendor-compat surfaces live under their own URL prefix:
+Three canonical surfaces:
 
-- `/anthropic/v1/*` — Anthropic Managed Agents API shape (agents, sessions, vaults, environments, files, threads, resources, user_profiles, oauth). Handlers in `packages/agent-sdk/src/handlers/anthropic-compat/`.
+- `/anthropic/v1/*` — Anthropic Managed Agents API shape. Drop-in for the stock Anthropic SDK with `base_url=…/anthropic`. Resources: agents, sessions, vaults, environments, files, threads, resources, user_profiles, oauth, **skills** (CRUD + versions + content), **memory_stores** (CRUD + memories + memory_versions + archive), **models**, **environments/:id/work/\*** (work queue, 8 verbs). Handlers in `packages/agent-sdk/src/handlers/anthropic-compat/` and the top-level skills/memory/model/work handlers.
+- `/agentstep/v1/*` — Gateway-native API. Resources: settings, api-keys, metrics, audit, tenants, upstream-keys, license, traces, providers, batch, whoami, plus AgentStep-only extensions on CMA-shape resources (`/skills/{catalog,feed,index,sources,stats}`, `/memory_stores/:id/dream`, `/sessions/:id/debug-prompt`). Handlers at the top level of `packages/agent-sdk/src/handlers/`.
 - `/google/v1beta/*` — Google Interactions API shape. Handlers in `packages/agent-sdk/src/handlers/google-compat/`.
-- `/v1/*` — Gateway-native API (settings, api-keys, metrics, audit, tenants, upstream-keys, license, traces, providers, models, batch, skills, whoami, memory_stores, work). Handlers at the top level of `packages/agent-sdk/src/handlers/`.
 
-The `/v1/environments/:id/work/*` work-queue routes are gateway-native and stay under `/v1/*` even though they share a path parameter with `/anthropic/v1/environments/:id`.
+Plus one deprecated alias:
+
+- `/v1/*` — Each route resolves to either `/anthropic/v1/*` (CMA-shape resources 308-redirect, preserving method/body per RFC 7231 §6.4.7) or `/agentstep/v1/*` (gateway-native still serves, with RFC 8594 `Deprecation` + `Link: rel="successor-version"` headers). Meta endpoints `/v1/openapi.json` + `/v1/docs` stay as the combined back-compat entrypoint.
+
+`/agentstep/v1/*` is implemented as a catch-all internal forwarder onto `/v1/*` handler mounts. CMA-canonical paths (skills, memory_stores, models, environments/:id/work) under `/agentstep/v1/*` 404 with a `Link: rel="canonical"` pointing at `/anthropic/v1/*` — the namespace explicitly rejects vendor-shape resources to prevent silent classification drift.
 
 ### Anthropic API key passthrough
 
 Gated by `anthropic_passthrough_enabled` (env or settings, default off). When on, `sk-ant-api*` keys in `x-api-key` are routed by *shape* in `auth/middleware.ts` — never compared to the local `api_keys` table — and intercepted in `routeWrap` (and `prepareSessionStream` for SSE) before any handler runs. Pure proxy: zero DB writes. Only `/anthropic/v1/*` routes on the allowlist in `auth/passthrough.ts` are forwarded upstream (the `/anthropic` prefix is stripped before the call to `api.anthropic.com`); gateway-native `/v1/*` routes reject passthrough. Random strings 401 locally.
+
+### Debug-prompt capture (`X-AgentStep-Debug: prompt`)
+
+Opt-in. Send `X-AgentStep-Debug: prompt` (or `?debug=prompt` query) on `POST /anthropic/v1/sessions` and the driver will capture `{argv, env (redacted), prompt, system, model, backend, captured_at}` on the first turn into a new `sessions.debug_prompt_json` column. Retrieve via `GET /v1/sessions/:id/debug-prompt` (gateway-native namespace, not Anthropic-compat). Tenant-scoped via the same `assertResourceTenant()` as the session itself. Retention: 1 hour from capture; expired payloads return 410. Secrets are redacted from env (known keys + `_KEY|_TOKEN|_SECRET|_PASSWORD` suffix pattern). Use case: comparing two sessions to triangulate why one model run succeeded and another silently stopped. Added in `agent-sdk@0.5.45`.
+
+### Tenant impersonation (`x-agentstep-tenant` header)
+
+Opt-in. A global-admin "service" key can send `x-agentstep-tenant: <id>` to scope a single request to a specific tenant — no need to mint a per-tenant key. The header must match `^[a-zA-Z0-9_-]{1,64}$` (malformed → 400). Scoped keys may only set the header to their own tenant (mismatch → 403). Passthrough mode rejects the header outright. All scope helpers (`tenantFilter`, `resolveCreateTenant`, `assertResourceTenant`) and the audit-log default route through `effectiveTenant(auth)` so the header is honored uniformly; `assertResourceTenant` consults the effective tenant BEFORE the global-admin bypass so a service key acting as tenant A can't still read tenant B's resources. Added in `agent-sdk@0.5.44` (PR5 of the auth epic).
 
 ### DB
 

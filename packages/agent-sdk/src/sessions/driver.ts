@@ -28,7 +28,8 @@ import { appendEventsBatch, appendEvent } from "./bus";
 import { newTrace, childSpan, type TraceContext } from "./trace";
 import type { AppendInput } from "../db/events";
 import { getRuntime, drainPendingUserInputs, clearTurnStarting, markTurnStarting, getTurnStartingEpoch, type TurnInput } from "../state";
-import { getSession, setBackendSessionId, updateSessionStatus, updateSessionMutable, bumpSessionStats, setIdleSince, getSessionRow, getOutcomeCriteria, setOutcomeCriteria, setSessionSandbox } from "../db/sessions";
+import { getSession, setBackendSessionId, updateSessionStatus, updateSessionMutable, bumpSessionStats, setIdleSince, getSessionRow, getOutcomeCriteria, setOutcomeCriteria, archiveSession, setSessionSandbox } from "../db/sessions";
+import { purgeSession as zdrPurgeSession } from "../db/zero-retention";
 import { getAgent } from "../db/agents";
 import { getEnvironment } from "../db/environments";
 import { getConfig } from "../config";
@@ -50,7 +51,8 @@ import type { ContainerProvider } from "../providers/types";
 import { resolveToolset } from "./tools";
 import { isProxied } from "../db/proxy";
 import { ApiError } from "../errors";
-import { nowMs } from "../util/clock";
+import { nowMs, toIso } from "../util/clock";
+import { getDb } from "../db/client";
 import { injectMcpAuthHeaders } from "./mcp-auth";
 import { applyTurnDecorators } from "./turn-pipeline";
 import { ContainerExecutor } from "./executor";
@@ -74,6 +76,42 @@ function formatStopReason(reason: string, eventIds?: string[]): Record<string, u
     return { type: "requires_action", event_ids: eventIds ?? [] };
   }
   return { type: reason };
+}
+
+/**
+ * ZDR error-path helper. Wraps `updateSessionStatus(... "error")`
+ * with an immediate archive + purge for ZDR sessions, so errored ZDR
+ * sessions don't sit idle for the full sweeper TTL (30 min default).
+ *
+ * Architect C3 fix: the prior implementation used a fire-and-forget
+ * dynamic `import("../db/zero-retention")`. If the import failed
+ * (transient module-load error, edge runtime quirk, anything), the
+ * purge never ran, the `status='purging'` marker was never set, and
+ * the boot reaper never picked it up — the session retained all
+ * content with no recovery path. The sweeper-TTL fallback the prior
+ * comment relied on was also dead: archiveSession sets archived_at,
+ * which makes listIdleSessions skip the row.
+ *
+ * Now: static import, synchronous call inside a try/catch. If
+ * archive throws, status stays 'idle' with stop_reason='error' and
+ * the next event/sweep covers it. If purge throws AFTER archive,
+ * status='purging' is set (purgeSession sets it as its first
+ * action) and the boot reaper picks it up.
+ */
+function markErrorAndMaybePurge(sessionId: string): void {
+  updateSessionStatus(sessionId, "idle", "error");
+  const session = getSession(sessionId);
+  if (!session?.zero_data_retention || !session.tenant_id) return;
+  const tenantId = session.tenant_id;
+  try {
+    archiveSession(sessionId);
+    zdrPurgeSession({ tenantId, sessionId, initiatedBy: "driver_error" });
+  } catch (err) {
+    console.warn(
+      `[zdr] error-path purge failed for ${sessionId}: ${err instanceof Error ? err.message : err} ` +
+      `— status='purging' marker may be set; boot reaper will retry`,
+    );
+  }
 }
 
 /**
@@ -181,7 +219,7 @@ async function runTurnInner(
 
   if (_depth > 25) {
     emit("session.error", { error: { type: "server_error", message: "max recursion depth exceeded" } });
-    updateSessionStatus(sessionId, "idle", "error");
+    markErrorAndMaybePurge(sessionId);
     return;
   }
   const session = getSession(sessionId);
@@ -192,7 +230,7 @@ async function runTurnInner(
   if (!agent) {
     emit("session.error", { error: { type: "server_error", message: "agent not found" } });
     emit("session.status_idle", { stop_reason: formatStopReason("error") });
-    updateSessionStatus(sessionId, "idle", "error");
+    markErrorAndMaybePurge(sessionId);
     return;
   }
 
@@ -221,7 +259,7 @@ async function runTurnInner(
     if (runtimeErr) {
       emit("session.error", { error: { type: "invalid_request_error", message: runtimeErr } });
       emit("session.status_idle", { stop_reason: formatStopReason("error") });
-      updateSessionStatus(sessionId, "idle", "error");
+      markErrorAndMaybePurge(sessionId);
       return;
     }
   }
@@ -240,7 +278,7 @@ async function runTurnInner(
       },
     });
     emit("session.status_idle", { stop_reason: formatStopReason("error") });
-    updateSessionStatus(sessionId, "idle", "error");
+    markErrorAndMaybePurge(sessionId);
     return;
   }
   if (budgetRow?.api_key_id) {
@@ -255,7 +293,7 @@ async function runTurnInner(
         },
       });
       emit("session.status_idle", { stop_reason: formatStopReason("error") });
-      updateSessionStatus(sessionId, "idle", "error");
+      markErrorAndMaybePurge(sessionId);
       return;
     }
   }
@@ -272,7 +310,7 @@ async function runTurnInner(
         },
       });
       emit("session.status_idle", { stop_reason: formatStopReason("error") });
-      updateSessionStatus(sessionId, "idle", "error");
+      markErrorAndMaybePurge(sessionId);
       return;
     }
   }
@@ -289,7 +327,7 @@ async function runTurnInner(
         },
       });
       emit("session.status_idle", { stop_reason: formatStopReason("error") });
-      updateSessionStatus(sessionId, "idle", "error");
+      markErrorAndMaybePurge(sessionId);
       return;
     }
   }
@@ -399,7 +437,9 @@ async function runTurnInner(
     const msg = err instanceof Error ? err.message : String(err);
     emit("session.error", { error: { type: "server_error", message: `container creation failed: ${msg}` } });
     emit("session.status_idle", { stop_reason: formatStopReason("error") });
-    updateSessionStatus(sessionId, "idle", "error");
+    // ZDR-aware error finalize (replaces a bare updateSessionStatus error);
+    // deregister is main's ownership cleanup for the in-flight controller.
+    markErrorAndMaybePurge(sessionId);
     deregister();
     return;
   }
@@ -490,7 +530,7 @@ async function runTurnInner(
     emit("span.model_request_end", { model: agent.model.id, model_usage: null, status: "error" });
     emit("session.error", { error: { type, message: msg } });
     emit("session.status_idle", { stop_reason: formatStopReason("error") });
-    updateSessionStatus(sessionId, "idle", "error");
+    markErrorAndMaybePurge(sessionId);
     deregister();
     return;
   }
@@ -617,6 +657,35 @@ async function runTurnInner(
     }
   }
 
+  // Debug-prompt capture: if the session was created with
+  // `?debug=prompt` or `X-AgentStep-Debug: prompt`, dump the assembled
+  // turn inputs to the session row on first turn. Best-effort — a
+  // capture failure must not block the turn itself.
+  try {
+    const sessionRow = getSessionRow(sessionId);
+    if (sessionRow?.debug_prompt_json === '{"pending":true}') {
+      const { redactEnv } = await import("../handlers/debug-prompt");
+      const captured = {
+        captured_at: toIso(nowMs()),
+        backend: agent.engine,
+        model: agent.model.id,
+        argv,
+        env: redactEnv(turnBuild.env),
+        prompt: turnBuild.stdin,
+        system: agent.system,
+      };
+      try {
+        getDb().prepare(
+          `UPDATE sessions SET debug_prompt_json = ?, updated_at = ? WHERE id = ?`,
+        ).run(JSON.stringify(captured), nowMs(), sessionId);
+      } catch (err) {
+        console.warn(`[debug-prompt] persist failed for ${sessionId}:`, err);
+      }
+    }
+  } catch (err) {
+    console.warn(`[debug-prompt] capture failed for ${sessionId}:`, err);
+  }
+
   // controller + inFlightRuns were registered before acquire (see above), so an
   // interrupt during setup is already honoured. Refresh startedAt to the actual
   // exec start for accurate elapsed-time reporting.
@@ -675,7 +744,7 @@ async function runTurnInner(
         emit("span.model_request_end", { model: agent.model.id, model_usage: null, status: "error" });
         emit("session.error", { error: { type: "server_error", message: `exec failed after re-acquire: ${msg}` } });
         emit("session.status_idle", { stop_reason: formatStopReason("error") });
-        updateSessionStatus(sessionId, "idle", "error");
+        markErrorAndMaybePurge(sessionId);
         return;
       }
     } else {
@@ -685,7 +754,7 @@ async function runTurnInner(
       emit("span.model_request_end", { model: agent.model.id, model_usage: null, status: "error" });
       emit("session.error", { error: { type: "server_error", message: `exec failed: ${msg}` } });
       emit("session.status_idle", { stop_reason: formatStopReason("error") });
-      updateSessionStatus(sessionId, "idle", "error");
+      markErrorAndMaybePurge(sessionId);
       return;
     }
   }
@@ -855,7 +924,8 @@ async function runTurnInner(
         const retryStatus = classified.retryable ? "exhausted" : "terminal";
         emit("session.error", { error: buildErrorPayload(classified, retryStatus) });
         emit("session.status_idle", { stop_reason: formatStopReason("error") });
-        updateSessionStatus(sessionId, "idle", "error");
+        // ZDR-aware terminal finalize (replaces a bare updateSessionStatus error).
+        markErrorAndMaybePurge(sessionId);
         deregister();
         return;
       }

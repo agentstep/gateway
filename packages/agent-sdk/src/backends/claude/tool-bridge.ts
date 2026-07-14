@@ -28,6 +28,14 @@ export const TOOL_BRIDGE_TOOLS_PATH = `${TOOL_BRIDGE_DIR}/tools.json`;
 export const TOOL_BRIDGE_REQUEST_PATH = `${TOOL_BRIDGE_DIR}/request.json`;
 export const TOOL_BRIDGE_RESPONSE_PATH = `${TOOL_BRIDGE_DIR}/response.json`;
 export const TOOL_BRIDGE_PENDING_PATH = `${TOOL_BRIDGE_DIR}/pending`;
+// Per-session MCP config file. Claude 2.1.158+ accepts `--mcp-config <path>`
+// AND `--mcp-config '<inline-json>'`, but the file-path form proves more
+// reliable in practice — inline JSON via argv has edge cases where the
+// MCP server starts but tool registration races claude's first inference,
+// resulting in spurious "No such tool available" errors on the first turn.
+// Pre-writing the config lets claude's MCP boot follow its standard load
+// path (same as `~/.claude/.mcp.json`) instead of the argv-string parser.
+export const TOOL_BRIDGE_MCP_CONFIG_PATH = `${TOOL_BRIDGE_DIR}/mcp-config.json`;
 
 /**
  * Generate the MCP stdio server script as a string.
@@ -68,7 +76,16 @@ handle_request() {
 
   case "$method" in
     initialize)
-      send_response '{"jsonrpc":"2.0","id":'"$id"',"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"tool-bridge","version":"1.0.0"}}}'
+      # Echo the client's protocolVersion if present (MCP spec: server
+      # should respond with the negotiated/supported version). Falls back
+      # to 2024-11-05 which is what claude code 2.x expects -- responding
+      # with a newer version like 2025-11-25 causes claude to silently
+      # drop the server's tools from its registry, surfacing as
+      # "No such tool available" errors on the first turn even though
+      # the bridge responded successfully.
+      client_pv=$(echo "$body" | grep -oE '"protocolVersion":"[^"]+"' | head -1 | cut -d'"' -f4)
+      [ -z "$client_pv" ] && client_pv="2024-11-05"
+      send_response '{"jsonrpc":"2.0","id":'"$id"',"result":{"protocolVersion":"'"$client_pv"'","capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"tool-bridge","version":"1.0.0"}}}'
       ;;
     notifications/*) ;;
     ping)
@@ -79,7 +96,20 @@ handle_request() {
       ;;
     tools/call)
       local tool_name
-      tool_name=$(echo "$body" | grep -o '"name":"[^"]*"' | tail -1 | cut -d'"' -f4)
+      # Extract tool name from params.name (NOT from any nested
+      # arguments.name field). Body shape:
+      #   {..., "params":{"name":"<TOOL>","arguments":{...}}}
+      # Tools whose input schema includes a "name" property (e.g. our
+      # propose_name with input { name: "..." }) would otherwise have
+      # the argument value mis-extracted by a plain grep | tail -1.
+      # Anchor on the "params":{ opener so we only match the "name":
+      # field immediately after it.
+      tool_name=$(echo "$body" | grep -oE '"params":\\{"name":"[^"]+"' | head -1 | sed 's/.*"name":"//;s/"$//')
+      if [ -z "$tool_name" ]; then
+        # Fallback: first "name":"..." in the body (params may have
+        # been pretty-printed or contain whitespace between { and "name").
+        tool_name=$(echo "$body" | grep -o '"name":"[^"]*"' | head -1 | cut -d'"' -f4)
+      fi
 
       # Reject unknown tools immediately (don't wait for gateway response)
       if [ -n "$TOOLS_LIST_JSON" ]; then
@@ -157,6 +187,22 @@ export function buildBridgeMcpConfig(
       args: [TOOL_BRIDGE_SCRIPT_PATH],
     },
   };
+}
+
+/**
+ * Serialize the bridge mcp-config to the format claude expects on disk.
+ * Written into the container by installToolBridge so callers can pass
+ * `--mcp-config <file-path>` instead of inline JSON.
+ */
+export function buildBridgeMcpConfigFile(): string {
+  return JSON.stringify({
+    mcpServers: {
+      "tool-bridge": {
+        command: "bash",
+        args: [TOOL_BRIDGE_SCRIPT_PATH],
+      },
+    },
+  });
 }
 
 /**

@@ -335,6 +335,23 @@ export const EnvironmentConfigSchema = registry.register(
     }),
     packages: EnvironmentPackages.optional(),
     networking: EnvironmentNetworking.optional(),
+    zero_data_retention: z.boolean().optional().openapi({
+      description:
+        "**AgentStep extension — not in Anthropic CMA.** Zero-Data-Retention " +
+        "mode (PR-Z1+, agent-sdk 0.5.64+). When true, sessions created against " +
+        "this environment are purged at terminate: events, threads, resources, " +
+        "memory_versions tagged to the session, and file bytes are deleted. " +
+        "The sessions row is stubbed (content fields nulled, status set to " +
+        "\"purged\"). The audit_log entry for the purge is preserved. " +
+        "Immutable per session: the flag is copied from this field into " +
+        "`sessions.zero_data_retention` at session create and toggling this " +
+        "field afterwards does NOT retroactively purge existing sessions " +
+        "(use POST /agentstep/v1/environments/{id}/purge-existing for that). " +
+        "V1 limitations: backups retain data up to 24h; remote-provider " +
+        "container disks (sprites/e2b/fly/modal) are not scrubbed; " +
+        "Anthropic-side logs are governed by the customer's separate " +
+        "Anthropic ZDR agreement. See docs/zdr.mdx.",
+    }),
   }),
 );
 
@@ -417,7 +434,7 @@ const SessionUsageSchema = z.object({
 
 export const SessionStatusSchema = registry.register(
   "SessionStatus",
-  z.enum(["idle", "running", "rescheduling", "terminated"]),
+  z.enum(["idle", "running", "rescheduling", "terminated", "purging", "purged"]),
 );
 
 export const SessionSchema = registry.register(
@@ -472,6 +489,20 @@ export const SessionSchema = registry.register(
     }),
     stats: SessionStatsSchema,
     usage: SessionUsageSchema,
+    zero_data_retention: z.boolean().openapi({
+      description:
+        "**AgentStep extension — not in Anthropic CMA.** True when the " +
+        "environment was created with config.zero_data_retention=true. " +
+        "Copied at session create; immutable for the session's lifetime. " +
+        "When true, session is purged at terminate (events, resources, " +
+        "memory_versions, file bytes deleted; row stubbed). See docs/zdr.mdx.",
+    }),
+    retention_purged_at: IsoTimestamp.nullable().openapi({
+      description:
+        "**AgentStep extension — not in Anthropic CMA.** Timestamp when " +
+        "ZDR purge completed. Null if not yet purged. When set, all " +
+        "content fields on this session are nulled and `status=\"purged\"`.",
+    }),
     created_at: IsoTimestamp,
     updated_at: IsoTimestamp,
     archived_at: IsoTimestamp.nullable(),
@@ -1041,6 +1072,146 @@ export const MemoryDeletedResponseSchema = registry.register(
   z.object({ id: UlidId, type: z.literal("memory_deleted") }),
 );
 
+// Memory versions (immutable audit log of memory ops).
+export const MemoryVersionSchema = registry.register(
+  "MemoryVersion",
+  z.object({
+    type: z.literal("memory_version"),
+    id: UlidId,
+    memory_store_id: UlidId,
+    memory_id: UlidId,
+    path: z.string(),
+    operation: z.enum(["create", "update", "delete"]),
+    content: z.string().optional().openapi({
+      description: "Snapshot of the memory content at this version. Absent on `delete` ops and on redacted versions.",
+    }),
+    content_sha256: z.string().optional(),
+    session_id: z.string().optional().openapi({
+      description: "Session that produced this version, when applicable.",
+    }),
+    redacted_at: z.string().datetime().optional().openapi({
+      description: "Set when this version's `content` has been redacted via POST /memory_versions/{vid}/redact.",
+    }),
+    created_at: IsoTimestamp,
+  }),
+);
+
+export const MemoryVersionListResponseSchema = listEnvelope(
+  "MemoryVersionListResponse",
+  MemoryVersionSchema,
+);
+
+// ---------------------------------------------------------------------------
+// Work queue (self-hosted environment runners)
+// ---------------------------------------------------------------------------
+
+export const WorkStateSchema = registry.register(
+  "WorkState",
+  z.enum(["queued", "pending", "active", "completed", "failed"]),
+);
+
+export const WorkItemSchema = registry.register(
+  "WorkItem",
+  z.object({
+    type: z.literal("work"),
+    id: UlidId,
+    environment_id: UlidId,
+    state: WorkStateSchema,
+    data: z.object({
+      type: z.literal("session"),
+      id: UlidId,
+    }).openapi({
+      description: "Payload identifying the work unit. v1 only emits session work.",
+    }),
+    metadata: z.record(z.string()).openapi({
+      description: "Caller-supplied free-form key/value metadata. Use POST .../work/{id} to mutate (null value deletes a key).",
+    }),
+    worker_id: z.string().nullable().openapi({
+      description: "ID of the worker currently holding this item, or null if unclaimed.",
+    }),
+    created_at: IsoTimestamp,
+    acknowledged_at: z.string().datetime().nullable(),
+    started_at: z.string().datetime().nullable(),
+    latest_heartbeat_at: z.string().datetime().nullable(),
+    stop_requested_at: z.string().datetime().nullable(),
+    stopped_at: z.string().datetime().nullable(),
+  }),
+);
+
+export const WorkItemListResponseSchema = listEnvelope(
+  "WorkItemListResponse",
+  WorkItemSchema,
+);
+
+export const WorkQueueStatsSchema = registry.register(
+  "WorkQueueStats",
+  z.object({
+    type: z.literal("work_queue_stats"),
+    depth: z.number().int().openapi({
+      description: "Total items queued or active (not yet completed/failed).",
+    }),
+    pending: z.number().int().openapi({
+      description: "Items reserved by a worker but not yet acknowledged (still in pending grace period).",
+    }),
+    workers_polling: z.number().int().nullable().openapi({
+      description: "Approximate count of workers polling within the recent heartbeat window. Null if not tracked.",
+    }),
+    oldest_queued_at: z.string().datetime().nullable(),
+  }),
+);
+
+export const UpdateWorkRequestSchema = registry.register(
+  "UpdateWorkRequest",
+  z.object({
+    metadata: z.record(z.string().nullable()).openapi({
+      description: "Partial metadata mutation. Set a key to a string value to upsert; set to null to delete.",
+    }),
+  }),
+);
+
+export const PollWorkResponseSchema = registry.register(
+  "PollWorkResponse",
+  z.object({
+    data: WorkItemSchema.nullable().openapi({
+      description: "The reserved work item, or `null` if the queue is empty.",
+    }),
+  }),
+);
+
+export const AckWorkRequestSchema = registry.register(
+  "AckWorkRequest",
+  z.object({
+    worker_id: z.string().optional().openapi({
+      description: "Worker claiming the item. Optional — falls back to the worker_id set at poll time.",
+    }),
+  }),
+);
+
+export const StopWorkRequestSchema = registry.register(
+  "StopWorkRequest",
+  z.object({
+    force: z.boolean().optional().openapi({
+      description: "If true, mark stopped immediately. Default false requests a graceful stop and waits for the worker to ack.",
+    }),
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// MCP OAuth validation
+// ---------------------------------------------------------------------------
+
+export const McpOauthValidationResultSchema = registry.register(
+  "McpOauthValidationResult",
+  z.object({
+    type: z.literal("mcp_oauth_validation_result"),
+    credential_id: UlidId,
+    valid: z.boolean(),
+    error: z.string().optional().openapi({
+      description: "Human-readable explanation when `valid` is false. Includes the upstream status code and message snippet (first 200 chars).",
+    }),
+  }),
+);
+
 // ---------------------------------------------------------------------------
 // Session Resources
 // ---------------------------------------------------------------------------
@@ -1370,6 +1541,106 @@ export const SkillsSearchResponseSchema = registry.register(
     total: z.number().int().nonnegative(),
     limit: z.number().int().nonnegative(),
     offset: z.number().int().nonnegative(),
+  }),
+);
+
+// ─── Standalone Skills (tenant uploads) ────────────────────────────────────
+//
+// Distinct from `AgentSkillSchema` (a skill attached to an agent's config).
+// `SkillSchema` represents a row in the SDK's `skills` table — the unit
+// returned by POST /v1/skills, GET /v1/skills/:id, etc.
+
+// Skill — Anthropic Skills API shape (cutover release 0.5.57).
+// Verified against the upstream spec
+// (`anthropics/skills/skills/claude-api/shared/managed-agents-api-reference.md`)
+// in PR9's audit: `id`, `display_title`, `source`, `latest_version`,
+// `created_at`, `description`, and `updated_at` are all canonical CMA
+// fields. The only AgentStep extension here is `archived_at` —
+// Anthropic's Skills resource has DELETE only, no archive concept.
+// Earlier annotations that flagged `description` / `updated_at` as
+// extensions were wrong and have been corrected.
+export const SkillSchema = registry.register(
+  "Skill",
+  z.object({
+    // ─── Anthropic CMA fields ────────────────────────────────────────
+    id: UlidId,
+    display_title: z.string().openapi({
+      description: "Human-readable skill name.",
+    }),
+    source: z.enum(["custom", "anthropic"]).openapi({
+      description:
+        "`custom` for skills uploaded via POST /v1/skills. `anthropic` " +
+        "is reserved for pre-built Anthropic skills (forward-compat — " +
+        "AgentStep doesn't yet ship pre-built skills under this field).",
+    }),
+    latest_version: z.string().openapi({
+      description:
+        "Active skill version. Format: epoch-microsecond timestamp " +
+        "(e.g. `1759178010641129`) for skills created on agent-sdk " +
+        "0.5.57+. Older skills retain semver-ish values (e.g. " +
+        "`1.0.0`); both formats resolve identically via the versions " +
+        "endpoints.",
+    }),
+    description: z.string().nullable().openapi({
+      description: "Optional free-form description (CMA field).",
+    }),
+    created_at: z.string().datetime(),
+    updated_at: z.string().datetime().openapi({
+      description: "Last-modified timestamp (CMA field).",
+    }),
+    // ─── AgentStep extensions (not in Anthropic CMA) ─────────────────
+    archived_at: z.string().datetime().nullable().openapi({
+      description:
+        "**AgentStep extension** — not present in the upstream Anthropic " +
+        "Skills shape. Skills in CMA have DELETE only, no archive " +
+        "operation. AgentStep keeps the column for soft-delete; field " +
+        "is null on active skills. Anthropic SDK consumers can ignore " +
+        "it harmlessly.",
+    }),
+  }),
+);
+
+export const SkillVersionSchema = registry.register(
+  "SkillVersion",
+  z.object({
+    type: z.literal("skill_version"),
+    id: UlidId,
+    skill_id: UlidId,
+    version: z.string(),
+    content: z.string().openapi({
+      description: "The SKILL.md content (or main markdown body for multi-file skills).",
+    }),
+    created_at: z.string().datetime(),
+  }),
+);
+
+export const SkillListResponseSchema = listEnvelope("SkillListResponse", SkillSchema);
+export const SkillVersionListResponseSchema = listEnvelope(
+  "SkillVersionListResponse",
+  SkillVersionSchema,
+);
+
+export const SkillDeletedResponseSchema = registry.register(
+  "SkillDeletedResponse",
+  z.object({ id: UlidId, type: z.literal("skill_deleted") }),
+);
+
+export const SkillVersionDeletedResponseSchema = registry.register(
+  "SkillVersionDeletedResponse",
+  z.object({
+    skill_id: UlidId,
+    version: z.string(),
+    type: z.literal("skill_version_deleted"),
+  }),
+);
+
+export const CreateSkillVersionRequestSchema = registry.register(
+  "CreateSkillVersionRequest",
+  z.object({
+    content: z.string().openapi({ description: "Skill content (SKILL.md body)." }),
+    version: z.string().optional().openapi({
+      description: "Explicit version label. Auto-incremented from current_version if omitted.",
+    }),
   }),
 );
 

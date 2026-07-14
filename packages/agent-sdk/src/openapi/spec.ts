@@ -60,6 +60,19 @@ import {
   UpdateMemoryRequestSchema,
   MemoryListResponseSchema,
   MemoryDeletedResponseSchema,
+  MemoryVersionSchema,
+  MemoryVersionListResponseSchema,
+  // Work queue
+  WorkStateSchema,
+  WorkItemSchema,
+  WorkItemListResponseSchema,
+  WorkQueueStatsSchema,
+  UpdateWorkRequestSchema,
+  PollWorkResponseSchema,
+  AckWorkRequestSchema,
+  StopWorkRequestSchema,
+  // MCP OAuth
+  McpOauthValidationResultSchema,
   // Resources
   SessionResourceSchema,
   AddResourceRequestSchema,
@@ -96,6 +109,13 @@ import {
   SkillsSearchResponseSchema,
   SkillsStatsResponseSchema,
   SkillsSourcesResponseSchema,
+  SkillSchema,
+  SkillVersionSchema,
+  SkillListResponseSchema,
+  SkillVersionListResponseSchema,
+  SkillDeletedResponseSchema,
+  SkillVersionDeletedResponseSchema,
+  CreateSkillVersionRequestSchema,
   // Metrics
   MetricsResponseSchema,
   ApiMetricsResponseSchema,
@@ -106,6 +126,7 @@ import {
   ProviderStatusResponseSchema,
   // Models
   ModelListResponseSchema,
+  ModelEntrySchema,
   // Auth
   WhoamiResponseSchema,
   LicenseResponseSchema,
@@ -436,6 +457,189 @@ registry.registerPath({
 });
 
 // ---------------------------------------------------------------------------
+// /v1/environments/{id}/work — self-hosted runner work queue
+// ---------------------------------------------------------------------------
+
+const WORK_NOTE =
+  "Only available on environments with `config.type = \"self_hosted\"`. Returns 400 (`bad_request`) on cloud environments. Self-hosted runners poll for work, ack to claim, heartbeat while active, and ack-complete or stop when done.";
+
+registry.registerPath({
+  method: "get",
+  path: "/anthropic/v1/environments/{id}/work",
+  tags: ["Work"],
+  summary: "List work items in an environment",
+  description: WORK_NOTE,
+  security: [{ ApiKey: [] }],
+  request: {
+    params: z.object({ id: z.string() }),
+    query: z.object({
+      state: WorkStateSchema.optional().describe("Filter by lifecycle state."),
+      limit: z.coerce.number().int().min(1).max(100).optional(),
+      after_id: z.string().optional().describe("Opaque pagination cursor returned by a prior call."),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Work item list",
+      content: { "application/json": { schema: WorkItemListResponseSchema } },
+    },
+    ...ErrorResponses,
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/anthropic/v1/environments/{id}/work/poll",
+  tags: ["Work"],
+  summary: "Poll for the next queued work item",
+  description:
+    WORK_NOTE +
+    " Returns the next `queued` item and atomically moves it to `pending`. Pass `worker_id` to record the claiming worker. If the queue is empty, returns `{data: null}`.",
+  security: [{ ApiKey: [] }],
+  request: {
+    params: z.object({ id: z.string() }),
+    query: z.object({
+      worker_id: z.string().optional().describe("Identifier of the polling worker."),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Reserved work item (or null when empty)",
+      content: { "application/json": { schema: PollWorkResponseSchema } },
+    },
+    ...ErrorResponses,
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/anthropic/v1/environments/{id}/work/stats",
+  tags: ["Work"],
+  summary: "Get queue stats",
+  description: WORK_NOTE,
+  security: [{ ApiKey: [] }],
+  request: { params: z.object({ id: z.string() }) },
+  responses: {
+    200: {
+      description: "Queue stats",
+      content: { "application/json": { schema: WorkQueueStatsSchema } },
+    },
+    ...ErrorResponses,
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/anthropic/v1/environments/{id}/work/{workId}",
+  tags: ["Work"],
+  summary: "Get a work item",
+  description: WORK_NOTE,
+  security: [{ ApiKey: [] }],
+  request: { params: z.object({ id: z.string(), workId: z.string() }) },
+  responses: {
+    200: {
+      description: "Work item",
+      content: { "application/json": { schema: WorkItemSchema } },
+    },
+    ...ErrorResponses,
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/anthropic/v1/environments/{id}/work/{workId}",
+  tags: ["Work"],
+  summary: "Update work-item metadata",
+  description:
+    WORK_NOTE +
+    " Set keys with string values; set a key to `null` to delete it. Other lifecycle fields are immutable here — use the dedicated `/ack`, `/heartbeat`, `/stop` sub-paths.",
+  security: [{ ApiKey: [] }],
+  request: {
+    params: z.object({ id: z.string(), workId: z.string() }),
+    body: {
+      required: true,
+      content: { "application/json": { schema: UpdateWorkRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Updated work item",
+      content: { "application/json": { schema: WorkItemSchema } },
+    },
+    ...ErrorResponses,
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/anthropic/v1/environments/{id}/work/{workId}/ack",
+  tags: ["Work"],
+  summary: "Acknowledge a polled work item",
+  description:
+    WORK_NOTE +
+    " Confirms the worker has accepted responsibility for the item and moves it from `pending` to `active`. Must be called within the pending grace window or the item is requeued for another worker.",
+  security: [{ ApiKey: [] }],
+  request: {
+    params: z.object({ id: z.string(), workId: z.string() }),
+    body: {
+      required: false,
+      content: { "application/json": { schema: AckWorkRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Acknowledged",
+      content: { "application/json": { schema: WorkItemSchema } },
+    },
+    ...ErrorResponses,
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/anthropic/v1/environments/{id}/work/{workId}/heartbeat",
+  tags: ["Work"],
+  summary: "Heartbeat an active work item",
+  description:
+    WORK_NOTE +
+    " Updates `latest_heartbeat_at`. Workers that stop heartbeating within the heartbeat window are considered dead and their items are requeued.",
+  security: [{ ApiKey: [] }],
+  request: { params: z.object({ id: z.string(), workId: z.string() }) },
+  responses: {
+    200: {
+      description: "Heartbeat accepted",
+      content: { "application/json": { schema: WorkItemSchema } },
+    },
+    ...ErrorResponses,
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/anthropic/v1/environments/{id}/work/{workId}/stop",
+  tags: ["Work"],
+  summary: "Stop a work item",
+  description:
+    WORK_NOTE +
+    " `force: false` (default) requests a graceful stop — sets `stop_requested_at` and waits for the worker to ack. `force: true` immediately marks the item stopped.",
+  security: [{ ApiKey: [] }],
+  request: {
+    params: z.object({ id: z.string(), workId: z.string() }),
+    body: {
+      required: false,
+      content: { "application/json": { schema: StopWorkRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Stop requested",
+      content: { "application/json": { schema: WorkItemSchema } },
+    },
+    ...ErrorResponses,
+  },
+});
+
+// ---------------------------------------------------------------------------
 // /v1/sessions
 // ---------------------------------------------------------------------------
 
@@ -684,6 +888,84 @@ registry.registerPath({
     200: {
       description: "Child thread sessions",
       content: { "application/json": { schema: SessionListResponseSchema } },
+    },
+    ...ErrorResponses,
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/anthropic/v1/sessions/{id}/threads/{tid}",
+  tags: ["Sessions"],
+  summary: "Get a thread session",
+  description: "Retrieve a single child-thread session by id.",
+  security: [{ ApiKey: [] }],
+  request: { params: z.object({ id: z.string(), tid: z.string() }) },
+  responses: {
+    200: {
+      description: "Thread session",
+      content: { "application/json": { schema: SessionSchema } },
+    },
+    ...ErrorResponses,
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/anthropic/v1/sessions/{id}/threads/{tid}/archive",
+  tags: ["Sessions"],
+  summary: "Archive a thread session",
+  description: "Soft-delete a child-thread session.",
+  security: [{ ApiKey: [] }],
+  request: { params: z.object({ id: z.string(), tid: z.string() }) },
+  responses: {
+    200: {
+      description: "Thread archived",
+      content: { "application/json": { schema: SessionSchema } },
+    },
+    ...ErrorResponses,
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/anthropic/v1/sessions/{id}/threads/{tid}/events",
+  tags: ["Events"],
+  summary: "List events for a thread",
+  description: "Replay the recorded event log for a specific child thread.",
+  security: [{ ApiKey: [] }],
+  request: {
+    params: z.object({ id: z.string(), tid: z.string() }),
+    query: z.object({
+      after_seq: z.coerce.number().int().optional(),
+      limit: z.coerce.number().int().min(1).max(500).optional(),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Thread events",
+      content: { "application/json": { schema: EventListResponseSchema } },
+    },
+    ...ErrorResponses,
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/anthropic/v1/sessions/{id}/threads/{tid}/stream",
+  tags: ["Events"],
+  summary: "Server-Sent Events stream for a thread",
+  description:
+    "Long-lived SSE connection delivering thread events as they arrive. Each event arrives as `event: <type>\\ndata: <json>\\n\\n`; the connection emits `data: {\"type\":\"ping\"}` every 15s as keepalive. Disconnect by closing the HTTP connection.",
+  security: [{ ApiKey: [] }],
+  request: {
+    params: z.object({ id: z.string(), tid: z.string() }),
+    query: z.object({ after_seq: z.coerce.number().int().optional() }),
+  },
+  responses: {
+    200: {
+      description: "SSE stream",
+      content: { "text/event-stream": { schema: z.string() } },
     },
     ...ErrorResponses,
   },
@@ -993,12 +1275,17 @@ registry.registerPath({
   method: "post",
   path: "/anthropic/v1/vaults/{id}/credentials",
   tags: ["Credentials"],
-  summary: "Create a vault credential",
+  summary: "Create an MCP-server credential (Anthropic CMA-compat)",
   description:
-    "Creates a credential in the vault for MCP server authentication or plain API key storage. " +
-    "The token is encrypted at rest and never returned in responses. " +
-    "When `mcp_server_url` is provided, the credential is automatically injected as MCP auth during sessions. " +
-    "Without `mcp_server_url`, the token is injected as an env var derived from `display_name`.",
+    "Creates an MCP-shaped credential record. **Reach for this when you have an " +
+    "MCP server URL plus an auth token** (OAuth, bearer, etc.). The token is " +
+    "encrypted at rest, never returned in responses, and automatically injected " +
+    "as MCP auth during sessions that attach this vault.\n\n" +
+    "If your token is a plain env-var-style secret (`SPRITE_TOKEN`, " +
+    "`ANTHROPIC_API_KEY`, custom API keys) **not** associated with a specific MCP " +
+    "server URL, use `PUT /vaults/{id}/entries/{key}` (AgentStep extension) " +
+    "instead. Entries are injected as env vars into the container at session time " +
+    "and don't require an `mcp_server_url`.",
   security: [{ ApiKey: [] }],
   request: {
     params: z.object({ id: z.string() }),
@@ -1086,15 +1373,55 @@ registry.registerPath({
   },
 });
 
+registry.registerPath({
+  method: "post",
+  path: "/anthropic/v1/vaults/{id}/credentials/{credId}/mcp_oauth_validate",
+  tags: ["Credentials"],
+  summary: "Validate an MCP OAuth credential",
+  description:
+    "Round-trips the credential's refresh token against the configured token endpoint and reports whether it still authenticates. Only valid for credentials with `auth.type = \"mcp_oauth\"`. Returns 200 with `{ valid: true|false, error? }` — the upstream provider's failure is surfaced in `error`, not as an HTTP error.",
+  security: [{ ApiKey: [] }],
+  request: { params: z.object({ id: z.string(), credId: z.string() }) },
+  responses: {
+    200: {
+      description: "Validation result",
+      content: { "application/json": { schema: McpOauthValidationResultSchema } },
+    },
+    ...ErrorResponses,
+  },
+});
+
 // ---------------------------------------------------------------------------
 // /v1/vaults/{id}/entries
 // ---------------------------------------------------------------------------
+
+// AgentStep extension: entries are NOT part of the Anthropic CMA spec.
+// They model the "raw env-var injection" use case that container providers
+// (sprites, apple-container, docker, …) need but Anthropic's hosted CMA
+// doesn't have an analogue for (Anthropic never surfaces the container, so
+// there's no env-var concept at the API layer). Documenting them here under
+// /anthropic/v1/* because our gateway mounts them there for path convenience,
+// but the description on each endpoint marks the gap explicitly so callers
+// using the Anthropic SDK against our base URL know to expect them to be
+// reachable only via raw HTTP or via @agentstep/agent-sdk.
+const ENTRIES_EXTENSION_NOTE =
+  "**AgentStep extension — not part of Anthropic CMA.** " +
+  "The official Anthropic Managed Agents API exposes only `/credentials` " +
+  "(MCP-shaped, requires `mcp_server_url`). Entries are an AgentStep addition " +
+  "for raw key/value secrets that need to appear as environment variables " +
+  "inside the session container (e.g. `SPRITE_TOKEN`, `ANTHROPIC_API_KEY`, " +
+  "custom API keys). The Anthropic SDK won't expose these — call via raw " +
+  "HTTP or `@agentstep/agent-sdk` (`setEntry`, `listEntries`, etc.).";
 
 registry.registerPath({
   method: "get",
   path: "/anthropic/v1/vaults/{id}/entries",
   tags: ["Vaults"],
-  summary: "List vault entries",
+  summary: "List vault entries (AgentStep extension)",
+  description:
+    "Lists the metadata for each entry in the vault (key names, timestamps). " +
+    "**Never returns plaintext values** — use `GET /entries/{key}` for the " +
+    "decrypted value.\n\n" + ENTRIES_EXTENSION_NOTE,
   security: [{ ApiKey: [] }],
   request: { params: z.object({ id: z.string() }) },
   responses: {
@@ -1110,7 +1437,11 @@ registry.registerPath({
   method: "get",
   path: "/anthropic/v1/vaults/{id}/entries/{key}",
   tags: ["Vaults"],
-  summary: "Get a vault entry",
+  summary: "Get a vault entry (AgentStep extension)",
+  description:
+    "Returns the decrypted value for a single entry. The value is encrypted at " +
+    "rest with `VAULT_ENCRYPTION_KEY`; this endpoint is the only path that " +
+    "decrypts it.\n\n" + ENTRIES_EXTENSION_NOTE,
   security: [{ ApiKey: [] }],
   request: { params: z.object({ id: z.string(), key: z.string() }) },
   responses: {
@@ -1126,7 +1457,20 @@ registry.registerPath({
   method: "put",
   path: "/anthropic/v1/vaults/{id}/entries/{key}",
   tags: ["Vaults"],
-  summary: "Set a vault entry",
+  summary: "Set a raw env-var entry e.g. SPRITE_TOKEN (AgentStep extension)",
+  description:
+    "Upserts a raw key/value entry. The key (URL path) becomes the env-var " +
+    "name; the value (body) is the secret. At session-create time the SDK " +
+    "injects every entry from the agent's attached vault(s) into the container " +
+    "as environment variables, so the agent runtime sees `process.env.SPRITE_TOKEN " +
+    "=== \"<value>\"`.\n\n" +
+    "**Use cases:** sprites/apple-container/docker provider auth tokens, " +
+    "additional API keys an agent needs at runtime, custom env vars referenced " +
+    "by MCP servers declared on the agent.\n\n" +
+    "**Don't use for MCP server auth** — for that, `POST /vaults/{id}/credentials` " +
+    "is the right path (structured shape with `mcp_server_url`, auto-injection " +
+    "into the MCP client transport, Anthropic CMA-compatible).\n\n" +
+    ENTRIES_EXTENSION_NOTE,
   security: [{ ApiKey: [] }],
   request: {
     params: z.object({ id: z.string(), key: z.string() }),
@@ -1148,7 +1492,8 @@ registry.registerPath({
   method: "delete",
   path: "/anthropic/v1/vaults/{id}/entries/{key}",
   tags: ["Vaults"],
-  summary: "Delete a vault entry",
+  summary: "Delete a vault entry (AgentStep extension)",
+  description: ENTRIES_EXTENSION_NOTE,
   security: [{ ApiKey: [] }],
   request: { params: z.object({ id: z.string(), key: z.string() }) },
   responses: {
@@ -1166,7 +1511,7 @@ registry.registerPath({
 
 registry.registerPath({
   method: "post",
-  path: "/v1/memory_stores",
+  path: "/anthropic/v1/memory_stores",
   tags: ["Memory"],
   summary: "Create a memory store",
   security: [{ ApiKey: [] }],
@@ -1187,7 +1532,7 @@ registry.registerPath({
 
 registry.registerPath({
   method: "get",
-  path: "/v1/memory_stores",
+  path: "/anthropic/v1/memory_stores",
   tags: ["Memory"],
   summary: "List memory stores",
   security: [{ ApiKey: [] }],
@@ -1207,7 +1552,7 @@ registry.registerPath({
 
 registry.registerPath({
   method: "get",
-  path: "/v1/memory_stores/{id}",
+  path: "/anthropic/v1/memory_stores/{id}",
   tags: ["Memory"],
   summary: "Get a memory store",
   security: [{ ApiKey: [] }],
@@ -1223,7 +1568,7 @@ registry.registerPath({
 
 registry.registerPath({
   method: "delete",
-  path: "/v1/memory_stores/{id}",
+  path: "/anthropic/v1/memory_stores/{id}",
   tags: ["Memory"],
   summary: "Delete a memory store",
   security: [{ ApiKey: [] }],
@@ -1239,7 +1584,7 @@ registry.registerPath({
 
 registry.registerPath({
   method: "post",
-  path: "/v1/memory_stores/{id}/memories",
+  path: "/anthropic/v1/memory_stores/{id}/memories",
   tags: ["Memory"],
   summary: "Create or upsert a memory",
   description:
@@ -1263,7 +1608,7 @@ registry.registerPath({
 
 registry.registerPath({
   method: "get",
-  path: "/v1/memory_stores/{id}/memories",
+  path: "/anthropic/v1/memory_stores/{id}/memories",
   tags: ["Memory"],
   summary: "List memories in a store",
   security: [{ ApiKey: [] }],
@@ -1279,7 +1624,7 @@ registry.registerPath({
 
 registry.registerPath({
   method: "get",
-  path: "/v1/memory_stores/{id}/memories/{memId}",
+  path: "/anthropic/v1/memory_stores/{id}/memories/{memId}",
   tags: ["Memory"],
   summary: "Get a memory",
   security: [{ ApiKey: [] }],
@@ -1295,7 +1640,7 @@ registry.registerPath({
 
 registry.registerPath({
   method: "patch",
-  path: "/v1/memory_stores/{id}/memories/{memId}",
+  path: "/anthropic/v1/memory_stores/{id}/memories/{memId}",
   tags: ["Memory"],
   summary: "Update a memory's content",
   description:
@@ -1319,7 +1664,7 @@ registry.registerPath({
 
 registry.registerPath({
   method: "delete",
-  path: "/v1/memory_stores/{id}/memories/{memId}",
+  path: "/anthropic/v1/memory_stores/{id}/memories/{memId}",
   tags: ["Memory"],
   summary: "Delete a memory",
   security: [{ ApiKey: [] }],
@@ -1328,6 +1673,83 @@ registry.registerPath({
     200: {
       description: "Memory deleted",
       content: { "application/json": { schema: MemoryDeletedResponseSchema } },
+    },
+    ...ErrorResponses,
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/anthropic/v1/memory_stores/{id}/archive",
+  tags: ["Memory"],
+  summary: "Archive a memory store",
+  description:
+    "Soft-deletes a memory store: keeps memories readable but blocks new writes. Reversible via PATCH on the store record.",
+  security: [{ ApiKey: [] }],
+  request: { params: z.object({ id: z.string() }) },
+  responses: {
+    200: {
+      description: "Memory store archived",
+      content: { "application/json": { schema: MemoryStoreSchema } },
+    },
+    ...ErrorResponses,
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/anthropic/v1/memory_stores/{id}/memory_versions",
+  tags: ["Memory"],
+  summary: "List memory versions",
+  description:
+    "Audit log of every create/update/delete on memories in this store. Filter to a single memory with `memory_id`.",
+  security: [{ ApiKey: [] }],
+  request: {
+    params: z.object({ id: z.string() }),
+    query: z.object({
+      memory_id: z.string().optional().describe("Restrict to versions of a single memory."),
+      limit: z.coerce.number().int().min(1).max(500).optional(),
+      cursor: z.string().optional().describe("Opaque pagination cursor returned by a prior call."),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Memory versions",
+      content: { "application/json": { schema: MemoryVersionListResponseSchema } },
+    },
+    ...ErrorResponses,
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/anthropic/v1/memory_stores/{id}/memory_versions/{vid}",
+  tags: ["Memory"],
+  summary: "Get a memory version",
+  security: [{ ApiKey: [] }],
+  request: { params: z.object({ id: z.string(), vid: z.string() }) },
+  responses: {
+    200: {
+      description: "Memory version",
+      content: { "application/json": { schema: MemoryVersionSchema } },
+    },
+    ...ErrorResponses,
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/anthropic/v1/memory_stores/{id}/memory_versions/{vid}/redact",
+  tags: ["Memory"],
+  summary: "Redact a memory version",
+  description:
+    "Strips the `content` field from this version's audit row. Cannot redact the current head of a live memory — redact a successor version first or delete the memory. Returns the (now-redacted) version.",
+  security: [{ ApiKey: [] }],
+  request: { params: z.object({ id: z.string(), vid: z.string() }) },
+  responses: {
+    200: {
+      description: "Memory version redacted",
+      content: { "application/json": { schema: MemoryVersionSchema } },
     },
     ...ErrorResponses,
   },
@@ -1361,25 +1783,23 @@ registry.registerPath({
 
 registry.registerPath({
   method: "get",
-  path: "/v1/skills",
+  path: "/anthropic/v1/skills",
   tags: ["Skills"],
-  summary: "Search the full skills index",
-  description: "Full-text search across 72k+ skills with filters, pagination, and sorting.",
+  summary: "List the caller's uploaded skills",
+  description:
+    "Returns a paginated list of skills uploaded by this tenant. Anthropic Managed Agents convention. The community catalog (skills.sh index) lives at /v1/skills/catalog — see also /v1/skills/feed, /sources, /stats. To search the catalog, use /v1/skills/index?q=…",
   security: [{ ApiKey: [] }],
   request: {
     query: z.object({
-      q: z.string().optional().describe("Free-text search query."),
-      owner: z.string().optional().describe("Filter by skill owner/author."),
-      source: z.string().optional().describe("Filter by source repository."),
-      sort: z.enum(["installs", "name", "created"]).optional(),
-      limit: z.coerce.number().int().optional(),
-      offset: z.coerce.number().int().optional(),
+      limit: z.coerce.number().int().min(1).max(100).optional().describe("Page size (default 20)."),
+      after_id: z.string().optional().describe("Pagination cursor."),
+      include_archived: z.coerce.boolean().optional().describe("Include archived skills (default false)."),
     }),
   },
   responses: {
     200: {
-      description: "Search results",
-      content: { "application/json": { schema: SkillsSearchResponseSchema } },
+      description: "Paginated list of skills",
+      content: { "application/json": { schema: SkillListResponseSchema } },
     },
     ...ErrorResponses,
   },
@@ -1387,15 +1807,52 @@ registry.registerPath({
 
 registry.registerPath({
   method: "post",
-  path: "/v1/skills",
+  path: "/anthropic/v1/skills",
   tags: ["Skills"],
-  summary: "Create a standalone skill (stub)",
-  description: "Not yet supported. Returns 501. Add skills directly to agents via the skills[] field.",
+  summary: "Create a skill (multipart upload)",
+  description:
+    "Uploads a SKILL.md or .zip bundle as a new standalone skill. The first version is created automatically (1.0.0). Use POST /v1/skills/{id}/versions to add subsequent versions. The multipart body matches Anthropic's deploy-managed-agent.sh shape (`display_title` + `files=@path` or `files[]=@path`); a JSON body with `{ name, description?, content, tenant_id? }` is also accepted.",
   security: [{ ApiKey: [] }],
+  request: {
+    body: {
+      content: {
+        "multipart/form-data": {
+          schema: z.object({
+            display_title: z.string(),
+            files: z.unknown().openapi({ format: "binary", description: "SKILL.md or .zip bundle. `files[]` is also accepted." }),
+          }),
+        },
+        "application/json": {
+          schema: z.object({
+            name: z.string(),
+            description: z.string().optional(),
+            content: z.string(),
+            tenant_id: z.string().optional(),
+          }),
+        },
+      },
+    },
+  },
   responses: {
-    501: {
-      description: "Not implemented",
-      content: { "application/json": { schema: ErrorEnvelopeSchema } },
+    201: {
+      description: "Skill created",
+      content: { "application/json": { schema: SkillSchema } },
+    },
+    ...ErrorResponses,
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/anthropic/v1/skills/{id}",
+  tags: ["Skills"],
+  summary: "Get a skill by id",
+  security: [{ ApiKey: [] }],
+  request: { params: z.object({ id: z.string() }) },
+  responses: {
+    200: {
+      description: "Skill",
+      content: { "application/json": { schema: SkillSchema } },
     },
     ...ErrorResponses,
   },
@@ -1403,16 +1860,122 @@ registry.registerPath({
 
 registry.registerPath({
   method: "delete",
-  path: "/v1/skills/{id}",
+  path: "/anthropic/v1/skills/{id}",
   tags: ["Skills"],
-  summary: "Delete a standalone skill (stub)",
-  description: "Not yet supported. Returns 501. Remove skills from agents via PATCH /v1/agents.",
+  summary: "Delete a skill",
+  description: "Hard-deletes the skill and all its versions.",
   security: [{ ApiKey: [] }],
   request: { params: z.object({ id: z.string() }) },
   responses: {
-    501: {
-      description: "Not implemented",
-      content: { "application/json": { schema: ErrorEnvelopeSchema } },
+    200: {
+      description: "Skill deleted",
+      content: { "application/json": { schema: SkillDeletedResponseSchema } },
+    },
+    ...ErrorResponses,
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/anthropic/v1/skills/{id}/versions",
+  tags: ["Skills"],
+  summary: "List versions of a skill",
+  security: [{ ApiKey: [] }],
+  request: {
+    params: z.object({ id: z.string() }),
+    query: z.object({
+      limit: z.coerce.number().int().min(1).max(100).optional(),
+      after_id: z.string().optional(),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Paginated list of skill versions",
+      content: { "application/json": { schema: SkillVersionListResponseSchema } },
+    },
+    ...ErrorResponses,
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/anthropic/v1/skills/{id}/versions",
+  tags: ["Skills"],
+  summary: "Create a new version of a skill",
+  description: "Appends a new version. Auto-increments from the current version if no explicit `version` is supplied.",
+  security: [{ ApiKey: [] }],
+  request: {
+    params: z.object({ id: z.string() }),
+    body: { content: { "application/json": { schema: CreateSkillVersionRequestSchema } } },
+  },
+  responses: {
+    201: {
+      description: "Skill version created",
+      content: { "application/json": { schema: SkillVersionSchema } },
+    },
+    ...ErrorResponses,
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/anthropic/v1/skills/{id}/versions/{version}",
+  tags: ["Skills"],
+  summary: "Get a specific version of a skill",
+  description:
+    "Returns version metadata + content. Pass `version: latest` to resolve to the skill's current version without pinning to a specific string — the recommended pattern for agent tool refs `{ type: \"custom\", skill_id, version: \"latest\" }`.",
+  security: [{ ApiKey: [] }],
+  request: {
+    params: z.object({
+      id: z.string(),
+      version: z.string().describe("Version string or the literal `latest`."),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Skill version",
+      content: { "application/json": { schema: SkillVersionSchema } },
+    },
+    ...ErrorResponses,
+  },
+});
+
+registry.registerPath({
+  method: "delete",
+  path: "/anthropic/v1/skills/{id}/versions/{version}",
+  tags: ["Skills"],
+  summary: "Delete a specific version of a skill",
+  description: "Cannot delete the skill's `current_version` — promote another version first.",
+  security: [{ ApiKey: [] }],
+  request: {
+    params: z.object({ id: z.string(), version: z.string() }),
+  },
+  responses: {
+    200: {
+      description: "Version deleted",
+      content: { "application/json": { schema: SkillVersionDeletedResponseSchema } },
+    },
+    ...ErrorResponses,
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/anthropic/v1/skills/{id}/versions/{version}/content",
+  tags: ["Skills"],
+  summary: "Download raw skill content",
+  description: "Returns the SKILL.md content as `text/markdown` with a Content-Disposition attachment header.",
+  security: [{ ApiKey: [] }],
+  request: {
+    params: z.object({
+      id: z.string(),
+      version: z.string().describe("Version string or the literal `latest`."),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Raw skill content",
+      content: { "text/markdown": { schema: z.string() } },
     },
     ...ErrorResponses,
   },
@@ -1558,7 +2121,7 @@ registry.registerPath({
 
 registry.registerPath({
   method: "get",
-  path: "/v1/models",
+  path: "/anthropic/v1/models",
   tags: ["Models"],
   summary: "List available models",
   description:
@@ -1575,6 +2138,24 @@ registry.registerPath({
     200: {
       description: "List of available models",
       content: { "application/json": { schema: ModelListResponseSchema } },
+    },
+    ...ErrorResponses,
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/anthropic/v1/models/{id}",
+  tags: ["Models"],
+  summary: "Retrieve a single model",
+  description:
+    "Look up a model entry by its bare id (e.g. `claude-sonnet-4-6`, `gemini-3.5-flash`). 404 if the model isn't in the cached registry. Matches Anthropic CMA `GET /v1/models/{model_id}`.",
+  security: [{ ApiKey: [] }],
+  request: { params: z.object({ id: z.string() }) },
+  responses: {
+    200: {
+      description: "Model entry",
+      content: { "application/json": { schema: ModelEntrySchema } },
     },
     ...ErrorResponses,
   },
@@ -2303,15 +2884,34 @@ registry.registerPath({
 // Generate the final document
 // ---------------------------------------------------------------------------
 
-export function buildOpenApiDocument(opts: { serverUrl: string }): unknown {
+/**
+ * Build the OpenAPI document.
+ *
+ * `pathPrefix` (optional): when set to "/anthropic/v1", "/v1", or
+ * "/google/v1beta", only paths under that prefix are emitted, and the
+ * title is adjusted to match the surface. This lets each API surface
+ * publish its own openapi.json (e.g. /anthropic/v1/openapi.json) so
+ * downstream tooling — like the Anthropic SDK code generator — only
+ * sees the routes it cares about. With no prefix, every path on every
+ * surface is included (back-compat for /v1/openapi.json before the
+ * per-surface split).
+ */
+export function buildOpenApiDocument(opts: {
+  serverUrl: string;
+  pathPrefix?: string;
+}): unknown {
   const generator = new OpenApiGeneratorV31(registry.definitions);
-  return generator.generateDocument({
+
+  // Per-surface metadata. Keep the base description neutral so the
+  // combined-surface spec (no prefix) keeps its current copy.
+  const meta = surfaceMetadata(opts.pathPrefix);
+
+  const doc = generator.generateDocument({
     openapi: "3.1.0",
     info: {
-      title: "AgentStep Gateway",
+      title: meta.title,
       version: "0.4.16",
-      description:
-        "Open-source, drop-in replacement for the Claude Managed Agents API. Self-hosted agent gateway with 7 agent harnesses and 11 sandbox providers. Use with `@agentstep/agent-sdk` or the official Anthropic SDK — just change the baseURL.",
+      description: meta.description,
     },
     servers: [{ url: opts.serverUrl, description: "This host" }],
     security: [{ ApiKey: [] }],
@@ -2322,9 +2922,30 @@ export function buildOpenApiDocument(opts: { serverUrl: string }): unknown {
       { name: "Events", description: "Event append, history, and streaming" },
       { name: "Resources", description: "Session resource attachments" },
       { name: "Files", description: "File upload, download, and management" },
-      { name: "Vaults", description: "Secret vault management" },
-      { name: "Credentials", description: "Vault credential CRUD (structured auth)" },
+      {
+        name: "Vaults",
+        description:
+          "Secret vault management. A vault holds two distinct kinds of secrets: " +
+          "**(1) Credentials** (`POST /vaults/{id}/credentials`) — MCP-shaped auth " +
+          "records with required `mcp_server_url`. Part of Anthropic's Managed Agents " +
+          "API; injected as MCP auth at session time. " +
+          "**(2) Entries** (`PUT /vaults/{id}/entries/{key}`) — raw key/value strings " +
+          "(`SPRITE_TOKEN`, `ANTHROPIC_API_KEY`, custom API keys). AgentStep extension; " +
+          "injected into the session container as env vars. " +
+          "Reach for *credentials* when you have an MCP server URL + auth token; reach " +
+          "for *entries* when you have a plain token that should appear as `$NAME` " +
+          "inside the agent's runtime.",
+      },
+      {
+        name: "Credentials",
+        description:
+          "Vault credential CRUD — MCP-shaped structured auth (`mcp_server_url`, " +
+          "`oauth_token`, etc). Anthropic CMA-compatible. For plain env-var-style " +
+          "tokens that don't tie to an MCP server, use the Vaults entries endpoints " +
+          "(`PUT /vaults/{id}/entries/{key}`) instead.",
+      },
       { name: "Memory", description: "Memory stores and memories" },
+      { name: "Work", description: "Self-hosted environment work queue (poll/ack/heartbeat/stop)" },
       { name: "Skills", description: "Skills catalog, search, and management" },
       { name: "Settings", description: "Gateway configuration settings" },
       { name: "Providers", description: "Container provider status" },
@@ -2341,4 +2962,77 @@ export function buildOpenApiDocument(opts: { serverUrl: string }): unknown {
       { name: "Google Compat", description: "Google Interactions API compatibility layer" },
     ],
   });
+
+  // Filter paths by surface if a prefix was supplied. The doc shape
+  // is `{ paths: { "/some/path": { get, post, ... } } }`, so we filter
+  // the keys.
+  //
+  // Special case for `/agentstep/v1` (PR8): every gateway-native path
+  // is still registered as `/v1/*` in the registry (back-compat for
+  // codegen tools pinned to that prefix). When the canonical
+  // `/agentstep/v1/openapi.json` surface is requested, we include
+  // those `/v1/*` paths but rewrite the keys to `/agentstep/v1/*` in
+  // the emitted document. /v1/openapi.json and /v1/docs are meta
+  // routes that stay at /v1 (no canonical move).
+  if (opts.pathPrefix) {
+    const prefix = opts.pathPrefix;
+    const filteredPaths: Record<string, unknown> = {};
+    const allPaths = (doc as { paths?: Record<string, unknown> }).paths ?? {};
+    const isAgentstepSurface = prefix === "/agentstep/v1";
+    for (const [pathKey, pathDef] of Object.entries(allPaths)) {
+      if (isAgentstepSurface) {
+        // Source is /v1/*; rewrite to /agentstep/v1/*. Skip meta routes.
+        const META_AT_V1 = pathKey === "/v1/openapi.json" || pathKey === "/v1/docs";
+        if (META_AT_V1) continue;
+        if (pathKey === "/v1" || pathKey.startsWith("/v1/")) {
+          const rewritten = pathKey === "/v1"
+            ? "/agentstep/v1"
+            : pathKey.replace(/^\/v1\//, "/agentstep/v1/");
+          filteredPaths[rewritten] = pathDef;
+        }
+      } else if (pathKey === prefix || pathKey.startsWith(prefix + "/")) {
+        filteredPaths[pathKey] = pathDef;
+      }
+    }
+    (doc as { paths: Record<string, unknown> }).paths = filteredPaths;
+  }
+  return doc;
+}
+
+function surfaceMetadata(pathPrefix?: string): {
+  title: string;
+  description: string;
+} {
+  switch (pathPrefix) {
+    case "/anthropic/v1":
+      return {
+        title: "AgentStep — Anthropic Managed Agents API",
+        description:
+          "Anthropic Managed Agents API surface. Drop-in compatible with the official Anthropic Managed Agents API — change the baseURL on your Anthropic SDK and stay on the same shapes: agents, sessions, vaults, environments, files, threads, resources, user_profiles, oauth, skills, memory_stores, models, environments/{id}/work.",
+      };
+    case "/google/v1beta":
+      return {
+        title: "AgentStep — Google Interactions API",
+        description:
+          "Google Interactions API compatibility surface. Drop-in compatible with Google's Interactions API shape.",
+      };
+    case "/agentstep/v1":
+      return {
+        title: "AgentStep — Gateway-native API",
+        description:
+          "Gateway-native API surface (canonical): settings, api-keys, metrics, audit, tenants, upstream-keys, license, traces, providers, batch, whoami, plus AgentStep-only extensions on CMA-shape resources (skills/{catalog,feed,index,sources,stats}, memory_stores/{id}/dream, sessions/{id}/debug-prompt). Anthropic-shaped resources (agents, sessions, vaults, environments, files, skills CRUD, memory_stores CRUD, models, environments/{id}/work) live under /anthropic/v1/* — see /anthropic/v1/openapi.json. The same routes are reachable under the deprecated /v1/* prefix (RFC 8594 `Deprecation` header on responses); new integrations should target /agentstep/v1/*.",
+      };
+    case "/v1":
+      return {
+        title: "AgentStep — /v1/* (deprecated alias)",
+        description:
+          "Deprecated alias surface. Every gateway-native route here is reachable at its canonical /agentstep/v1/* path; responses include an RFC 8594 `Deprecation` header and a `Link: rel=\"successor-version\"` pointing at the canonical URL. CMA-shape resources (agents, sessions, vaults, environments, files, skills, memory_stores, models, environments/{id}/work) 308-redirect to /anthropic/v1/* and are NOT included in this alias.",
+      };
+    default:
+      return {
+        title: "AgentStep Gateway",
+        description:
+          "Open-source, drop-in replacement for the Claude Managed Agents API. Self-hosted agent gateway with 7 agent harnesses and 11 sandbox providers. Use with `@agentstep/agent-sdk` or the official Anthropic SDK — just change the baseURL.",
+      };
+  }
 }
